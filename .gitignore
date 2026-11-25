@@ -9,6 +9,8 @@ node_modules/
 *.sqlite
 *.sqlite-*
 *.trust-backup.json
+*.trust-backup.enc
+*.trust-backup.key
 
 # Local source distributions
 /dist/

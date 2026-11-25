@@ -158,9 +158,11 @@ test('Chromium attaches a larger PDF and small text together and downloads origi
   t.after(()=>browser.close());
   const page=await browser.newPage();page.setDefaultTimeout(9000);
   const errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(f.origin);
   const signIn=async actor=>{
-    await page.goto(f.origin);
-    await page.getByLabel('Test account',{exact:true}).fill('sample-'+actor);
+    const account=page.getByLabel('Test account',{exact:true});
+    await account.waitFor({state:'visible'});
+    await account.fill('sample-'+actor);
     await page.getByLabel('Workspace ID',{exact:true}).fill('alpha');
     await page.getByLabel('Local access code',{exact:true}).fill(f.codes[actor]);
     await page.getByRole('button',{name:'Sign in',exact:true}).click();

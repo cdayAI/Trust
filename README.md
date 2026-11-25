@@ -4,7 +4,7 @@ A work-in-progress privacy operations prototype with synthetic fixtures. It is n
 
 ## Run
 
-See the [install-free quickstart, local package, and verification guide](LOCAL-RELEASE.md).
+See the [install-free quickstart, local package, and verification guide](LOCAL-RELEASE.md). The [isolated navigation acceptance report](BROWSER-ISOLATED-RELEASE-ACCEPTANCE.md) distinguishes tested role journeys from controls merely inventoried.
 
 Use Node.js 22.13 or newer. The demo and isolated launchers run without npm dependencies. See the [corporate sign-in guide](CORPORATE-SIGNIN.md) for the optional OIDC mode.
 
@@ -89,7 +89,7 @@ Production authentication, production tenant isolation, live integrations, ident
 
 ## Versioned workflow runtime (local API)
 
-`SCOPE.md` records coverage gaps; the optional prototype screens are not a conformance claim. Use the loopback API to publish a synthetic definition, open a case pinned to a version, execute explicit transitions at the expected case revision, and read durable accepted/refused events. See `test/workflow-http.test.js` for a complete reproducible example.
+`SCOPE.md` records coverage gaps; the optional prototype screens are not a conformance claim. [Verify a finalized synthetic audit package offline](AUDIT-VERIFICATION.md), including its approved closure evidence. Use the loopback API to publish a synthetic definition, open a case pinned to a version, execute explicit transitions at the expected case revision, and read durable accepted/refused events. See `test/workflow-http.test.js` for a complete reproducible example.
 
 | Method | Endpoint | Details |
 | --- | --- | --- |

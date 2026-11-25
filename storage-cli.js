@@ -1,12 +1,16 @@
 'use strict';
 
 const { backupDatabase, verifyBackup, restoreDatabase, migrateDemo, migrateIsolated } = require('./durable-storage');
+const { backupEncrypted, verifyEncrypted, restoreEncrypted } = require('./storage-encryption');
 const {writePlan,diagnoseFixture,importFixture,verifyFixture,rollbackFixture}=require('./fixture-migration');
 const [command, ...args] = process.argv.slice(2);
 const usage = `Usage:
   npm run storage -- backup DATABASE NEW_BACKUP
   npm run storage -- verify BACKUP
   npm run storage -- restore BACKUP NEW_DATABASE
+  npm run storage -- backup-encrypted DATABASE NEW_ARCHIVE PRIVATE_KEY_FILE
+  npm run storage -- verify-encrypted ARCHIVE PRIVATE_KEY_FILE
+  npm run storage -- restore-encrypted ARCHIVE NEW_DATABASE PRIVATE_KEY_FILE
   npm run storage -- migrate STATE_JSON NEW_DATABASE [WORKFLOW_JSON]
   npm run storage -- migrate-isolated WORKSPACES_ROOT NEW_DATABASE
   npm run storage -- diagnose-fixture-import FICTIONAL_PACKAGE_JSON migration-WORKSPACE
@@ -22,6 +26,9 @@ try {
     const value = verifyBackup(args[0]);
     result = { mode: value.mode, documents: value.documents.length, sha256: value.sha256 };
   } else if (command === 'restore' && args.length === 2) result = restoreDatabase(...args);
+  else if (command === 'backup-encrypted' && args.length === 3) result = backupEncrypted(...args);
+  else if (command === 'verify-encrypted' && args.length === 2) result = verifyEncrypted(...args);
+  else if (command === 'restore-encrypted' && args.length === 3) result = restoreEncrypted(...args);
   else if (command === 'migrate' && [2, 3].includes(args.length)) result = migrateDemo(...args);
   else if (command === 'migrate-isolated' && args.length === 2) result = migrateIsolated(...args);
   else if (command === 'diagnose-fixture-import' && args.length === 2) result = diagnoseFixture(...args);

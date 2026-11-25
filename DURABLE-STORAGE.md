@@ -109,3 +109,42 @@ The storage tests cover simultaneous writes from two server processes, scope
 isolation after migration and restore, version conflicts, durable refusals,
 rollback after a simulated write failure, safe refusal of malformed input,
 and byte-for-byte preservation of legacy source files.
+
+
+## Optional encrypted offline backups
+
+The encrypted commands wrap the same verified snapshot in a versioned
+binary AES-256-GCM archive, using a fresh random 96-bit nonce and a 128-bit
+authentication tag. Authentication covers the header, declared plaintext
+length, and ciphertext. A wrong key, malformed frame, or failed
+authentication stops before parsing any plaintext or opening a restore
+destination. The authenticated bytes must still pass the original checksum,
+SQLite mode, scope, and governance evidence checks.
+
+For a local synthetic workspace, point to a **separately provisioned**
+private key file outside the repository:
+
+```sh
+KEY=/private/path/recovery.trust-backup.key
+npm run storage -- backup-encrypted data/isolated.sqlite data/offline.trust-backup.enc "$KEY"
+npm run storage -- verify-encrypted data/offline.trust-backup.enc "$KEY"
+npm run storage -- restore-encrypted data/offline.trust-backup.enc data/recovered.sqlite "$KEY"
+```
+
+The file must contain exactly 32 raw key bytes, not hex, base64, a passphrase,
+or text with a newline. It must be a regular file owned by the current
+effective user, with one filesystem link and mode 0400 or 0600. The encrypted
+commands require POSIX file ownership/permission checks and fail closed
+where those are unavailable. Do not include key values in command arguments,
+settings, logs, or source control. Store the key separately from the backup.
+There is no built-in issuance, escrow, rotation, or recovery of lost keys.
+
+Creation verifies an encrypted temporary archive before publishing an
+owner-only new destination; it does not write a decrypted JSON sidecar.
+Restore likewise publishes only a new destination and refuses overwrites.
+The restored SQLite file itself is **not encrypted**, and normal source DB
+files remain unchanged. Existing plain backup commands remain available.
+The same 128 MiB budget applies to the inner snapshot; the encrypted
+envelope adds 42 bytes. Encryption is an offline portable archive control,
+not deployment-wide encryption at rest or a substitute for organizational
+recovery procedures. Do not use the synthetic deployment for real data.

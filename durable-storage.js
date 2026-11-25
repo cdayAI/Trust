@@ -265,8 +265,7 @@ function envelope(mode, documents) {
   return { ...content, sha256: hash(JSON.stringify(content)) };
 }
 
-function verifyBackup(file) {
-  const content = parseFile(file);
+function verifyBackupContent(content) {
   if (!basic(content) || Object.keys(content).length !== 5 || content.format !== format ||
       content.version !== backupVersion || typeof content.sha256 !== 'string') {
     throw new Error('Unknown or unsupported backup format.');
@@ -275,6 +274,10 @@ function verifyBackup(file) {
   if (unsigned.sha256 !== content.sha256) throw new Error('Backup checksum mismatch.');
   verifyEvidenceDocuments(unsigned.documents);
   return unsigned;
+}
+
+function verifyBackup(file) {
+  return verifyBackupContent(parseFile(file));
 }
 
 // Prepare and verify on the target filesystem, then publish with an atomic no-clobber
@@ -295,10 +298,15 @@ function publishNew(file, build) {
   }
 }
 
-function backupDatabase(source, destination) {
+function captureBackup(source) {
   const db = openSqlite(source, { readOnly: true });
   let value;
   try { const {mode,documents}=db.snapshot(); value = envelope(mode,documents); } finally { db.close(); }
+  return value;
+}
+
+function backupDatabase(source, destination) {
+  const value = captureBackup(source);
   const json = JSON.stringify(value) + '\n';
   if (Buffer.byteLength(json) > maxFileBytes) throw new Error('Backup exceeds the 128 MiB local limit.');
   publishNew(destination, temp => {
@@ -363,4 +371,4 @@ function migrateIsolated(root, dbFile) {
   return restoreDocuments('isolated',documents, dbFile);
 }
 
-module.exports = { openSqlite, backupDatabase, verifyBackup, restoreDatabase, migrateDemo, migrateIsolated, hasLegacySnapshot, publishNew, restoreDocuments };
+module.exports = { openSqlite, backupDatabase, verifyBackup, restoreDatabase, migrateDemo, migrateIsolated, hasLegacySnapshot, publishNew, restoreDocuments, captureBackup, verifyBackupContent, maxFileBytes };
