@@ -155,6 +155,7 @@ function renderDocs(){
       const status=v.status==='published'?(d.currentRevisionId===v.id?'Current':'Superseded'):v.status;
       const card=add(el('section'),add(el('div',undefined,'row'),el('h3',v.title),badge(status)),
         el('p','Revision '+v.number+' · '+v.contentLength+' UTF-8 bytes · SHA-256 '+v.contentHash,'hint'));
+      card.id='work-record-'+v.id;
       if(v.reviewNote)card.append(el('p','Review: '+v.reviewNote));
       for(const l of v.links)card.append(el('p',docsData.linkKinds[l.type]+': '+(byTarget.get(l.type+':'+l.id)??l.id),'hint'));
       const path=base+'/revisions/'+v.id;
@@ -191,6 +192,7 @@ function renderDocs(){
     blocks.push(archive);
   }
   docsPane.replaceChildren(...blocks);
+  focusWorkRecord('governance-docs');
 }
 $('#show-governance-docs').onclick=()=>switchView('governance-docs');
 $('#actor').addEventListener('change',()=>{if(!docsPane.hidden){docsPane.replaceChildren(el('p','Loading documents…'));refreshDocs()}});

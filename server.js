@@ -1,29 +1,37 @@
 'use strict';
 const http = require('node:http');
+const {createOperations,launchLocalServer,loopbackAddresses}=require('./operational-health');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const {openStore} = require('./store');
 const {openWorkflowHttp} = require('./workflow-http');
 const {openSqlite} = require('./durable-storage');
 const {view:workQueue}=require('./work-queue');
+const {model:myWork,taskToken:myWorkToken}=require('./my-work');
+const myWorkRoute=new RegExp('^/api/my-work(?:/tasks/('+myWorkToken+'))?$');
 const {createAccess}=require('./workspace-access');
 const policy=require('./access-policy');
 const {fixtureOptions}=require('./discovery-import');
 const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
 const employee=require('./employee-attestations');
+const training=require('./training');
 const reporting=require('./reporting');
 const publicDir = path.join(__dirname,'public');
 const staticFiles = new Map([
   ['/',['index.html','text/html; charset=utf-8']],
   ['/index.html',['index.html','text/html; charset=utf-8']],
   ['/trust-center-ui.js',['trust-center-ui.js','text/javascript; charset=utf-8']],
+  ['/identity-admin-ui.js',['identity-admin-ui.js','text/javascript; charset=utf-8']],
+  ['/training-admin-ui.js',['training-admin-ui.js','text/javascript; charset=utf-8']],
   ['/employee-admin-ui.js',['employee-admin-ui.js','text/javascript; charset=utf-8']],
   ['/workflow-studio-ui.js',['workflow-studio-ui.js','text/javascript; charset=utf-8']],
   ['/app.js',['app.js','text/javascript; charset=utf-8']],
   ['/governance-docs-ui.js',['governance-docs-ui.js','text/javascript; charset=utf-8']],
+  ['/my-work-ui.js',['my-work-ui.js','text/javascript; charset=utf-8']],
   ['/work-queue-ui.js',['work-queue-ui.js','text/javascript; charset=utf-8']],
   ['/vendor-monitoring-ui.js',['vendor-monitoring-ui.js','text/javascript; charset=utf-8']],
+  ['/ethics-ui.js',['ethics-ui.js','text/javascript; charset=utf-8']],
   ['/audit-management-ui.js',['audit-management-ui.js','text/javascript; charset=utf-8']],
   ['/risk-controls-ui.js',['risk-controls-ui.js','text/javascript; charset=utf-8']],
   ['/retention-ui.js',['retention-ui.js','text/javascript; charset=utf-8']],
@@ -32,6 +40,8 @@ const staticFiles = new Map([
   ['/data-map-ui.js',['data-map-ui.js','text/javascript; charset=utf-8']],
   ['/incident-ui.js',['incident-ui.js','text/javascript; charset=utf-8']],
   ['/rights-ui.js',['rights-ui.js','text/javascript; charset=utf-8']],
+  ['/maturity-planning-ui.js',['maturity-planning-ui.js','text/javascript; charset=utf-8']],
+  ['/maturity-planning.css',['maturity-planning.css','text/css; charset=utf-8']],
   ['/reporting-ui.js',['reporting-ui.js','text/javascript; charset=utf-8']],
   ['/reporting.css',['reporting.css','text/css; charset=utf-8']],
   ['/modules-ui.js',['modules-ui.js','text/javascript; charset=utf-8']],
@@ -54,8 +64,8 @@ async function readBody(req) {
   try { return bytes?JSON.parse(Buffer.concat(chunks).toString('utf8')):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
-function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated}={}) {
-  const access=isolated===undefined?null:createAccess(isolated);
+function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,operationalEvents=false}={}) {
+  const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id));
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
     grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,now:isolated.now
   }):null;
@@ -63,6 +73,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   const staff=access&&isolated.employeeGrants!==undefined?employee.provision({
     grants:isolated.employeeGrants,key:isolated.employeeSigningKey,workspaces:isolated.workspaces,
     accounts:isolated.accounts,requesters:isolated.requesterGrants,now:isolated.now
+  }):null;
+  const learners=access&&isolated.trainingGrants!==undefined?training.provision({
+    grants:isolated.trainingGrants,key:isolated.trainingSigningKey,workspaces:isolated.workspaces,accounts:isolated.accounts,
+    requesters:isolated.requesterGrants,employees:isolated.employeeGrants,now:isolated.now
   }):null;
   const database=sqliteFile===undefined?null:openSqlite(sqliteFile);
   function openRuntime(stateFile,workflowFile,scope,empty){
@@ -85,10 +99,26 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true));
     return runtimes.get(space.id);
   }
+  const files=database?[sqliteFile]:access?isolated.workspaces.flatMap(({id})=>{
+    const {file,workflowFile}=access.spaceForProvisionedGrant(id);
+    return [file,workflowFile];
+  }):[dataFile,dataFile+'.workflows'];
+  let operations;
+  try{
+    operations=createOperations({files,assets:['index.html','app.js','styles.css'].map(file=>path.join(publicDir,file)),
+      logEvents:operationalEvents,checkBackend:database?()=>database.checkMode(access?'isolated':'demo'):undefined});
+  }catch(error){database?.close();throw error;}
   const server=http.createServer(async (req,res)=>{
     try {
-      if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i.test(req.headers.host||'')) return send(res,403,{error:'Only loopback access is allowed.'});
+      if (!loopbackAddresses.has(req.socket.remoteAddress)||!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i.test(req.headers.host||'')) return send(res,403,{error:'Only loopback access is allowed.'});
       const {pathname,searchParams}=new URL(req.url,'http://localhost');
+      if(pathname==='/health/live'||pathname==='/health/ready'){
+        if(searchParams.size)return send(res,404,{error:'Not found.'});
+        if(req.method!=='GET')return send(res,405,{error:'Method not allowed.'},undefined,{Allow:'GET'});
+        if(pathname==='/health/live')return send(res,200,{status:'live'});
+        const result=await operations.ready(server.address());
+        return send(res,result.status==='ready'?200:503,result);
+      }
       const visit=pathname.match(/^\/api\/trust-center-visitor\/(sample-[a-z0-9-]{1,32})$/);
       const visitPage=pathname.match(/^\/trust-center\/(sample-[a-z0-9-]{1,32})$/);
       if(visit||visitPage||pathname==='/trust-center-visitor.js'){
@@ -102,6 +132,11 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if(req.method==='GET'&&['/employee','/employee.js'].includes(pathname)){
         if(!staff)return send(res,404,{error:'Not found.'});
         const [file,type]=pathname==='/employee'?['employee.html','text/html']:['employee.js','text/javascript'];
+        return send(res,200,await fs.readFile(path.join(publicDir,file)),type+'; charset=utf-8');
+      }
+      if(req.method==='GET'&&['/training','/training.js'].includes(pathname)){
+        if(!learners)return send(res,404,{error:'Not found.'});
+        const [file,type]=pathname==='/training'?['training.html','text/html']:['training-learner-ui.js','text/javascript'];
         return send(res,200,await fs.readFile(path.join(publicDir,file)),type+'; charset=utf-8');
       }
       if(req.method==='GET'&&['/requester','/requester.js'].includes(pathname)){
@@ -145,6 +180,15 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         const {store}=runtime(access.spaceForProvisionedGrant(seat.workspace));
         return send(res,200,operation==='attest'?store.employeeConfirm(seat,body,staff.signer):store.employeeView(seat));
       }
+      if(pathname.startsWith('/api/training-learner/')){
+        const operation=pathname.slice('/api/training-learner/'.length);
+        if(!learners||req.method!=='POST'||!['list','lesson','start','complete'].includes(operation))return send(res,404,{error:'Not found.'});
+        if(searchParams.size)return send(res,422,{error:'The training portal does not accept URL parameters.'});
+        const body=await readBody(req),seat=learners.authenticate(body);
+        const {store}=runtime(access.spaceForProvisionedGrant(seat.workspace));
+        const value=['list','lesson'].includes(operation)?store.trainingQuery(seat,operation,body):store.trainingProgress(seat,operation,body,learners.sign);
+        return send(res,200,value);
+      }
       if(!pathname.startsWith('/api/'))return send(res,404,{error:'Not found.'});
       const expected=searchParams.getAll('workspace');
       const selection=access?.context(req,expected);
@@ -155,12 +199,42 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       const caseOperator=!!access&&actor==='case-operator';
       const {store,workflow}=runtime(selection?.space);
+      if(pathname==='/api/identity-admin'){
+        if(!access)return send(res,404,{error:'Not found.'});
+        if(searchParams.size)return send(res,422,{error:'No identity administration query filters are supported.'});
+        const roster=()=>access.identityRoster(selection.space.id);
+        if(req.method==='GET')return send(res,200,store.identityAdminView(roster(),access.identityTime()));
+        const body=await readBody(req);
+        const checked=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,checked.actor);
+        return send(res,200,store.identityAdminChange(roster(),access.identityTime(),checked.account,body));
+      }
       const mode=access?'local-isolated':'synthetic-demo';
       const workflowParts=pathname.startsWith('/api/workflows/')?pathname.slice(15).split('/'):null;
       const employeeEnabled=staff?.enabled(selection?.space.id);
       const assignedStaff=staff?.staff(selection?.space.id)??[];
+      if(pathname==='/api/ethics'||pathname.startsWith('/api/ethics/')){
+        if(!access||searchParams.size)return send(res,404,{error:'Not found.'});
+        if(req.method==='GET'&&pathname==='/api/ethics/cases')
+          return send(res,200,store.getEthicsCases(actor,selection.account));
+        const report=pathname.match(/^\/api\/ethics\/cases\/([a-f0-9-]{36})\/export$/);
+        if(req.method==='GET'&&report)
+          return send(res,200,store.getEthicsExport(report[1],actor,selection.account),undefined,
+            {'Content-Disposition':'attachment; filename="synthetic-ethics-summary.json"'});
+        const mutation=pathname.match(/^\/api\/ethics\/cases(?:\/([a-f0-9-]{36})\/(triage|begin|finding|submit|return|close))?$/);
+        if(req.method==='POST'&&mutation){
+          const body=await readBody(req);
+          access.context(req,expected);
+          return send(res,200,store.changeEthics(actor,selection.account,mutation[2]??'open',mutation[1],body));
+        }
+        return send(res,404,{error:'Not found.'});
+      }
       if(req.method==='GET'&&pathname==='/api/employee-attestations')
         return send(res,200,employeeEnabled&&['analyst','reviewer'].includes(actor)?store.employeeOperatorView(assignedStaff):{enabled:false});
+      const trainingEnabled=learners?.enabled(selection?.space.id);
+      const enrolled=learners?.learners(selection?.space.id)??[];
+      if(req.method==='GET'&&pathname==='/api/training')
+        return send(res,200,trainingEnabled?store.trainingOperatorView(enrolled):{enabled:false});
       const centerPath=centers?.path(selection?.space.id);
       if(req.method==='GET'&&pathname==='/api/trust-center')
         return send(res,200,centerPath&&['analyst','reviewer'].includes(actor)?store.trustCenterView(centerPath):{enabled:false});
@@ -176,6 +250,11 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         if(!exporting)return send(res,200,model);
         const headers={'Content-Disposition':'attachment; filename="mvw-trust-report.'+format+'"'};
         return format==='csv'?send(res,200,reporting.csv(model),'text/csv; charset=utf-8',headers):send(res,200,model,undefined,headers);
+      }
+      const ownWork=req.method==='GET'&&pathname.match(myWorkRoute);
+      if(ownWork){
+        if(!selection)return send(res,404,{error:'My work requires an isolated staff session.'});
+        return send(res,200,myWork(store.getState(),selection,policy.capabilities(actor).views,searchParams,ownWork[1]));
       }
       if (req.method==='GET'&&['/api/work-queue','/api/work-queue/export'].includes(pathname)){
         const queue=workQueue(store.getState(),searchParams);
@@ -193,6 +272,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         if(req.method==='GET'&&report)return send(res,200,store.getAuditReport(report[1]),undefined,
           {'Content-Disposition':'attachment; filename="synthetic-audit-'+report[1]+'.json"'});
       }
+      if(req.method==='GET'&&pathname==='/api/maturity-planning')return send(res,200,store.getMaturityPlanning());
+      const maturityReport=pathname.match(/^\/api\/maturity-planning\/plans\/([a-f0-9-]{36})\/versions\/([1-9][0-9]*)\/report$/);
+      if(req.method==='GET'&&maturityReport)return send(res,200,store.getMaturityReport(maturityReport[1],Number(maturityReport[2])),undefined,
+        {'Content-Disposition':'attachment; filename="mvw-trust-plan-v'+maturityReport[2]+'.json"'});
       if (req.method==='GET'&&pathname==='/api/risk-controls') return send(res,200,store.getRiskControls());
       if (req.method==='GET'&&pathname==='/api/risk-controls/export') return send(res,200,{schemaVersion:1,mode,
         program:store.getRiskControls(),audit:store.getProgramAudit('risk-controls')},undefined,
@@ -244,6 +327,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
             .some(doc=>doc.id===parts[2]&&doc.revisions.some(version=>version.id===parts[4])))
             return send(res,404,{error:'That document revision was not found.'});
         }
+        if(parts[0]==='training'&&parts.length===2){
+          if(!trainingEnabled)return send(res,404,{error:'Policy training is not provisioned for this workspace.'});
+          return send(res,200,store.trainingAdmin(enrolled,actor,selection.account,parts[1],body));
+        }
         if(pathname==='/api/employee-attestations'){
           if(!employeeEnabled)return send(res,404,{error:'Employee attestations are not provisioned for this workspace.'});
           return send(res,200,store.employeeAssign(assignedStaff,actor,selection.account,body));
@@ -266,16 +353,19 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       return send(res,404,{error:'Not found.'});
     } catch (error) {
-      if (!error.status && error.code!=='ENOENT') console.error(error);
+      if((!error.status&&error.code!=='ENOENT')||error.status>=500)operations.requestError();
       if (!res.headersSent) send(res,error.status||(error.code==='ENOENT'?404:500),{error:error.status?error.message:error.code==='ENOENT'?'Not found.':'Server error.',...(error.status&&error.code?{code:error.code}:{})});
     }
   });
   if(database)server.once('close',()=>database.close());
+  server.on('listening',operations.listening);
+  server.on('close',operations.stopped);
   return server;
 }
 if (require.main===module) {
-  const port=Number(process.env.PORT??4173);
-  const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE});
-  server.listen(port,'127.0.0.1',()=>console.log('Privacy Workbench: http://127.0.0.1:'+server.address().port));
+  launchLocalServer(()=>{
+    const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,operationalEvents:true});
+    return {server,onListening:()=>console.log('MVW Trust: http://127.0.0.1:'+server.address().port)};
+  });
 }
 module.exports={createServer};

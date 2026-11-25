@@ -215,10 +215,12 @@ async function start(){
       for(const b of $('#work-tabs').querySelectorAll('button[id^="show-"]'))b.hidden=!allowed.includes(b.id.slice(5));
       for(const group of $('#work-tabs').querySelectorAll('.nav-group'))group.hidden=!group.querySelector('button:not([hidden])');
       if(!allowed.length)throw Error('No workspace views are available for this account.');
-      if(!allowed.includes('assessments'))switchView(allowed[0]);
+      if(allowed.includes('my-work')&&ownLinkPattern.test(location.hash))switchView('my-work',{keepMyWorkLink:true});
+      else if(!allowed.includes('assessments'))switchView(allowed[0],{keepMyWorkLink:true});
       else render();
     }else render();
     $('#workbench').hidden=false;showSkipDestination('workbench','Skip to workbench');
+    if(localSession)openMyWorkLocation();
   }catch(error){
     $('#local-signin').hidden=false;$('#local-login').hidden=true;showSkipDestination('local-signin','Skip to sign-in');
     $('#local-error').textContent='Unable to load workbench: '+error.message;
@@ -231,7 +233,7 @@ $('#actor').addEventListener('change',event=>{
   notice('');
   render();
 });
-start();
+document.addEventListener('DOMContentLoaded',start,{once:true});
 
 
 $('#glass-toggle').onclick=event=>{

@@ -60,6 +60,7 @@ function renderAuditManagement(){
     const path='/plans/'+plan.id;
     const card=add(el('article',undefined,'module-record'),el('h3',plan.title),badge(plan.status),el('p',plan.objective),el('p','Scope: '+plan.scope),
       el('p','Plan revision '+plan.revision+' · Created by '+plan.createdBy,'hint'));
+    card.id='work-record-'+plan.id;
     const scoped=add(el('ul'));
     for(const c of plan.controls){
       const assessed=plan.assessments.filter(a=>a.controlId===c.id);
@@ -116,6 +117,7 @@ function renderAuditManagement(){
     list.append(card);
   }
   auditMgmtPane.replaceChildren(intro,list);
+  focusWorkRecord('audit-management');
 }
 $('#show-audit-management').onclick=()=>switchView('audit-management');
 $('#actor').addEventListener('change',()=>queueMicrotask(()=>{if(!auditMgmtPane.hidden)refreshAuditManagement()}));

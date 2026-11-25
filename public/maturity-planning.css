@@ -1,0 +1,8 @@
+.maturity-form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,175px),1fr));column-gap:12px;align-items:end}
+.maturity-capability{margin:.65rem 0;padding:.8rem .9rem;border:1px solid var(--line);border-radius:12px;background:var(--surface)}
+.maturity-capability h5{font-size:1rem;margin:.2rem 0 .4rem}
+.maturity-capability details{margin-top:.55rem}
+.maturity-roadmap{padding-left:1.65rem}
+.maturity-roadmap li{padding:6px 8px;margin:.45rem 0;border-bottom:1px solid var(--line)}
+.maturity-download{display:flex;gap:7px 12px;align-items:center;flex-wrap:wrap}
+.maturity-download small{overflow-wrap:anywhere}

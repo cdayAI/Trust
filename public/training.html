@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Policy Training · MVW Trust</title>
+<link rel="stylesheet" href="/styles.css">
+<script src="/training.js" defer></script>
+</head>
+<body>
+<header class="top portal-top">
+  <div class="brand"><span class="mark" aria-hidden="true">T</span><div class="brand-copy"><strong>MVW Trust</strong><span>Policy training · synthetic learner portal</span></div></div>
+</header>
+<main id="training-portal">
+  <section>
+    <p class="eyebrow">POLICY PRACTICE</p>
+    <h1>My training</h1>
+    <p>Use the local synthetic learner code for your assigned exercises. Do not enter a real password.</p>
+    <form id="learner-access">
+      <label>Synthetic learner code<input name="code" type="password" autocomplete="off" minlength="43" maxlength="43" required></label>
+      <button type="submit">View my assignments</button>
+    </form>
+    <button type="button" id="learner-clear" class="secondary" hidden>Clear learner access</button>
+    <p id="learner-notice" role="status" aria-live="polite"></p>
+  </section>
+  <div id="learner-content"></div>
+</main>
+<footer class="prototype-footer">MVW Trust · Design prototype · Not an official Marriott Vacations Worldwide service</footer>
+</body>
+</html>

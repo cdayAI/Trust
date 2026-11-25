@@ -1,6 +1,6 @@
 'use strict';
 
-let rightsData;
+let rightsData,rightsSequence=0;
 const rightsPath='/api/rights/cases';
 const rightsPane=$('#rights-view');
 const kindLabel=k=>({access:'Access',deletion:'Deletion',correction:'Correction',portability:'Portability','opt-out':'Opt-out'}[k]??k);
@@ -21,11 +21,12 @@ function rightsNote(text){
   return label;
 }
 async function refreshRights(){
+  const sequence=++rightsSequence;
   try{
-    rightsData=await read(rightsPath);
-    if(!rightsPane.hidden)renderRights();
+    const next=await read(rightsPath);
+    if(sequence===rightsSequence&&!rightsPane.hidden){rightsData=next;renderRights();}
   }catch(e){
-    if(!rightsPane.hidden){rightsPane.replaceChildren(el('p','Privacy rights cases could not be loaded.'));notice(e.message,true)}
+    if(sequence===rightsSequence&&!rightsPane.hidden){rightsPane.replaceChildren(el('p','Privacy rights cases could not be loaded.'));notice(e.message,true)}
   }
 }
 function rightsForm(target,path,fields,requestBody,caption){
@@ -33,7 +34,7 @@ function rightsForm(target,path,fields,requestBody,caption){
   form.onsubmit=async e=>{
     e.preventDefault();
     if(busy)return;
-    busy=true;const submit=form.querySelector('button');submit.disabled=true;
+    busy=true;++rightsSequence;const submit=form.querySelector('button');submit.disabled=true;
     try {
       const values=Object.fromEntries(new FormData(form));
       rightsData=await read(path,{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Actor':actor},

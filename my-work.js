@@ -1,0 +1,65 @@
+'use strict';
+const {createHash}=require('node:crypto');
+const {view:queueView}=require('./work-queue');
+
+const supportedRoles=new Set(['analyst','reviewer','case-operator']);
+const taskToken='[a-f0-9]{64}';
+const safeRef=value=>typeof value==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9-]{0,127}$/.test(value);
+const error=(message,status)=>{throw Object.assign(new Error(message),{status});};
+const localLabels={'audit-management':'Audit management','governance-docs':'Policies and documents'};
+function localTasks(state,actor,account){
+  const out=[];
+  function add(view,record,action,label,owner){
+    if(owner!==actor)return;
+    out.push({id:view+':'+record.id+':'+action,workflow:view,owner,label,title:record.title,
+      dueDate:null,timing:'no-date',destination:{view,recordId:record.id}});
+  }
+  for(const plan of state.auditManagement?.plans??[]){
+    if(plan.status==='planned')add('audit-management',plan,'begin','Begin audit fieldwork','analyst');
+    if(plan.status==='fieldwork'){
+      const complete=plan.controls.every(c=>plan.assessments.some(a=>a.controlId===c.id));
+      add('audit-management',plan,complete?'submit':'assess',complete?'Submit evidence for independent audit review':'Assess scoped audit controls','analyst');
+    }
+    if(plan.status==='in-review'&&!plan.contributors.includes(account))
+      add('audit-management',plan,'review','Review and finalize audit independently','reviewer');
+  }
+  for(const doc of state.governanceDocuments?.documents??[]){
+    const revision=doc.revisions.at(-1);
+    if(revision?.status==='draft')add('governance-docs',revision,'submit','Submit document draft',revision.authoredBy);
+    if(revision?.status==='review'&&revision.authoredBy!=='reviewer')
+      add('governance-docs',revision,'review','Review document publication independently','reviewer');
+  }
+  return out;
+}
+
+
+// Each workspace currently provisions at most one account to each workflow role.
+// The verified role is the assigned seat, never a request-supplied owner selector.
+function assigned(state,{space,actor,account},allowedViews){
+  if(!space?.id||typeof account!=='string'||!supportedRoles.has(actor))error('My work is unavailable.',404);
+  const queue=queueView(state,new URLSearchParams({owner:actor}));
+  const allowed=new Set(allowedViews);
+  const rows=[...queue.tasks,...localTasks(state,actor,account)].filter(task=>task.owner===actor&&allowed.has(task.destination.view)&&
+      task.destination.view===task.workflow&&safeRef(task.destination.recordId)&&
+      (task.workflow!=='assessments'||safeRef(task.destination.projectId)))
+    .map(task=>{
+      const {view,recordId,projectId}=task.destination;
+      const link=createHash('sha256').update(JSON.stringify(['my-work-v1',space.id,account,actor,task.id])).digest('hex');
+      return {
+        list:{key:link,workflow:task.workflow,workflowName:queue.workflowLabels[task.workflow]??localLabels[task.workflow],
+          actionLabel:task.label,recordLabel:task.title,dueDate:task.dueDate,timing:task.timing},
+        destination:{view,recordId,...(projectId===undefined?{}:{projectId})}
+      };
+    });
+  return {asOf:queue.asOf,rows};
+}
+
+function model(state,session,allowedViews,params,key){
+  if([...params.keys()].length)error('My work does not support owner or other query parameters.',422);
+  const {asOf,rows}=assigned(state,session,allowedViews);
+  if(key===undefined)return {asOf,tasks:rows.map(row=>row.list)};
+  const selected=rows.find(row=>row.list.key===key);
+  if(!selected)error('Assigned work item not found.',404);
+  return {destination:selected.destination};
+}
+module.exports={model,taskToken};

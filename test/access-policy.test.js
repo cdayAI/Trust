@@ -51,7 +51,7 @@ test('isolated workbench fails closed by route and role while keeping scope and 
   const a=(await login('analyst')).token,r=(await login('reviewer')).token;
   const p=await login('publisher'), c=await login('operator');
   assert.deepEqual(p.data.capabilities,{views:['workflow-studio'],workspaceAudit:false});
-  assert.deepEqual(c.data.capabilities,{views:['rights','governance-docs'],workspaceAudit:false});
+  assert.deepEqual(c.data.capabilities,{views:['rights','my-work','governance-docs'],workspaceAudit:false});
   for(const route of ['state/export','future-feature','workflows/studio/missing/secret'])await request(route,404,{token:a});
   assert.deepEqual(await readdir(join(root,'alpha')),[]);
   await request('dictionary/terms',404,{token:a,method:'DELETE'});

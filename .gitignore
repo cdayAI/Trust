@@ -1,5 +1,5 @@
 /data/
-/node_modules/
+node_modules/
 .env
 .env.*
 *.zip
@@ -9,3 +9,8 @@
 *.sqlite
 *.sqlite-*
 *.trust-backup.json
+
+# Local source distributions
+/dist/
+*.tgz
+RELEASE-MANIFEST.json

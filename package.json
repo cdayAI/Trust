@@ -10,6 +10,11 @@
     "start": "node server.js",
     "test": "node --test",
     "start:isolated": "node start-isolated.js",
-    "storage": "node storage-cli.js"
+    "storage": "node storage-cli.js",
+    "verify:runtime": "node scripts/runtime-check.js",
+    "verify:startup": "node scripts/smoke-local.js",
+    "test:browser": "node scripts/run-browser-verification.js",
+    "release:local": "node scripts/package-release.js",
+    "release:verify": "node scripts/package-release.js --verify-extracted"
   }
 }

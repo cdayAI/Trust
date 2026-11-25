@@ -155,6 +155,7 @@ function openSqlite(file, { readOnly = false } = {}) {
       ON CONFLICT (scope, kind) DO UPDATE SET generation = generation + 1, payload = excluded.payload
     `);
     return {
+      checkMode:verifyMode,
       requireMode(mode) {
         if (!modes.has(mode) || readOnly) throw new Error('Invalid writable workbench mode.');
         return inTransaction('BEGIN IMMEDIATE', () => {

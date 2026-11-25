@@ -4,6 +4,8 @@ A work-in-progress privacy operations prototype with synthetic fixtures. It is n
 
 ## Run
 
+See the [install-free quickstart, local package, and verification guide](LOCAL-RELEASE.md).
+
 Use Node.js 22.13 or newer. There are no runtime npm packages to install.
 
 ```sh
@@ -65,7 +67,7 @@ horizon illustration are original prototype artwork. Color direction is
 informed by the public [Marriott Vacations Worldwide corporate site](https://www.marriottvacationsworldwide.com/);
 this is not an approved corporate brand kit.
 
-See [enterprise readiness](ENTERPRISE-READINESS.md) for the outstanding gates.
+See [enterprise readiness](ENTERPRISE-READINESS.md) for the outstanding gates and [local operations](OPERATIONS.md) for liveness, readiness, and recovery.
 
 ## Verify
 
@@ -77,7 +79,7 @@ The optional browser smoke requires Playwright and a working Chromium installati
 
 ## What is not shipped
 
-Production authentication, production tenant isolation, live integrations, identity verification or rights fulfillment, scanning, privacy deletion, notifications, authoritative retention decisions, enterprise migration, backups, tamper-resistant audit storage, or applicability to legal requirements. A register that tracks work is not the same as a service that performs it.
+Production authentication, production tenant isolation, live integrations, identity verification or rights fulfillment, scanning, privacy deletion, notifications, authoritative retention decisions, enterprise migration, managed encrypted backups, tamper-resistant audit storage, or applicability to legal requirements. A register that tracks work is not the same as a service that performs it.
 
 ## Versioned workflow runtime (local API)
 

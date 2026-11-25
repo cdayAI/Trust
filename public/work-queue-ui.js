@@ -10,16 +10,19 @@ function focusWorkRecord(view){
   if(!record){notice('The underlying record is no longer available in this view.',true);return}
   record.tabIndex=-1;record.focus({preventScroll:true});record.scrollIntoView({block:'center'});
 }
-async function openWorkTask(target){
-  queueTarget=target;
+async function openWorkTask(target,{keepMyWorkLink=false,isCurrent=()=>true}={}){
   try{
     if(target.view==='assessments'){
-      state=await read('/api/state');
+      const next=await read('/api/state');
+      if(!isCurrent())return;
+      state=next;
       selected=target.projectId;
     }
-    switchView(target.view);
+    if(!isCurrent())return;
+    queueTarget=target;
+    switchView(target.view,{keepMyWorkLink});
     if(target.view==='assessments')focusWorkRecord('assessments');
-  }catch(e){queueTarget=null;notice(e.message,true)}
+  }catch(e){if(isCurrent()){queueTarget=null;notice(e.message,true)}}
 }
 function queueParams(){
   return new URLSearchParams({owner:queueFilters.owner??actor,workflow:queueFilters.workflow,timing:queueFilters.timing});

@@ -28,18 +28,18 @@ This table describes the standalone local prototype, not production readiness or
 | Risks | Partial: explicit and auditable inherent/residual scores and per-control eligibility in a standalone view. No multi-program reporting, automated imports or browser verification. |
 | Self-service portal | Partial: isolated, provisioned synthetic requester codes, one case per code in the actual rights workflow, scoped receipt and coarse status. No open public intake, communications, identity proof, uploads, real disclosures or browser verification. |
 | Trust center | Partial: versioned bundled synthetic cards, independent review, explicit local publication and withdrawal, and a separate visitor projection. No public deployment, authentication for real visitors, evidence exchange, customer self-service, or browser verification. |
-| Users and groups | Partial: synthetic local sessions authenticate accounts, select verified workspace memberships and segregate records and exports. No groups, fine-grained policies, production authentication or browser verification. |
-| Platform home and tasks | Partial: shared read-only queue derived from seven actual workflow families, owner/workflow/timing filters and record navigation. No notifications or verified browser run. |
+| Users and groups | Partial: synthetic local sessions authenticate accounts, select verified workspace memberships and segregate records and exports. Dedicated synthetic identity-administration lifecycle and least-privilege route policies; no corporate identity provider or enterprise groups. |
+| Platform home and tasks | Partial: shared read-only queue derived from seven actual workflow families, owner/workflow/timing filters and record navigation. Includes isolated My Work for assigned staff seats; no external notifications. |
 | Audit management | Partial: scoped synthetic audit plans, versioned assessed evidence, structured findings, independent finalization and immutable report export. No external audit or actual assurance. |
-| Helpline and ethics cases | not built. |
-| Maturity and planning | not built. |
+| Helpline and ethics cases | Partial: scoped synthetic case intake, investigation, versioned findings, independent closure and redacted export. No real helpline. |
+| Maturity and planning | Partial: scoped synthetic maturity plans, versioned evidence-linked baselines and targets, deterministic roadmap and independent sign-off. |
 | Policy and notice management offering | Shared local policy and notice pieces exist; no verified parity with the separate offering. |
 | Program benchmarking | not built. |
 | Retention schedules | partial local versioned schedules, UTC due-date previews, reviewer release of holds and audited dry-run disposition tested by HTTP. No live records, deletion, schedules running automatically, or browser verification. |
-| Training | not built. |
+| Training | Partial: approved synthetic lessons pinned to published policies, scoped assignments, bounded quiz attempts and completion receipts. No live LMS integration. |
 
 ## Implemented shared behavior: versioned workflow execution
 
 A separate loopback API and local Workflow studio implement immutable published definition versions, per-instance version binding, explicit transition names, mandatory expected revision, role separation, and accepted/refused events. Tests use independent synthetic definitions rather than copying source configuration. This dimension is reusable for multiple app families; it does not establish their configuration or runtime parity.
 
-Main vendor assessments now use an embedded assessment instance of this engine. The other generic modules have not been migrated to this engine. Default access remains an explicit loopback demo. The separate isolated local mode verifies expiring sessions and membership before selecting per-workspace files. Neither mode is a production deployment boundary; storage is single-process local JSON. Workflow audit is separate from the existing register audit.
+Main vendor assessments now use an embedded assessment instance of this engine. The other generic modules have not been migrated to this engine. Default access remains an explicit loopback demo. The separate isolated local mode verifies expiring sessions and membership before selecting per-workspace files. Neither mode is a production deployment boundary; default storage is single-process local JSON, with opt-in transactional SQLite and tested local backup and restore. Workflow audit is separate from the existing register audit.

@@ -5,7 +5,9 @@
 const operators=Object.freeze(['analyst','reviewer']);
 const studio=Object.freeze([...operators,'publisher']);
 const rights=Object.freeze([...operators,'case-operator']);
-const all=Object.freeze([...rights,'publisher']);
+const ethics=Object.freeze(['ethics-investigator','ethics-reviewer']);
+const all=Object.freeze([...rights,'publisher','identity-admin',...ethics]);
+const {taskToken:myWorkToken}=require('./my-work');
 const key='[a-zA-Z0-9][a-zA-Z0-9-]{0,127}';
 const uuid='[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}';
 const moduleId='(?:inventory|processing|rights|incidents|third-party|risks|controls|retention|policies|administration|integrations)';
@@ -16,12 +18,20 @@ function route(method,value,roles){
 
 // Specific methods and resource paths, never an open-ended workspace prefix.
 route('GET','state',all);
+route('GET','my-work(?:/tasks/'+myWorkToken+')?',rights);
+route('GET','identity-admin',['identity-admin']);
+route('POST','identity-admin',['identity-admin']);
 route('GET','(?:vendor-monitoring|risk-controls|retention|privacy-notices|dictionary|dictionary/export|modules|work-queue|work-queue/export|reporting|reporting/export)',operators);
 route('GET','(?:data-map|data-map/discovery|data-map/export|data-map/nodes/'+uuid+'/lineage)',operators);
 route('GET','(?:risk-controls/export|incidents/cases|audit-management|audit-management/plans/'+uuid+'/report)',operators);
-route('GET','(?:employee-attestations|trust-center)',operators);
+route('GET','(?:employee-attestations|training|trust-center)',operators);
+route('GET','maturity-planning(?:/plans/'+uuid+'/versions/[1-9][0-9]*/report)?',operators);
 route('GET','(?:rights/cases|governance-documents)',rights);
 route('GET','audit/export',['reviewer']);
+route('GET','ethics/cases',ethics);
+route('GET','ethics/cases/'+uuid+'/export',['ethics-reviewer']);
+route('POST','ethics/cases(?:/'+uuid+'/(?:triage|begin|finding|submit))?',['ethics-investigator']);
+route('POST','ethics/cases/'+uuid+'/(?:return|close)',['ethics-reviewer']);
 route('GET','workflows/(?:studio|definitions/'+key+'(?:/[1-9][0-9]*)?)',studio);
 route('GET','workflows/(?:studio|instances)/'+key,operators);
 route('GET','workflows/audit',['reviewer']);
@@ -32,6 +42,7 @@ route('POST','rights/cases/'+uuid+'/(?:assign|verify|deny-verification)',operato
 route('POST','rights/cases/'+uuid+'/(?:begin|fulfill|close-unverified)',rights);
 route('POST','incidents/cases(?:/'+uuid+'/(?:triage|containment|evidence|findings|request-review|decide|plan-notice|close))?',operators);
 route('POST','vendor-monitoring/cases(?:/'+uuid+'/(?:score|evidence|submit|approve|return|change|renew))?',operators);
+route('POST','maturity-planning/plans(?:/'+uuid+'/(?:assess|submit|decide|return|approve|revise))?',operators);
 route('POST','audit-management/plans(?:/'+uuid+'/(?:begin|assess|submit|return|finalize))?',operators);
 route('POST','risk-controls/(?:risks(?:/'+uuid+'/score)?|controls|links(?:/'+uuid+'/(?:unlink|verify))?|tests(?:/'+uuid+'/(?:accept|reject))?)',operators);
 route('POST','retention/(?:schedules(?:/'+uuid+'/(?:edit|submit|activate|return))?|records|holds(?:/'+uuid+'/release)?|previews(?:/'+uuid+'/simulate)?)',operators);
@@ -46,14 +57,18 @@ route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachmen
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments/'+uuid+'/download',rights);
 route('POST','trust-center/(?:privacy|rights|controls)/(?:draft|submit|approve|return|publish|withdraw)',operators);
 route('POST','employee-attestations',operators);
+route('POST','training/(?:create|edit|submit|return|publish|assign|reset)',operators);
 route('POST','workflows/definitions',['publisher']);
 route('POST','workflows/(?:instances|instances/'+key+'/transitions)',operators);
 
 const views={
-  analyst:['assessments','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','risk-controls','audit-management','workflow-studio','trust-center','report','modules'],
-  reviewer:['assessments','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','risk-controls','audit-management','workflow-studio','trust-center','report','modules'],
+  analyst:['assessments','my-work','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
+  reviewer:['assessments','my-work','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
   publisher:['workflow-studio'],
-  'case-operator':['rights','governance-docs'],
+  'identity-admin':['identity-admin'],
+  'ethics-investigator':['ethics'],
+  'ethics-reviewer':['ethics'],
+  'case-operator':['rights','my-work','governance-docs'],
 };
 const capabilities=role=>({views:[...(Object.hasOwn(views,role)?views[role]:[])],workspaceAudit:role==='reviewer'});
 function requirePermission(method,pathname,role){

@@ -13,16 +13,20 @@ const dictionary=require('./data-dictionary');
 const discovery = require('./discovery-import');
 const trustCenter = require('./trust-center');
 const employee = require('./employee-attestations');
+const training = require('./training');
 const preferences = require('./privacy-notices');
 const retention = require('./retention-workflow');
 const riskControls = require('./risk-controls');
 const auditManagement = require('./audit-management');
+const ethics = require('./ethics-cases');
+const maturityPlanning = require('./maturity-planning');
 const vendorMonitoring = require('./vendor-monitoring');
 const documents = require('./governance-documents');
 const programs=new Map([
   ['dictionary',dictionary],['trust-center',trustCenter],['rights',rights],['incidents',incidents],['data-map',dataMap],
-  ['privacy-notices',preferences],['retention',retention],['risk-controls',riskControls],['audit-management',auditManagement],['vendor-monitoring',vendorMonitoring],['governance-documents',documents]
+  ['privacy-notices',preferences],['retention',retention],['risk-controls',riskControls],['audit-management',auditManagement],['maturity-planning',maturityPlanning],['vendor-monitoring',vendorMonitoring],['governance-documents',documents]
 ]);
+const identityAdmin=require('./identity-admin');
 const actors = [
   {id:'analyst',name:'Alex Morgan',role:'analyst'},
   {id:'reviewer',name:'Jordan Lee',role:'reviewer'},
@@ -224,12 +228,45 @@ function openStore(file,{empty=false,storage}={}) {
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {requesterReceipts,trustCenter:privateCenter,employeeAttestations,privacyPreferences,...safe}=state;
+    const {requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,ethicsCases,maturityPlanning:privatePlanning,...safe}=state;
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     safe.audit=safe.audit.filter(e=>!excludedAudit(e));
     return documents.stateView(safe);
   };
   const operations={
+    identityMembership:id=>identityAdmin.record(state,id),
+    identityAdminView:(seats,at)=>identityAdmin.view(state,seats,at),
+    identityAdminChange(seats,at,admin,body){
+      const next=structuredClone(state);
+      const result=identityAdmin.change(next,seats,at,admin,body,event);
+      persist(next);
+      state=next;
+      return result;
+    },
+    getEthicsCases:(role,account)=>ethics.view(state,role,account),
+    getEthicsExport:(id,role,account)=>ethics.redactedExport(state,id,role,account),
+    changeEthics(role,account,action,id,body){
+      const next=structuredClone(state);
+      const result=ethics.change(next,role,account,action,id,body);
+      persist(next);
+      state=next;
+      return result;
+    },
+    trainingOperatorView:learners=>training.operatorView(state,learners),
+    trainingAdmin(learners,actor,account,action,body){
+      const next=structuredClone(state);
+      try{if(training.admin(next,learners,actor,account,action,body,event)){persist(next);state=next;}}
+      catch(error){if(error.persistRefusal){persist(next);state=next;}throw error;}
+      return training.operatorView(state,learners);
+    },
+    trainingQuery:(seat,action,body)=>training.query(state,seat,action,body),
+    trainingProgress(seat,action,body,sign){
+      const next=structuredClone(state);
+      const changed=training.progress(next,seat,action,body,sign,event);
+      const view=training.learnerView(changed?next:state,seat,body.assignment);
+      if(changed){persist(next);state=next;}
+      return view;
+    },
     employeeOperatorView:staff=>employee.operatorView(state,staff),
     employeeAssign(staff,actor,account,body){
       const next=structuredClone(state);
@@ -268,6 +305,8 @@ function openStore(file,{empty=false,storage}={}) {
     getRiskControls:()=>riskControls.view(state),
     getAuditManagement:()=>auditManagement.view(state),
     getAuditReport:id=>auditManagement.report(state,id),
+    getMaturityPlanning:()=>maturityPlanning.view(state),
+    getMaturityReport:(id,version)=>maturityPlanning.report(state,id,version),
     getVendorMonitoring:()=>vendorMonitoring.view(state),
     getProgramAudit:prefix=>state.audit.filter(e=>e.action.startsWith(prefix+'.')),
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
@@ -313,7 +352,7 @@ function openStore(file,{empty=false,storage}={}) {
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['employeeAssign','employeeConfirm','portalIntake','change']);
+  const mutations=new Set(['identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       state=storage.read(workbench)??fresh();

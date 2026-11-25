@@ -32,7 +32,7 @@ separately. An inventory entry marked `observed-not-exercised` is not a pass.
 
 | Surface | Browser actions with executable evidence | Pending beyond that evidence |
 | --- | --- | --- |
-| Workbench shell | 17 top-level tabs in three demo roles, current indication, small viewport navigation, keyboard skip and focus transfer, solid surfaces | Supported screen readers, other browser engines, high zoom and additional device widths |
+| Workbench shell | 18 top-level tabs in three demo roles, current indication, small viewport navigation, keyboard skip and focus transfer, solid surfaces | Supported screen readers, other browser engines, high zoom and additional device widths |
 | Sign-in / workspace | Isolated sign-in, switch workspaces, scoped request behavior and sign-out, signed-out keyboard skip after the focus fix | Additional lifecycle account states and all error messages |
 | Assessments / handoff | Seeded conditional answers, submit, review, simulated timeout/retry, download audit | Every edit/return reason and empty-state action |
 | Audit management | Create a risk control and scoped plan, begin, block incomplete fieldwork in UI, record exception, submit, separate-account return, revise evidence and inspect prior versions, independent finalization, stale-tab error and reload, download and verify report digest | Alternate outcomes, every form validation, supersession |
@@ -43,6 +43,7 @@ separately. An inventory entry marked `observed-not-exercised` is not a pass.
 | Policies and documents | Draft and read a fictional document; exercise the file picker, accepted and rejected local text files, forced download, removal, reviewer publication and reload | Office/PDF attachment formats, malware scanning and broader upload cases are not implemented or certified |
 | Workflow Studio | Publish and launch a pinned synthetic workflow, advance to review, see reviewer action; parse demo workflow audit export; isolated reviewer-only access is separately covered | Remaining transitions, failed validators, all recipes and role combinations |
 | Requester, employee and visitor portals | Requester checks a code, submits one receipt and can clear it; employee no-assignment and clear flow; visitor opens empty published preview | Employee assignment and attestation in UI, all privacy requester and visitor publication states |
+| Policy training | Create/edit, submit, independently return/publish, assign, open learner link, read pinned policy, start exercise, exhaust attempts, reset, complete, download signed receipt and clear access | Other browser engines and production learning-management behavior are not certified |
 | Program modules | Open the page in each demo role and inventory the rendered actions | Every record collection and lifecycle operation |
 
 ## Known control-specific issue and regression
