@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Synthetic privacy request portal</title><link rel="stylesheet" href="/styles.css"><script src="/requester.js" defer></script>
+</head><body>
+<header class="top"><div><span class="mark" aria-hidden="true">PW</span><strong>Privacy Workbench</strong></div></header>
+<main class="requester-page">
+<section>
+<div class="eyebrow">LOCAL TEST ONLY</div>
+<h1>Synthetic privacy request portal</h1>
+<p>Use a provisioned synthetic access code. Each code can open one fictional request and check only that request’s status. The simulation does not verify identity, contact anyone, or release data.</p>
+<form id="portal-code">
+<label>Synthetic access code<input name="code" type="password" maxlength="43" minlength="43" autocomplete="off" required></label>
+<button type="submit">Check my request</button>
+</form>
+<div id="portal-result" aria-live="polite"></div>
+<button id="portal-clear" type="button" class="secondary" hidden>Clear access code</button>
+</section>
+</main></body></html>

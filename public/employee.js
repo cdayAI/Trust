@@ -1,0 +1,52 @@
+'use strict';
+const form=document.querySelector('#employee-code'),list=document.querySelector('#employee-list'),clear=document.querySelector('#employee-clear'),message=document.querySelector('#employee-message');
+let localCode,operationId=0;
+function n(tag,text){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;return element}
+function clearPage(){
+  operationId++;localCode=undefined;form.reset();list.replaceChildren();clear.hidden=true;message.textContent='';
+}
+async function send(action,fields){
+  const r=await fetch('/api/employee/'+action,{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({code:localCode,...fields})});
+  const data=await r.json();
+  if(!r.ok)throw Object.assign(Error(data.error||'Request failed.'),{status:r.status});
+  return data;
+}
+async function run(action,fields,trigger){
+  const current=operationId;
+  trigger.disabled=true;message.textContent='';
+  try{const data=await send(action,fields);if(current===operationId)render(data)}
+  catch(error){
+    if(current===operationId){
+      if(error.status===401||error.status===429)clearPage();
+      message.textContent=error.message;
+    }
+  }finally{trigger.disabled=false}
+}
+function render(data){
+  const sections=[];
+  for(const row of data.assignments){
+    const section=n('section');
+    const text=n('p',row.text);text.className='policy-copy';
+    section.append(n('h2',row.title),n('p','Policy version '+row.version),text);
+    if(row.receipt)section.append(n('p','Acknowledged · receipt '+row.receipt.receipt));
+    else{
+      const f=n('form'),label=n('label','I acknowledge this exact fictional policy edition.'),check=n('input'),submit=n('button','Record acknowledgment');
+      check.type='checkbox';check.required=true;label.prepend(check);f.append(label,submit);section.append(f);
+      f.onsubmit=event=>{
+        event.preventDefault();if(submit.disabled||!check.checked)return;
+        run('attest',{assignment:row.assignment,edition:row.edition,hash:row.hash,confirm:true},submit);
+      };
+    }
+    sections.push(section);
+  }
+  list.replaceChildren(...(sections.length?sections:[n('p','You have no assigned policy editions.')]));
+}
+form.onsubmit=event=>{
+  event.preventDefault();const submit=form.querySelector('button');
+  if(submit.disabled)return;
+  operationId++;localCode=form.elements.code.value;form.reset();list.replaceChildren();clear.hidden=false;
+  run('assignments',{},submit);
+};
+clear.onclick=()=>{clearPage();form.elements.code.focus()};
+window.addEventListener('pagehide',clearPage);

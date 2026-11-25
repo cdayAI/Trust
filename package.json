@@ -1,0 +1,14 @@
+{
+  "name": "privacy-workbench",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-only synthetic privacy assessment and handoff prototype",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test",
+    "start:isolated": "node start-isolated.js"
+  }
+}
