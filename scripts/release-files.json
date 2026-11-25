@@ -223,6 +223,7 @@
   "test/operator-api.test.js",
   "test/processing-register.test.js",
   "test/release-launcher.test.js",
+  "test/release-upgrade.test.js",
   "test/report-schedules.test.js",
   "test/reporting-runs.test.js",
   "test/reporting.test.js",

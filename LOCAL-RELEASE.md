@@ -76,6 +76,33 @@ database-only backup does not carry the synthetic identity profile or migrate
 old launches without a profile. This is local restart recovery, not cross-host
 disaster recovery or production hosting.
 
+## Rehearse the exact stage20 upgrade on a private copy
+
+This optional synthetic acceptance case requires the original local
+`mvw-trust-sprint20-checkpoint.zip` archive and `unzip`. On Linux/macOS:
+
+```sh
+MVW_TRUST_STAGE20_ARCHIVE="/private/fixtures/mvw-trust-sprint20-checkpoint.zip" node --test --test-concurrency=1 test/release-upgrade.test.js
+```
+
+The test pins archive SHA-256
+`8abf638613d03d65f99c4c6eac95ee38adb6a4fa0ee7ca4ce008b343a1a5ef46`.
+It launches that earlier source only to write and stop a fictional old run,
+verifies a read-only SQLite backup and restores it to private scratch, then
+starts the current source on that copy. It copies the private local binding
+profile, not generated access files, process locks, or sessions. Current
+startup regenerates the same fixture identity, refuses all old session cookies,
+and preserves a delegated case, audit, independently released artifact bytes,
+and an original-code-bound fictional requester result. Wrong seeds and
+unsupported profile versions must fail closed without changing their inputs.
+
+The test checks original files are unchanged and prints the exact current
+source manifest fingerprint. This is evidence for the pinned stage20-to-tested
+source pair only. It is not a promise about future releases, all historic
+formats, real records, or a production upgrade process. The archived source is
+not included in the current package; without that exact local archive this
+test is skipped.
+
 ## Other install-free launch modes
 
 Use Node.js 22.13.0 or newer. Node 24.22.3 is the pinned CI toolchain.
