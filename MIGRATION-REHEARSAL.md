@@ -23,8 +23,6 @@ The dry run reports four stages: inventory nodes, graph edges, dictionary drafts
 
 Import builds and verifies the isolated SQLite snapshot off to the side, then atomically publishes it on the destination filesystem, never overwriting an existing file. The receipt appears on stdout and is stored in the SQLite backup scope, but not published in the app's broad state API. Its counts do not imply that deferred work was applied.
 
-To open the result, use the loopback local isolation runtime with the new database as `sqliteFile` and a fresh empty workspace root. Provision the exact dry-run workspace ID with test-only analyst/reviewer accounts. The normal demo launcher uses different default workspace IDs, so use a custom receiving test config. [The integration test](test/fixture-migration.test.js) shows the exact `createServer` configuration and verifies the authenticated map/dictionary readback, draft approval, and workspace isolation. Do not point the receiving configuration at an existing database or official environment.
-
 ## Reconcile after import
 
 ```sh
@@ -34,6 +32,41 @@ npm run storage -- verify-fixture-import fixtures/fictional-transfer-v1.json /pr
 Use the receipt ID printed at import time, before the receiver writes anything. Verification rebuilds the expected fixture snapshot from the reviewed inputs and receipt time, opens the database read-only, and verifies the complete supported snapshot and audit against the receipt. The report shows matched, changed, missing, unexpected and duplicate node, edge and term counts and separately checks that deferred term bindings were not activated. It does not echo observed record content. The same verification can be used after a verified backup and restore.
 
 A valid but modified database returns a drift report and exit status 2. It does not fix or remove anything. A broken receipt, wrong workspace or wrong reviewed plan is rejected without reconciliation. Exact verification is for the untouched fixture import, not a certificate for later approved edits or real data.
+
+## Open an editable receiving rehearsal
+
+After the exact import verifies, run:
+
+```sh
+npm run start:migration-rehearsal -- fixtures/fictional-transfer-v1.json /private/test/plan.json /private/test/imported.sqlite --confirm RECEIPT_ID
+```
+
+With Node only, use `node ./start-migration-rehearsal.js ...` on Linux/macOS or
+`node .\start-migration-rehearsal.js ...` in Windows PowerShell. Supply the
+same arguments; quote argument paths containing spaces. Append `--port 4173`
+to use a particular loopback port, or `--check` to validate actual startup,
+sign-in, and imported readback without leaving an editable instance.
+
+The launcher requires the original fixture and reviewed plan, an untouched
+dedicated import, and the exact receipt ID. It reads one consistent SQLite
+snapshot, verifies it against the reviewed input and receipt, and restores only
+that verified snapshot into a fresh private OS temp directory. It does not
+modify the original database, plan, or package. An invalid or drifted import
+does not open a listener. Workspaces from arbitrary backups, actual work
+records, and third-party exports are not accepted.
+
+When ready it prints the local URL and the private access-file path, not the
+codes. Open the URL only on the same machine and use the fresh
+`rehearsal-analyst` and `rehearsal-reviewer` codes from that file with the
+reviewed workspace ID. Do not share the codes, use a shared temp directory,
+or enter a work password. Only the disposable copy can be edited, including
+independently reviewing a dictionary draft and attaching the approved version.
+Nothing is sent outside the machine; no public or corporate listener is
+started. The command removes the copy and its codes on graceful Ctrl+C or
+after eight hours. A forced kill may leave the temporary directory; remove it
+when finished. To start again, launch from the same untouched input. Windows
+uses the OS temp directory's inherited permissions; modes are owner-only on
+Unix. This is not an actual company's receiving environment.
 
 ## Rollback rehearsal
 

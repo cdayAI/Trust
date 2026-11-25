@@ -292,9 +292,7 @@ function matchRows(expected,observed){
   counts.missing=expected.filter(row=>!seen.has(row.id)).length;
   return counts;
 }
-function verifyFixture(source,planFile,database,confirmation){
-  if(!is(digestPattern,confirmation))reject('Explicit verification must match the import receipt ID.');
-  const plan=reviewedPlan(source,planFile),{mode,documents}=readFixtureSnapshot(database);
+function reconcileSnapshot(plan,{mode,documents},confirmation){
   const document=documents.find(d=>d.kind==='workbench'&&d.scope==='workspace:'+plan.workspace);
   if(mode!=='isolated'||!document)reject('No isolated fictional import was found in the reviewed target workspace.');
   const {receipt,payload}=confirmedReceipt(document,confirmation);
@@ -318,6 +316,20 @@ function verifyFixture(source,planFile,database,confirmation){
   return {format:'mvw-trust-fictional-transfer-reconciliation',version:1,workspace:plan.workspace,
     receiptId:receipt.receiptId,planDigest:plan.planDigest,status:Object.values(checks).every(Boolean)?'verified':'drift',stages,checks};
 }
+function verifyFixture(source,planFile,database,confirmation){
+  if(!is(digestPattern,confirmation))reject('Explicit verification must match the import receipt ID.');
+  return reconcileSnapshot(reviewedPlan(source,planFile),readFixtureSnapshot(database),confirmation);
+}
+function copyVerifiedFixture(source,planFile,database,confirmation,destination){
+  if(!is(digestPattern,confirmation))reject('Explicit rehearsal confirmation must match the import receipt ID.');
+  const plan=reviewedPlan(source,planFile),snapshot=readFixtureSnapshot(database);
+  const proof=reconcileSnapshot(plan,snapshot,confirmation);
+  if(proof.status!=='verified')reject('Only an untouched verified fictional import can enter rehearsal.');
+  // Restore only the object verified above. Reopening the source pathname
+  // for a copy would introduce a verification/copy race.
+  restoreDocuments(snapshot.mode,snapshot.documents,destination);
+  return proof;
+}
 function rollbackFixture(database,destination,confirmation){
   if(!is(digestPattern,confirmation))reject('Explicit rollback confirmation must match the import receipt ID.');
   const {mode,documents}=readFixtureSnapshot(database);
@@ -333,4 +345,4 @@ function rollbackFixture(database,destination,confirmation){
   return {format:'mvw-trust-fictional-transfer-rollback',version:1,workspace:envelope.workspace,
     restoredFromReceipt:receiptId,sourceRetained:true,rollbackSnapshotDigest:sha(restored)};
 }
-module.exports={stage,writePlan,diagnoseFixture,importFixture,verifyFixture,rollbackFixture};
+module.exports={stage,writePlan,diagnoseFixture,importFixture,verifyFixture,copyVerifiedFixture,rollbackFixture};
