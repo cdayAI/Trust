@@ -11,3 +11,6 @@
 .report-table td:nth-child(2){font-variant-numeric:tabular-nums}
 .report-table td:last-child{white-space:nowrap}
 .report-table meter{width:min(11vw,120px);min-width:46px;margin-right:9px;accent-color:var(--navy)}
+.report-run-history ul{list-style:none;padding:0;display:grid;gap:.65rem}
+.report-run-history li{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.6rem;border:1px solid var(--line);border-radius:.85rem;padding:.75rem}
+.report-run-history li p{margin:.25rem 0}

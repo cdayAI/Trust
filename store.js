@@ -5,6 +5,7 @@ const {createHash,randomUUID} = require('node:crypto');
 const {hasLegacySnapshot}=require('./durable-storage');
 const operatorJobs = require('./operator-jobs');
 const modules = require('./modules');
+const reportRuns=require('./reporting-runs');
 const assessmentFlow = require('./assessment-workflow');
 const forms = require('./assessment-questionnaire');
 const assessmentConfig=require('./assessment-config');
@@ -163,7 +164,7 @@ function seed() {
   createVendor(state,'system',{projectId:p.id,name:'Northstar Assist',description:'Fictional service that drafts support replies with AI. Humans review before messages are sent.',usesAI:true},'northstar');
   return state;
 }
-function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false}={}) {
+function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false,largePdf=false}={}) {
   let saveSnapshot;
   function persist(next) {
     if(storage){
@@ -254,11 +255,12 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {fixtureMigrationReceipt,requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,...safe}=state;
+    const {fixtureMigrationReceipt,requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,...safe}=state;
     if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
     delete safe.operatorJobs;
+    delete safe.operatorAuditReceipts;
     safe.audit=safe.audit.filter(e=>!excludedAudit(e));
     return documents.stateView(safe);
   };
@@ -271,8 +273,9 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     const delegation=rightsCaseScope.settings(snapshot,context);
     return delegation?{...model,delegation}:model;
   }
+  const documentCapabilities={largePdf:!!storage&&largePdf};
   const applyProgram = (snapshot, parts, actor, body, appendEvent, account) =>
-    programs.get(parts[0]).change(snapshot, parts, actor, body, appendEvent, createVendorAssessments, account);
+    programs.get(parts[0]).change(snapshot, parts, actor, body, appendEvent, createVendorAssessments, account, documentCapabilities);
   let membershipGeneration=-1, membershipState={};
   const operations={
     groupGovernanceView:context=>groupGovernance.operatorView(state,context),
@@ -365,7 +368,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     previewDiscovery:(actor,body,account)=>discovery.preview(state,actor,body,discoveryScope(account)),
     getState:()=>state,
     publicState,
-    getDocuments:actor=>documents.view(state,actor),
+    getDocuments:actor=>documents.view(state,actor,documentCapabilities),
     getCaseDocuments(ctx){
       requireCurrentOperatorSession(ctx);
       if(ctx.enabled)return documentScope.list(state,ctx);
@@ -445,6 +448,14 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     getVendorMonitoring:()=>vendorMonitoring.view(state),
     getProgramAudit:prefix=>state.audit.filter(e=>e.action.startsWith(prefix+'.')),
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
+    listReportRuns:()=>reportRuns.list(state),
+    readReportRun:(id,format)=>reportRuns.read(state,id,format),
+    pinReportRun(body,mode){
+      const next={...state};
+      const bytes=reportRuns.create(next,state.audit.filter(e=>!excludedAudit(e)),body,mode);
+      persist(next);state=next;
+      return bytes;
+    },
     reportSnapshot:()=>({state,audit:state.audit.filter(e=>!excludedAudit(e))}),
     change(parts,actor,body,account,generation,rightsContext) {
       if(rightsContext){
@@ -491,11 +502,12 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       } else fail(404,'Endpoint not found.');
       commit();
       if(rightsContext&&!result)return projectRights(state,rightsContext);
-      return result??(parts[0]==='modules'?modules.model(state):program?program.view(state,actor,account):publicState());
+      return result??(parts[0]==='modules'?modules.model(state):program===documents?documents.view(state,actor,documentCapabilities):
+        program?program.view(state,actor,account):publicState());
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['pinReportRun','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name!=='identityMembership')state=storage.read(workbench)??fresh();

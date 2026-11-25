@@ -10,6 +10,7 @@
     "start": "node server.js",
     "test": "node --test",
     "start:isolated": "node start-isolated.js",
+    "start:release": "node start-release.js",
     "start:corporate": "node start-corporate.js",
     "test:corporate": "node --test oidc/signin-check.js",
     "storage": "node storage-cli.js",

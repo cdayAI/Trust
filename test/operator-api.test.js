@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const { spawn } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
+const { request } = require('node:http');
 const { once } = require('node:events');
 const { mkdtemp, readFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
@@ -28,12 +29,12 @@ async function launch(t, sqliteFile, entry = 'start-isolated.js') {
   let url;
   let stderr = '';
   child.stderr.setEncoding('utf8').on('data', chunk => { stderr += chunk; });
-  const stop = async () => {
-    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
+  const stop = async (signal = 'SIGTERM') => {
+    if (child.exitCode === null && child.signalCode === null) child.kill(signal);
     await exited;
     if (access) await rm(dirname(access), { recursive: true, force: true });
   };
-  t.after(stop);
+  t.after(() => stop());
   const lines = createInterface({ input: child.stdout });
   await new Promise((ready, fail) => {
     const timer = setTimeout(() => fail(new Error('Local Trust did not start. ' + stderr)), 10000);
@@ -268,6 +269,24 @@ async function openAuditPlan(server, cookie, title) {
   return plans[0];
 }
 
+async function finalizeAuditPlan(server, plan, analyst, reviewer) {
+  const path = auditPlans + '/plans/' + plan.id + '/';
+  let current = plan;
+  async function change(action, cookie, fields = {}) {
+    const result = status(await server.call(harbor(path + action), {
+      cookie, body: { expectedRevision: current.revision, ...fields },
+    }), 200);
+    current = result.plans.find(row => row.id === plan.id);
+  }
+  if (current.status === 'planned') await change('begin', analyst);
+  await change('assess', analyst, {
+    controlId: plan.controls[0].id, evidenceReference: 'SYN-REHEARSAL-01', outcome: 'effective', observation: 'Fictional audit sample.',
+  });
+  await change('submit', analyst);
+  await change('finalize', reviewer, { note: 'Reviewed only the fictional sample.' });
+  return current;
+}
+
 test('audit jobs use pinned revisions, independent approval and the audit workflow transaction', async t => {
   const sqlite = await fixture(t);
   const first = await launch(t, sqlite);
@@ -393,7 +412,8 @@ test('browser operator jobs show and manage audit proposals with the correct rol
   }
   const jobsButton = { name: 'Operator jobs', exact: true };
   const analyst = await pageFor(server, analystCookie);
-  const reviewer = await pageFor(server, await server.login('sample-review'));
+  const reviewerCookie = await server.login('sample-review');
+  const reviewer = await pageFor(server, reviewerCookie);
   const publisher = await pageFor(server, await server.login('sample-publisher'));
   const legacy = await pageFor(jsonServer, await jsonServer.login('sample-intake'));
   assert.equal(await publisher.getByRole('button', jobsButton).isVisible(), false);
@@ -428,5 +448,151 @@ test('browser operator jobs show and manage audit proposals with the correct rol
   await card(analyst).getByText('Record status fieldwork · Revision 2', { exact: true }).waitFor();
   await analyst.getByRole('button', { name: 'Audit management', exact: true }).click();
   await auditCard.getByText('fieldwork', { exact: true }).waitFor();
+
+  const current = status(await server.call(harbor(auditPlans), { cookie: analystCookie }), 200).plans[0];
+  const finalized = await finalizeAuditPlan(server, current, analystCookie, reviewerCookie);
+  await analyst.reload();
+  await analyst.getByRole('button', { name: 'Audit management', exact: true }).click();
+  await auditCard.getByRole('button', { name: 'Queue operator job' }).click();
+  assert.equal(await analyst.getByLabel('Action', { exact: true }).inputValue(), 'audit.plan.receipt-rehearsal');
+  assert.equal(await analyst.getByLabel('Expected revision', { exact: true }).inputValue(), String(finalized.revision));
+  await analyst.getByRole('button', { name: 'Queue job', exact: true }).click();
+  const receiptCard = page => card(page).filter({ has: page.getByRole('heading', { name: 'Rehearse audit receipt' }) });
+  await receiptCard(analyst).getByText('Awaiting approval', { exact: true }).waitFor();
+  await reviewer.getByRole('button', { name: 'Refresh jobs' }).click();
+  await receiptCard(reviewer).getByRole('button', { name: 'Approve job' }).click();
+  await receiptCard(reviewer).getByText('Queued', { exact: true }).waitFor();
+  await analyst.getByRole('button', { name: 'Refresh jobs' }).click();
+  await receiptCard(analyst).getByRole('button', { name: 'Run job' }).click();
+  await receiptCard(analyst).getByRole('button', { name: 'Retry job' }).click();
+  await receiptCard(analyst).getByText('Needs reconciliation', { exact: true }).waitFor();
+  assert.equal(await receiptCard(analyst).getByRole('button', { name: 'Reconcile receipt' }).count(), 0);
+  await reviewer.getByRole('button', { name: 'Refresh jobs' }).click();
+  await receiptCard(reviewer).getByRole('button', { name: 'Reconcile receipt' }).click();
+  await receiptCard(reviewer).getByText(/^Synthetic receipt SYN-AUDIT-/).waitFor();
+  await receiptCard(reviewer).getByText('Succeeded', { exact: true }).waitFor();
   assert.deepEqual(errors, []);
+});
+
+function receipts(sqlite) {
+  const db = new DatabaseSync(sqlite, { readOnly: true });
+  try {
+    const row = db.prepare("SELECT payload FROM snapshots WHERE scope = 'workspace:harbor' AND kind = 'workbench'").get();
+    return JSON.parse(row.payload).operatorAuditReceipts ?? [];
+  } finally {
+    db.close();
+  }
+}
+
+async function dropRetryBody(server, path, cookie) {
+  await new Promise((resolve, reject) => {
+    const req = request(server.url + path, {
+      method: 'POST',
+      headers: { Cookie: cookie, Origin: server.url, 'Content-Type': 'application/json' },
+    }, reply => {
+      if (reply.statusCode !== 200) {
+        reply.resume();
+        reject(new Error('Receipt retry returned HTTP ' + reply.statusCode));
+        return;
+      }
+      // Headers are sent after the SQLite commit. Lose the result before reading the response body.
+      reply.destroy();
+      resolve();
+    });
+    req.once('error', reject);
+    req.setTimeout(5000, () => req.destroy(new Error('Receipt retry timed out.')));
+    req.end('{}');
+  });
+}
+
+test('one audit receipt survives a lost retry response and forced restart before reconciliation', async t => {
+  const sqlite = await fixture(t);
+  const first = await launch(t, sqlite);
+  const analyst = await first.login('sample-intake');
+  const reviewer = await first.login('sample-review');
+  const draft = await openAuditPlan(first, analyst, 'Synthetic receipt rehearsal plan');
+  const spec = {
+    action: 'audit.plan.receipt-rehearsal',
+    args: { planId: draft.id, expectedRevision: draft.revision }, idempotencyKey: randomUUID(),
+  };
+  const jobPath = (job, operation = '') => harbor(jobs + '/' + job.id + operation);
+  const post = (server, cookie, path, body = {}) => server.call(path, { cookie, body });
+  const submit = (server, cookie, body) => post(server, cookie, harbor(jobs), body);
+
+  status(await submit(first, reviewer, spec), 403, 'ACCESS_DENIED');
+  const premature = status(await submit(first, analyst, spec), 201).job;
+  status(await post(first, reviewer, jobPath(premature, '/decision'), approve), 200);
+  const failed = status(await post(first, analyst, jobPath(premature, '/run')), 200).job;
+  assert.equal(failed.status, 'failed');
+  assert.deepEqual(failed.failure, { code: 'AUDIT_NOT_FINAL' });
+  assert.deepEqual(failed.attempts, []);
+
+  const final = await finalizeAuditPlan(first, draft, analyst, reviewer);
+  const proposal = { ...spec, args: { planId: final.id, expectedRevision: final.revision }, idempotencyKey: randomUUID() };
+  const pending = status(await submit(first, analyst, proposal), 201).job;
+  assert.equal(pending.status, 'awaiting-approval');
+  assert.deepEqual(status(await submit(first, analyst, proposal), 200).job, pending);
+  status(await submit(first, analyst, { ...proposal, idempotencyKey: randomUUID() }), 409, 'RECEIPT_JOB_EXISTS');
+  status(await post(first, analyst, jobPath(pending, '/run')), 409, 'JOB_NOT_RUNNABLE');
+  status(await post(first, analyst, jobPath(pending, '/retry')), 409, 'JOB_NOT_RETRYABLE');
+  status(await post(first, analyst, jobPath(pending, '/decision'), approve), 403, 'ACCESS_DENIED');
+  status(await post(first, reviewer, jobPath(pending, '/decision'), approve), 200);
+  status(await post(first, reviewer, jobPath(pending, '/reconcile')), 409, 'JOB_NOT_RECONCILABLE');
+
+  const retryable = status(await post(first, analyst, jobPath(pending, '/run')), 200).job;
+  assert.equal(retryable.status, 'retryable');
+  assert.deepEqual(retryable.attempts.map(({ number, outcome }) => [number, outcome]), [[1, 'retryable-before-effect']]);
+  assert.deepEqual(receipts(sqlite), []);
+  assert.deepEqual(status(await post(first, analyst, jobPath(pending, '/run')), 200).job, retryable);
+  status(await post(first, reviewer, jobPath(pending, '/retry')), 403, 'ACCESS_DENIED');
+
+  await dropRetryBody(first, jobPath(pending, '/retry'), analyst);
+  await first.stop('SIGKILL');
+
+  const restarted = await launch(t, sqlite);
+  const freshAnalyst = await restarted.login('sample-intake');
+  const freshReviewer = await restarted.login('sample-review');
+  const orchardReviewer = await restarted.login('sample-intake', 'orchard');
+  const ambiguous = status(await restarted.call(jobPath(pending), { cookie: freshAnalyst }), 200).job;
+  assert.equal(ambiguous.status, 'needs-reconciliation');
+  assert.equal(ambiguous.result, undefined);
+  assert.deepEqual(ambiguous.attempts.map(({ number, outcome }) => [number, outcome]), [
+    [1, 'retryable-before-effect'], [2, 'acknowledgment-unknown'],
+  ]);
+  const ledger = receipts(sqlite);
+  assert.equal(ledger.length, 1);
+  assert.deepEqual(ledger[0], {
+    id: 'SYN-AUDIT-' + pending.id, jobId: pending.id, planId: final.id,
+    revision: final.revision, recordedAt: ambiguous.attempts[1].at,
+  });
+  assert.deepEqual(status(await submit(restarted, freshAnalyst, proposal), 200).job, ambiguous);
+  const replays = await Promise.all([
+    post(restarted, freshAnalyst, jobPath(pending, '/run')),
+    post(restarted, freshAnalyst, jobPath(pending, '/retry')),
+    post(restarted, freshAnalyst, jobPath(pending, '/retry')),
+  ]);
+  for (const replay of replays) assert.deepEqual(status(replay, 200).job, ambiguous);
+  status(await post(restarted, freshAnalyst, jobPath(pending, '/reconcile')), 403, 'ACCESS_DENIED');
+  status(await post(restarted, orchardReviewer, jobs + '/' + pending.id + '/reconcile?workspace=orchard'), 404, 'JOB_NOT_FOUND');
+
+  const done = status(await post(restarted, freshReviewer, jobPath(pending, '/reconcile')), 200).job;
+  assert.equal(done.status, 'succeeded');
+  assert.equal(done.reconciliation.by, 'sample-review');
+  assert.deepEqual(done.result, { planId: final.id, status: 'finalized', revision: final.revision, receiptId: ledger[0].id });
+  assert.deepEqual(status(await post(restarted, freshReviewer, jobPath(pending, '/reconcile')), 200).job, done);
+  assert.deepEqual(status(await post(restarted, freshAnalyst, jobPath(pending, '/retry')), 200).job, done);
+  status(await submit(restarted, freshAnalyst, { ...proposal, idempotencyKey: randomUUID() }), 409, 'RECEIPT_JOB_EXISTS');
+  assert.deepEqual(receipts(sqlite), ledger);
+  const { plans } = status(await restarted.call(harbor(auditPlans), { cookie: freshReviewer }), 200);
+  assert.deepEqual(plans[0], final);
+  const { audit } = status(await restarted.call(harbor(auditPath), { cookie: freshReviewer }), 200);
+  const events = audit.filter(event => event.correlationId === pending.id);
+  assert.deepEqual(events.map(e => [e.action, e.account, e.details.attempt]), [
+    ['operator.job.submitted', 'sample-intake', undefined],
+    ['operator.job.approved', 'sample-review', undefined],
+    ['operator.job.retryable', 'sample-intake', 1],
+    ['operator.job.needs-reconciliation', 'sample-intake', 2],
+    ['operator.job.reconciled', 'sample-review', undefined],
+  ]);
+  assert.equal(events.at(-1).details.receiptId, ledger[0].id);
 });

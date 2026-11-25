@@ -21,10 +21,12 @@ const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
 const employee=require('./employee-attestations');
 const training=require('./training');
+const binaryAttachments=require('./attachment-binary-batch');
 const {provisionReview}=require('./governance-documents');
 const {uploadRequestBytes,batchUploadRequestBytes}=require('./governance-document-attachments');
 const attachmentUploadPath=/^\/api\/governance-documents\/records\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/revisions\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/attachments(?:\/batch)?$/u;
 const reporting=require('./reporting');
+const reportRuns=require('./reporting-runs');
 const publicDir = path.join(__dirname,'public');
 const staticFiles = new Map([
   ['/',['index.html','text/html; charset=utf-8']],
@@ -69,10 +71,11 @@ const staticFiles = new Map([
 ]);
 function send(res,status,value,type='application/json; charset=utf-8',extra={}) {
   res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",...extra});
-  res.end(type.startsWith('application/json')?JSON.stringify(value,null,2)+'\n':value);
+  res.end(type.startsWith('application/json')&&!Buffer.isBuffer(value)?JSON.stringify(value,null,2)+'\n':value);
 }
-async function readBody(req,limit=32768) {
-  const tooLarge=()=>Object.assign(new Error(limit===32768?'Request exceeds 32 KiB.':'Attachment request exceeds the encoded upload limit.'),
+async function readBoundedBytes(req,limit) {
+  const tooLarge=()=>Object.assign(new Error(limit===32768?'Request exceeds 32 KiB.':limit===binaryAttachments.requestLimit?
+    'Attachment request exceeds the binary upload limit.':'Attachment request exceeds the encoded upload limit.'),
     {status:413,closeConnection:true});
   if(Number(req.headers['content-length'])>limit)throw tooLarge();
   let bytes=0;
@@ -82,7 +85,11 @@ async function readBody(req,limit=32768) {
     if (bytes>limit)throw tooLarge();
     chunks.push(chunk);
   }
-  try { return bytes?JSON.parse(Buffer.concat(chunks).toString('utf8')):{}; }
+  return Buffer.concat(chunks,bytes);
+}
+async function readBody(req,limit=32768) {
+  const bytes=await readBoundedBytes(req,limit);
+  try { return bytes.length?JSON.parse(bytes.toString('utf8')):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false}={}) {
@@ -94,6 +101,8 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   const scopedDocuments=documentScope.provision(isolated);
   const scopedRights=rightsCaseScope.provision(isolated);
   const manualReview=provisionReview(isolated);
+  const largePdfScopes=binaryAttachments.provision(isolated,sqliteFile,manualReview);
+  if(oidc&&largePdfScopes.size)throw Error('Larger PDF batches are limited to the local synthetic workbench.');
   const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id),
     id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id)}),oidc);
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
@@ -109,10 +118,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     requesters:isolated.requesterGrants,employees:isolated.employeeGrants,now:isolated.now
   }):null;
   const database=sqliteFile===undefined?null:openSqlite(sqliteFile);
-  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false){
+  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false,largePdf=false){
     const storage=database?.scope(scope);
     const workflow=openWorkflowHttp(workflowFile,{storage});
-    return {store:openStore(stateFile,{empty,storage,scopeDocuments,manualAttachmentReview,scopeRights}),workflow};
+    return {store:openStore(stateFile,{empty,storage,scopeDocuments,manualAttachmentReview,scopeRights,largePdf}),workflow};
   }
   let demo;
   try {
@@ -126,7 +135,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   function runtime(space){
     if(!space)return demo;
     if(!runtimes.has(space.id))runtimes.set(space.id,
-      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id),manualReview.has(space.id),scopedRights.has(space.id)));
+      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id),manualReview.has(space.id),scopedRights.has(space.id),largePdfScopes.has(space.id)));
     return runtimes.get(space.id);
   }
   try{
@@ -154,6 +163,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         return send(res,403,{error:'Only loopback access is allowed.'});
       }
       const {pathname,searchParams,search}=new URL(req.url,'http://localhost');
+      const binaryUpload=binaryAttachments.pathPattern.test(pathname);
       if(oidc&&pathname===oidcModule.startPath){
         if(req.method!=='POST')return send(res,405,{error:'Method not allowed.'},undefined,{Allow:'POST'});
         if(req.headers.origin!==oidc.origin||searchParams.size)
@@ -221,7 +231,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         if ((access&&origin!==(oidc?.origin??'http://'+req.headers.host))||
           (origin&&origin!=='http://'+req.headers.host&&origin!=='https://'+req.headers.host))
           return send(res,403,{error:'Cross-origin writes are not allowed.'});
-        if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')) return send(res,415,{error:'Use application/json.'});
+        if(binaryUpload){
+          if(req.headers['content-type']!==binaryAttachments.contentType||req.headers['content-encoding'])
+            return send(res,415,{error:'Use the uncompressed MVW Trust binary attachment-batch format.'},undefined,{'Connection':'close'});
+        }else if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')) return send(res,415,{error:'Use application/json.'});
       }
       if(req.method==='GET'&&pathname==='/api/session')return send(res,200,access?access.describe(req):{mode:'synthetic-demo'});
       if(pathname.startsWith('/api/session/')){
@@ -362,7 +375,26 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           return send(res,403,{error:'This role has no workspace dashboard.'});
         return send(res,200,workspaceHome(caseOperator?store.caseOperatorState(scopeContext(selection)):store.getState(),{mode,actor:homeActor,selection,views:policy.capabilities(homeActor).views},searchParams));
       }
-      if(req.method==='GET'&&['/api/reporting','/api/reporting/export'].includes(pathname)){
+      const reportRoute=pathname.match(reportRuns.routePattern);
+      if(reportRoute){
+        const [,saved,id,download]=reportRoute;
+        if(saved){
+          if(!reporting.canReport(actor??'analyst'))return send(res,403,{error:'An analyst or reviewer is required for reporting.'});
+          if(req.method==='POST'&&!id){
+            reportRuns.query(searchParams,false);
+            const body=await readBody(req);
+            const current=access?.context(req,expected);
+            if(!reporting.canReport(current?.actor??actor))return send(res,403,{error:'An analyst or reviewer is required to pin a report.'});
+            const pinned=store.pinReportRun(body,mode);
+            return send(res,201,pinned);
+          }
+          if(req.method!=='GET')return send(res,404,{error:'Not found.'});
+          const format=reportRuns.query(searchParams,!!download);
+          if(!id)return send(res,200,store.listReportRuns());
+          const headers=download?{'Content-Disposition':'attachment; filename="mvw-trust-report-'+id+'.'+format+'"'}:{};
+          return send(res,200,store.readReportRun(id,format),format==='csv'?'text/csv; charset=utf-8':undefined,headers);
+        }
+        if(req.method!=='GET')return send(res,404,{error:'Not found.'});
         if(access&&!reporting.canReport(actor))return send(res,403,{error:'An analyst or reviewer is required for reporting.'});
         const exporting=pathname.endsWith('/export');
         const {state,audit}=store.reportSnapshot();
@@ -441,17 +473,24 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       if (req.method==='POST'&&pathname.startsWith('/api/')) {
         const isAttachmentUpload=attachmentUploadPath.test(pathname);
-        const batchUpload=isAttachmentUpload&&pathname.endsWith('/batch');
+        const batchUpload=binaryUpload||isAttachmentUpload&&pathname.endsWith('/batch');
+        if(binaryUpload&&!largePdfScopes.has(selection?.space.id))
+          return send(res,404,{error:'Not found.'},undefined,{'Connection':'close'});
         if(batchUpload){
           // Enforce authority and a small concurrency budget before buffering a large upload.
           if(actor!=='analyst')return send(res,403,{error:'Only the author can upload draft attachments.',code:'AUTHOR_REQUIRED'},undefined,{'Connection':'close'});
           if(activeBatchUploads>=2)return send(res,429,{error:'Two uploads are already in progress. Retry when one finishes.',code:'ATTACHMENT_UPLOAD_BUSY'},undefined,{'Connection':'close','Retry-After':'1'});
           activeBatchUploads++;countedBatch=true;
         }
-        const body=await readBody(req,batchUpload?batchUploadRequestBytes:isAttachmentUpload?uploadRequestBytes:undefined);
+        let body;
+        if(binaryUpload){
+          const deadline=setTimeout(()=>req.destroy(),20_000);
+          try{body=binaryAttachments.decode(await readBoundedBytes(req,binaryAttachments.requestLimit));}
+          finally{clearTimeout(deadline);}
+        }else body=await readBody(req,batchUpload?batchUploadRequestBytes:isAttachmentUpload?uploadRequestBytes:undefined);
         // The session may have expired, been switched, or logged out while the body was arriving.
         const current=access?.context(req,expected);
-        if(isAttachmentUpload&&current&&current.actor!==actor)return send(res,403,{error:'The upload role changed.'});
+        if((isAttachmentUpload||binaryUpload)&&current&&current.actor!==actor)return send(res,403,{error:'The upload role changed.'});
         if (workflowParts) {
           if(access&&workflowParts[0]==='definitions'&&Array.isArray(body?.definition?.transitions)&&
             body.definition.transitions.some(t=>Array.isArray(t?.roles)&&t.roles.includes('publisher')))

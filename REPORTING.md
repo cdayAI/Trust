@@ -25,15 +25,26 @@ form answers, requester notes, evidence contents, or audit payloads.
 - Downloads use the last applied filters. JSON includes grouped rows and totals.
   CSV repeats the selected dimensions on every row and contains a header with
   no data rows for an empty result. Downloads are recomputed when requested;
-  intervening workspace changes may affect totals. This does not save or
-  schedule report runs.
+  intervening workspace changes may affect totals.
+- **Pin current report** takes a fresh snapshot with the last applied filters,
+  then opens that saved run. Its viewer and JSON download use the same stored
+  bytes; its CSV is captured with those same rows at pin time. Later record and
+  audit updates do not change it. Open an older version under **Pinned reports**.
+- Pinned runs are visible to analysts and reviewers of the same workspace. They
+  expire after 30 days. New runs can remove the oldest sooner to keep no more
+  than 30 runs or 1 MiB of stored export bytes; a single run is limited to 256
+  KiB. Expired runs immediately stop opening, and their stored bytes are pruned
+  on the next successful pin. There are no scheduled checks or background sends.
 
 ## Local HTTP
 
 - `GET /api/reporting?dataset=records&workflow=rights&group=stage`
 - `GET /api/reporting/export?dataset=activity&workflow=rights&group=outcome&format=csv`
+- `POST /api/reporting/runs` with `{"filters":{"dataset":"records","group":"stage"}}`
+- `GET /api/reporting/runs` lists active pins. `GET /api/reporting/runs/:id` views one.
+- `GET /api/reporting/runs/:id/export?format=json` downloads the same bytes, or use `format=csv`.
 
-Both routes accept `dataset`, `workflow`, `stage`, `outcome`, `group`,
+The live routes accept `dataset`, `workflow`, `stage`, `outcome`, `group`,
 `from`, and `to`. Only the export route accepts `format` (`csv` or `json`).
 Invalid and duplicate filters return HTTP 422. Isolated mode also requires the
 active workspace selector and an authenticated analyst or reviewer; report

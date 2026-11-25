@@ -104,9 +104,47 @@ dedicated object storage, disk-level isolation, a malware scanner, secure
 erasure, or live migration of legacy attachments. Do not use it for real
 workplace data.
 
+## Optional larger PDF batches
+
+The isolated SQLite launcher can opt into PDFs up to **4 MiB each**. The
+existing **4 MiB per batch**, four attachments per revision, and **8 MiB per
+workspace** ceilings still apply. Non-PDF formats keep their existing limits,
+and the regular JSON upload route still uses its original limits. Manual
+quarantine is required. For a disposable synthetic workbench:
+
+```sh
+scratch=$(mktemp -d)
+TRUST_SQLITE_FILE="$scratch/trust.sqlite" TRUST_ATTACHMENT_REVIEW=manual TRUST_LARGE_PDF_BATCH=1 npm run start:isolated
+```
+
+The browser uses an authenticated raw-binary request when a PDF exceeds the
+usual 1 MiB limit. The exact document-revision route accepts a bounded
+4 KiB manifest and four MiB of uncompressed payload bytes, rejects any missing
+or surplus bytes, and shares the existing two-upload concurrency cap. A stalled
+binary body is disconnected after 20 seconds. Every selected file is validated
+before one SQLite commit; the same manual quarantine and scoped forced-download
+rules apply. To opt in from an embedded isolated server, set
+`isolated.largePdfAttachmentWorkspaces` to a subset of its explicit
+`attachmentReviewWorkspaces` and provide a SQLite file.
+
+This is an incremental transfer improvement, **not** a high-volume document
+store. Bytes remain encoded in the same bounded database snapshots and
+verified backups. Disabling the upload flag prevents new larger uploads
+without disabling review or legitimate download of previously stored
+records. Test clients and operations staff should keep the app version needed
+to read the stored PDF profile before restoring these backups.
+
+For larger files or more data per workspace, the next step is a separate
+transactional, tenant-keyed SQLite BLOB table with an explicit upgrade and
+backup-format version. Store only references in the workbench snapshot;
+prove restore covers referenced blobs and metadata from the same transaction,
+reject missing or orphan payloads, and verify retention before enabling GC.
+Do not lift request/workspace bounds before that path and snapshot-load
+tests are available. No external storage or malware scanning is configured.
+
 Run focused HTTP and browser journeys:
 
 ```sh
-node --test test/governance-document-attachments.test.js
+node --test test/governance-document-attachments.test.js test/attachment-binary-batch.test.js
 RUN_BROWSER_SMOKE=1 CHROMIUM_PATH=/path/to/chromium npm test
 ```

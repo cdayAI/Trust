@@ -29,6 +29,7 @@ jobs:
         run: |
           npm run verify:runtime -- --sqlite
           npm run verify:startup -- --sqlite
+          npm run start:release -- --check
       - name: Verify offline source release reproducibility and extracted startup
         run: |
           set -euo pipefail

@@ -19,6 +19,8 @@ Open http://127.0.0.1:4173. The intake analyst and reviewer are **simulated loca
 - **Reporting**: See synthetic project, vendor and assessment counts, pending reviews, failed handoffs, and per-module stage totals.
 - **Export audit JSON**: Download the workspace's synthetic event history.
 
+For the full isolated synthetic release, run `npm run start:release`. It uses a fresh local SQLite workspace and verifies loopback readiness before showing the URL. See [local release instructions](LOCAL-RELEASE.md).
+
 The app saves locally to `data/state.json`. Use a new `DATA_FILE` path to start fresh; use `PORT` to override 4173. The demo reads and writes a single process-local state file, not a production database.
 
 ## Run with synthetic workspace separation

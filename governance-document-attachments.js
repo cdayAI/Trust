@@ -1,5 +1,6 @@
 'use strict';
 const {createHash, randomUUID}=require('node:crypto');
+const {maxBytes:largePdfMaxBytes}=require('./attachment-binary-batch');
 const {formats,catalog}=require('./document-attachment-formats');
 const rules=Object.freeze({
   formats:catalog,
@@ -27,10 +28,15 @@ function cleanName(name){
     fail(422,'INVALID_ATTACHMENT_FILENAME','Use a regular filename.');
   return base+name.slice(dot).toLowerCase();
 }
-function rawBytes(data,format){
-  if(typeof data!=='string'||!data)fail(422,'ATTACHMENT_REQUIRED','Choose a nonempty fictional file.');
-  const limit=format.maxFileBytes, tooLarge=()=>fail(413,'ATTACHMENT_TOO_LARGE',
+function rawBytes(data,limit,binary=false){
+  const tooLarge=()=>fail(413,'ATTACHMENT_TOO_LARGE',
     'This file format cannot exceed '+(limit>=1024*1024?limit/(1024*1024)+' MiB':limit/1024+' KiB')+'.');
+  if(binary){
+    if(!Buffer.isBuffer(data)||!data.length)fail(422,'ATTACHMENT_REQUIRED','Choose a nonempty fictional file.');
+    if(data.length>limit)tooLarge();
+    return data;
+  }
+  if(typeof data!=='string'||!data)fail(422,'ATTACHMENT_REQUIRED','Choose a nonempty fictional file.');
   if(data.length>Math.ceil(limit/3)*4)tooLarge();
   if(data.length%4||/[^A-Za-z0-9+/=]/u.test(data))fail(422,'INVALID_ATTACHMENT_ENCODING','The attachment encoding is invalid.');
   const bytes=Buffer.from(data,'base64');
@@ -43,13 +49,15 @@ function namedFormat(name){
   if(!format)fail(415,'ATTACHMENT_TYPE_UNSUPPORTED','Choose a supported PDF, modern Office, text/data, or raster image file.');
   return format;
 }
-function prepare(body){
+function prepare(body,binary=false){
   const name=cleanName(body.filename), format=namedFormat(name);
   if(typeof body.mediaType!=='string'||(body.mediaType&&body.mediaType!==format.mediaType&&!format.aliases.includes(body.mediaType)))
     fail(415,'ATTACHMENT_TYPE_MISMATCH','The selected file type does not match the filename.');
-  const bytes=rawBytes(body.data,format);
+  const extended=binary&&format.extension==='.pdf';
+  const bytes=rawBytes(body.data,extended?largePdfMaxBytes:format.maxFileBytes,binary);
   format.check(bytes);
-  return {id:randomUUID(),name,mediaType:format.mediaType,size:bytes.length,sha256:digest(bytes),data:body.data};
+  return {id:randomUUID(),name,mediaType:format.mediaType,size:bytes.length,sha256:digest(bytes),
+    data:binary?bytes.toString('base64'):body.data,...(extended&&bytes.length>format.maxFileBytes?{payloadProfile:'large-pdf-v1'}:{})};
 }
 function capacity(addedCount,addedBytes,book,version){
   if((version.attachments??[]).length+addedCount>rules.maxFilesPerRevision)
@@ -66,7 +74,7 @@ function attachment(body,book,version){
   capacity(1,row.size,book,version);
   return row;
 }
-function batch(files,book,version){
+function batch(files,book,version,binary=false){
   if(!Array.isArray(files)||files.length===0||files.length>rules.maxFilesPerBatch)
     fail(422,'ATTACHMENT_BATCH_COUNT','Select between one and '+rules.maxFilesPerBatch+' attachments.');
   capacity(files.length,0,book,version);
@@ -77,7 +85,7 @@ function batch(files,book,version){
       if(!file||typeof file!=='object'||Array.isArray(file)||Object.keys(file).length!==3||
         !['filename','mediaType','data'].every(key=>Object.hasOwn(file,key)))
         fail(422,'INVALID_ATTACHMENT_FIELDS','Send exactly a filename, media type, and file bytes.');
-      const row=prepare(file);
+      const row=prepare(file,binary);
       rows.push(row);total+=row.size;
     }catch(error){
       if(!error.status)throw error;
@@ -145,7 +153,9 @@ function download(row){
     const name=cleanName(row.name),format=namedFormat(name);
     if(!idPattern.test(row.id)||!shaPattern.test(row.sha256)||row.mediaType!==format.mediaType||name!==row.name)
       throw new Error('Stored metadata mismatch.');
-    const bytes=rawBytes(row.data,format);
+    if(row.payloadProfile!==undefined&&(row.payloadProfile!=='large-pdf-v1'||format.extension!=='.pdf'||
+      row.size<=format.maxFileBytes||row.size>largePdfMaxBytes))throw Error('Stored attachment profile mismatch.');
+    const bytes=rawBytes(row.data,row.payloadProfile==='large-pdf-v1'?largePdfMaxBytes:format.maxFileBytes);
     if(bytes.length!==row.size||digest(bytes)!==row.sha256)throw new Error('Stored bytes mismatch.');
     // Uploaded data is validated before persistence and immutable once published.
     // Revalidate bounded opaque file structure before download, never open or render.

@@ -1,5 +1,6 @@
 'use strict';
 const {createHash,randomUUID}=require('node:crypto');
+const {maxBytes:largePdfMaxBytes}=require('./attachment-binary-batch');
 const attachments=require('./governance-document-attachments');
 const docsOf=s=>s.governanceDocuments??{revision:0,documents:[]};
 const kinds=['policy','evidence'];
@@ -28,7 +29,7 @@ function permitted(s,doc,v,actor){
   if(v.status!=='published')return false;
   return doc.kind==='policy'||(doc.kind==='evidence'&&v.links.length>0&&v.links.every(l=>l.type==='rights-case'&&s.rightsCases?.some(r=>r.id===l.id&&r.owner===actor)));
 }
-function view(s,actor){
+function view(s,actor,capabilities){
   if(!s.actors.some(x=>x.id===actor))issue(403,'ACTOR_REQUIRED','Select a known local demo identity.');
   const book=docsOf(s);
   const manualReview=attachments.queryPolicy(book);
@@ -39,7 +40,9 @@ function view(s,actor){
     const currentRevisionId=revisions.findLast(v=>v.status==='published')?.id??null;
     return {...doc,revisions,currentRevisionId};
   }).filter(Boolean);
-  return {revision:administrator?book.revision:null,kinds,linkKinds,attachmentRules:manualReview?{...attachments.rules,manualReview:true}:attachments.rules,documents,targets:administrator?candidates(s):[],
+  const attachmentRules=manualReview?{...attachments.rules,manualReview:true,
+    ...(capabilities?.largePdf===true&&actor==='analyst'?{largePdfMaxBytes}:{})}:attachments.rules;
+  return {revision:administrator?book.revision:null,kinds,linkKinds,attachmentRules,documents,targets:administrator?candidates(s):[],
     legacyRecords:administrator?(s.moduleRecords??[]).filter(x=>x.moduleId==='policies'):[]};
 }
 function versionFields(s,kind,body){
@@ -59,9 +62,9 @@ function versionFields(s,kind,body){
 const actionKeys={
   create:['kind','title','content','links'],revise:['title','content','links'],edit:['title','content','links'],
   submit:[],publish:['note'],return:['note'],read:[],download:[],
-  'attachment-upload':['filename','mediaType','data'],'attachment-upload-batch':['files'],'attachment-review':['operation','sha256'],'attachment-remove':[],'attachment-download':[]
+  'attachment-upload':['filename','mediaType','data'],'attachment-upload-batch':['files'],'attachment-upload-binary':['files'],'attachment-review':['operation','sha256'],'attachment-remove':[],'attachment-download':[]
 };
-function change(s,parts,actor,body,event,_vendorAssessments,account){
+function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities){
   const book=s.governanceDocuments??=docsOf(s);
   const manualReview=attachments.queryPolicy(book);
   const [,collection,docId,part,revId,operation,attachmentId,attachmentOperation]=parts;
@@ -70,6 +73,7 @@ function change(s,parts,actor,body,event,_vendorAssessments,account){
     if(parts.length===6&&['edit','submit','publish','return','read','download'].includes(operation))action=operation;
     if(operation==='attachments'&&parts.length===6)action='attachment-upload';
     if(operation==='attachments'&&parts.length===7&&attachmentId==='batch')action='attachment-upload-batch';
+    if(operation==='attachments'&&parts.length===7&&attachmentId==='binary-batch')action='attachment-upload-binary';
     if(operation==='attachments'&&parts.length===8&&['download','remove','review'].includes(attachmentOperation))action='attachment-'+attachmentOperation;
   }
   if(collection!=='records'||!action)issue(404,'NOT_FOUND','Governance document action not found.');
@@ -127,8 +131,11 @@ function change(s,parts,actor,body,event,_vendorAssessments,account){
         return;
       }
       if(action==='edit')Object.assign(v,versionFields(s,doc.kind,body));
-      if(action==='attachment-upload'||action==='attachment-upload-batch'){
-        const rows=action==='attachment-upload'?[attachments.attachment(body,book,v)]:attachments.batch(body.files,book,v);
+      if(['attachment-upload','attachment-upload-batch','attachment-upload-binary'].includes(action)){
+        const binary=action==='attachment-upload-binary';
+        if(binary&&(!manualReview||capabilities?.largePdf!==true))
+          issue(404,'ATTACHMENT_PROFILE_DISABLED','The larger PDF upload profile is unavailable.');
+        const rows=action==='attachment-upload'?[attachments.attachment(body,book,v)]:attachments.batch(body.files,book,v,binary);
         (v.attachments??=[]).push(...(manualReview?rows.map(row=>attachments.stage(row,account)):rows));
         book.revision++;v.updatedAt=now;
         for(const row of rows)audit('attachment-upload',doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});

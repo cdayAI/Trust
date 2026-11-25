@@ -13,6 +13,7 @@ const auditPlan = {
   missing: 'AUDIT_NOT_FOUND',
   summarize: ({ id: planId, status, revision }) => ({ planId, status, revision }),
 };
+const receiptAction = 'audit.plan.receipt-rehearsal';
 const actions = new Map([
   ['rights.case.status', rightsCase],
   ['rights.case.assign', {
@@ -23,12 +24,13 @@ const actions = new Map([
     ],
   }],
   ['audit.plan.status', auditPlan],
+  [receiptAction, auditPlan],
   ['audit.plan.begin', {
     ...auditPlan,
     command: (id, expectedRevision) => [['audit-management', 'plans', id, 'begin'], { expectedRevision }],
   }],
 ]);
-const needsApproval = action => Boolean(actions.get(action)?.command);
+const needsApproval = action => action === receiptAction || Boolean(actions.get(action)?.command);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function fail(status, code, message) {
@@ -47,19 +49,20 @@ function submission(body, role) {
   const { action, args, idempotencyKey } = body;
   const definition = actions.get(action);
   if (!definition) fail(422, 'UNKNOWN_JOB_ACTION', 'Select an allowlisted operator action.');
-  const { idField, command } = definition;
-  if (command && role !== 'analyst') {
+  const { idField } = definition;
+  const approval = needsApproval(action);
+  if (approval && role !== 'analyst') {
     fail(403, 'ACCESS_DENIED', 'Only the analyst can request this operator change.');
   }
-  exact(args, command ? [idField, 'expectedRevision'] : [idField]);
+  exact(args, approval ? [idField, 'expectedRevision'] : [idField]);
   if (typeof idempotencyKey !== 'string' || !uuid.test(idempotencyKey) ||
       typeof args[idField] !== 'string' || !uuid.test(args[idField]) ||
-      (command && (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1))) {
+      (approval && (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1))) {
     fail(422, 'INVALID_JOB_INPUT', 'Use lowercase random UUIDs and a positive revision for changes.');
   }
   return {
     action,
-    args: { [idField]: args[idField], ...(command ? { expectedRevision: args.expectedRevision } : {}) },
+    args: { [idField]: args[idField], ...(approval ? { expectedRevision: args.expectedRevision } : {}) },
     keyHash: createHash('sha256').update(idempotencyKey).digest('hex'),
   };
 }
@@ -111,6 +114,58 @@ function execute(state, job, caller, audit, applyProgram) {
   return { result: summarize(command ? get(state, id) : record) };
 }
 
+function samePlanRevision(left, right) {
+  return left.planId === right.planId && left.expectedRevision === right.expectedRevision;
+}
+
+function receiptFor(state, { planId, expectedRevision }) {
+  return state.operatorAuditReceipts?.find(receipt => receipt.planId === planId && receipt.revision === expectedRevision);
+}
+
+const receiptIdFor = job => 'SYN-AUDIT-' + job.id;
+
+function attemptReceipt(state, job, now, retry) {
+  const { planId, expectedRevision } = job.args;
+  const plan = auditPlan.get(state, planId);
+  let code;
+  if (!plan) code = 'AUDIT_NOT_FOUND';
+  else if (plan.revision !== expectedRevision) code = 'STALE_REVISION';
+  else if (plan.status !== 'finalized' || plan.final?.result?.finalizedRevision !== expectedRevision) code = 'AUDIT_NOT_FINAL';
+  if (code) {
+    job.failure = { code };
+    job.status = 'failed';
+    return;
+  }
+
+  const number = job.attempts.length + 1;
+  if (number !== (retry ? 2 : 1)) throw new Error('Invalid audit receipt attempt history.');
+  if (retry) {
+    if (receiptFor(state, job.args)) throw new Error('Duplicate audit receipt rehearsal.');
+    (state.operatorAuditReceipts ??= []).push({
+      id: receiptIdFor(job), jobId: job.id, planId, revision: expectedRevision, recordedAt: now,
+    });
+  }
+  // The fixture fails before the effect once, then records a receipt with an uncertain acknowledgment.
+  job.attempts.push({ number, at: now, outcome: retry ? 'acknowledgment-unknown' : 'retryable-before-effect' });
+  job.status = retry ? 'needs-reconciliation' : 'retryable';
+}
+
+function reconcileReceipt(state, job, caller, now) {
+  if (caller.actor !== 'reviewer' || caller.account === job.requestedBy ||
+      job.decision?.value !== 'approve' || job.decision.by !== caller.account) {
+    fail(403, 'RECEIPT_REVIEWER_REQUIRED', 'The independent approving reviewer must reconcile this receipt.');
+  }
+  if (job.status === 'succeeded') return false;
+  if (job.status !== 'needs-reconciliation') fail(409, 'JOB_NOT_RECONCILABLE', 'This job has no uncertain receipt to reconcile.');
+  const receipt = receiptFor(state, job.args);
+  if (!receipt || receipt.jobId !== job.id || receipt.id !== receiptIdFor(job)) fail(409, 'RECEIPT_EVIDENCE_UNAVAILABLE', 'The matching local receipt could not be verified.');
+
+  job.status = 'succeeded';
+  job.result = { planId: receipt.planId, status: 'finalized', revision: receipt.revision, receiptId: receipt.id };
+  job.reconciliation = { by: caller.account, at: now };
+  return true;
+}
+
 function change(state, caller, operation, id, body, event, applyProgram) {
   const jobs = state.operatorJobs ??= [];
   const now = new Date().toISOString();
@@ -123,8 +178,12 @@ function change(state, caller, operation, id, body, event, applyProgram) {
   }
   function record(job, action) {
     job.updatedAt = now;
+    const attempt = job.attempts?.at(-1);
     auditFor(job)(state, caller.actor, 'operator.job.' + action, null, job.id, {
       action: job.action, status: job.status, ...(job.failure ? { code: job.failure.code } : {}),
+      ...(['retryable', 'needs-reconciliation'].includes(action) ? { attempt: attempt.number, outcome: attempt.outcome } : {}),
+      ...(job.action === receiptAction ? { planId: job.args.planId, revision: job.args.expectedRevision } : {}),
+      ...(action === 'reconciled' ? { receiptId: job.result.receiptId } : {}),
     });
     return { changed: true, job: view(job) };
   }
@@ -140,8 +199,14 @@ function change(state, caller, operation, id, body, event, applyProgram) {
       if (!owns(previous, caller)) fail(403, 'ACCESS_DENIED', 'The submitting role has changed.');
       return { job: view(previous) };
     }
+    const receipt = input.action === receiptAction;
+    if (receipt && (receiptFor(state, input.args) || jobs.some(job => job.action === receiptAction &&
+        !['failed', 'rejected'].includes(job.status) && samePlanRevision(job.args, input.args)))) {
+      fail(409, 'RECEIPT_JOB_EXISTS', 'This plan revision already has an active or completed receipt rehearsal.');
+    }
     const job = {
       ...input, id: randomUUID(), requestedBy: caller.account, requestedRole: caller.actor,
+      ...(receipt ? { attempts: [] } : {}),
       createdAt: now, status: needsApproval(input.action) ? 'awaiting-approval' : 'queued',
     };
     jobs.push(job);
@@ -166,12 +231,33 @@ function change(state, caller, operation, id, body, event, applyProgram) {
     return record(job, body.decision === 'approve' ? 'approved' : 'rejected');
   }
 
+  if (operation === 'reconcile') {
+    exact(body, []);
+    const job = find(jobs, id, row => row.action === receiptAction);
+    return reconcileReceipt(state, job, caller, now) ? record(job, 'reconciled') : { job: view(job) };
+  }
+
+  if (operation === 'retry') {
+    exact(body, []);
+    const job = find(jobs, id, row => row.action === receiptAction && owns(row, caller));
+    if (['needs-reconciliation', 'succeeded', 'failed'].includes(job.status)) return { job: view(job) };
+    if (job.status !== 'retryable' || job.decision?.value !== 'approve') {
+      fail(409, 'JOB_NOT_RETRYABLE', 'Only an approved job with a retryable attempt can be retried.');
+    }
+    attemptReceipt(state, job, now, true);
+    return record(job, job.status);
+  }
+
   if (operation !== 'run') fail(404, 'NOT_FOUND', 'Operator route not found.');
   exact(body, []);
   const job = find(jobs, id, row => owns(row, caller));
-  if (['succeeded', 'failed'].includes(job.status)) return { job: view(job) };
+  if (['succeeded', 'failed', 'retryable', 'needs-reconciliation'].includes(job.status)) return { job: view(job) };
   if (job.status !== 'queued' || (needsApproval(job.action) && job.decision?.value !== 'approve')) {
     fail(409, 'JOB_NOT_RUNNABLE', 'Only queued jobs with any required approval can run.');
+  }
+  if (job.action === receiptAction) {
+    attemptReceipt(state, job, now, false);
+    return record(job, job.status);
   }
   const outcome = execute(state, job, caller, auditFor(job), applyProgram);
   Object.assign(job, outcome, { status: outcome.failure ? 'failed' : 'succeeded' });

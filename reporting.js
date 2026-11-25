@@ -95,7 +95,7 @@ function *activityRows(audit) {
     if(workflow)yield {workflow,outcome:action.endsWith('.refused')?'refused':action.endsWith('.failed')?'failed':'recorded',day:recordDay(event.at)};
   }
 }
-function report(state,audit,params,{mode='synthetic-demo',exporting=false}={}) {
+function report(state,audit,params,{mode='synthetic-demo',exporting=false,generatedAt=new Date().toISOString()}={}) {
   const {filters,format}=readFilters(params,exporting);
   const {dataset,workflow,stage,outcome,group,from,to}=filters;
   const source=dataset==='records'?recordRows(state,audit):activityRows(audit);
@@ -112,7 +112,7 @@ function report(state,audit,params,{mode='synthetic-demo',exporting=false}={}) {
   }
   const labels=group==='workflow'?workflows:group==='stage'?stages:group==='outcome'?outcomes:{undated:'Undated'};
   const rows=[...buckets].sort(([a],[b])=>a.localeCompare(b,'en')).map(([key,count])=>({key,label:labels[key]??key,count}));
-  const model={schemaVersion:1,mode,generatedAt:new Date().toISOString(),filters,counts:{total,workflowCount:areas.size,undated},rows,
+  const model={schemaVersion:1,mode,generatedAt,filters,counts:{total,workflowCount:areas.size,undated},rows,
     options:{workflows,stages,outcomes,groupings,allowedGroups}};
   return {model,format};
 }

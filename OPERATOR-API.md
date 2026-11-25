@@ -31,7 +31,9 @@ takes the reviewer to the underlying record before they decide.
 | `GET /api/operator/v1/jobs` | | Returns `{"jobs":[...]}`. Analysts see their own jobs. Reviewers see their own jobs and the workspace’s state-changing proposals and outcomes. |
 | `GET /api/operator/v1/jobs/{id}` | | Returns `{"job":{...}}` under the list’s visibility rules. |
 | `POST /api/operator/v1/jobs/{id}/decision` | `{"decision":"approve"}` or `{"decision":"reject"}` | An independent reviewer decides a state-changing proposal. Repeating the same decision returns the current job. |
-| `POST /api/operator/v1/jobs/{id}/run` | `{}` | The submitting account runs a queued job. Returns the committed terminal job, including on replay after success or failure. |
+| `POST /api/operator/v1/jobs/{id}/run` | `{}` | The submitting account runs a queued job. Returns the current committed job on replay. |
+| `POST /api/operator/v1/jobs/{id}/retry` | `{}` | For receipt rehearsal only. The submitting analyst runs the single approved retry after the first attempt fails before the effect. |
+| `POST /api/operator/v1/jobs/{id}/reconcile` | `{}` | For receipt rehearsal only. The approving reviewer verifies the local receipt after an uncertain outcome. |
 
 Each single-job response uses `{"job":{...}}`. The job contains a server-issued
 `id`, the action and arguments, `requestedBy`, status, and timestamps. Where
@@ -55,6 +57,7 @@ failure, inspect the current case and use a new key.
 | `rights.case.assign` | `{"caseId":"<case UUIDv4>","expectedRevision":1}` | Analyst submits. Independent reviewer must approve. The analyst runs the job. The existing rights workflow reassigns the case to the synthetic `case-operator` using the expected revision and a fixed synthetic audit note. |
 | `audit.plan.status` | `{"planId":"<plan UUIDv4>"}` | Analyst or reviewer. Starts queued. Returns the plan ID, status and revision captured at execution. |
 | `audit.plan.begin` | `{"planId":"<plan UUIDv4>","expectedRevision":1}` | Analyst submits and runs after independent reviewer approval. The existing audit workflow checks the revision and starts fieldwork on a planned audit. |
+| `audit.plan.receipt-rehearsal` | `{"planId":"<finalized plan UUIDv4>","expectedRevision":5}` | Analyst submits and runs after independent reviewer approval. Rehearses recording a synthetic local receipt for the exact finalized revision. |
 
 For a complete example, open a fictional rights case owned by the analyst using
 the workbench. Take its ID and revision from the case screen or
@@ -91,3 +94,26 @@ or `GET /api/audit-management?workspace=harbor`. Queue and review
 `audit.plan.begin` using the same steps. The analyst’s run moves a planned
 audit to fieldwork and returns the new revision. Audit findings, scope text
 and evidence stay in the audit workbench. The job API returns plan metadata.
+
+## Rehearse a finalized audit receipt
+
+In **Audit management**, open **Queue operator job** on a finalized audit plan
+to prefill **Rehearse audit receipt**. The analyst submits the exact plan
+revision and the reviewer approves it. A plan revision can have one active
+rehearsal or one recorded receipt. Replaying the original submission key
+returns its existing job.
+
+1. The analyst selects **Run job**. Attempt 1 records a simulated temporary
+   failure before a receipt is written. The status becomes `retryable`.
+2. The analyst selects **Retry job**. Attempt 2 atomically records a synthetic
+   receipt and marks its acknowledgment uncertain. The status becomes
+   `needs-reconciliation`. Repeating Run or Retry returns the current job and
+   consumes no additional attempt.
+3. The approving reviewer selects **Reconcile receipt**. This verifies the
+   matching receipt in SQLite and returns its ID with status `succeeded`.
+   Repeating reconciliation returns the same result.
+
+The two attempts, the original approval, and any reconciliation survive a
+restart. Only the independent approving reviewer can reconcile. A missing
+receipt leaves the job awaiting reconciliation. The effect writes only
+synthetic identifiers, a revision, and a timestamp to the local SQLite ledger.

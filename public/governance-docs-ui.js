@@ -9,12 +9,14 @@ async function refreshDocs(){
     if(seq===docsSeq&&!docsPane.hidden){docsData=data;renderDocs()}
   }catch(e){if(seq===docsSeq&&!docsPane.hidden){docsPane.replaceChildren(el('p','Could not load documents.'));notice(e.message,true)}}
 }
-async function docsPost(path,body,success,failure){
+async function docsPost(path,body,success,failure,binary=false){
   if(busy)return;
   busy=true;
   const identity=actor,seq=docsSeq;
   try{
-    const data=await read(docsPath+path,{method:'POST',headers:docsHeaders(),body:JSON.stringify(body)});
+    const headers=docsHeaders();
+    if(binary)headers['Content-Type']='application/vnd.mvw-trust.attachment-batch';
+    const data=await read(docsPath+path,{method:'POST',headers,body:binary?body:JSON.stringify(body)});
     if(!docsPane.hidden&&actor===identity&&seq===docsSeq)success(data);
   }catch(e){
     if(!docsPane.hidden&&actor===identity){
@@ -82,6 +84,15 @@ async function downloadAttachment(path,row){
   }catch(error){if(!docsPane.hidden&&actor===identity&&seq===docsSeq)notice(error.message,true);}
   finally{busy=false;}
 }
+function binaryAttachmentBatch(files,expectedRevision){
+  const manifest=new TextEncoder().encode(JSON.stringify({version:1,expectedRevision,files:files.map(file=>({
+    filename:file.name,mediaType:file.type,size:file.size
+  }))}));
+  if(manifest.length>4096)throw Error('The attachment selection has too much metadata.');
+  const prefix=new Uint8Array(4);
+  new DataView(prefix.buffer).setUint32(0,manifest.length);
+  return new Blob([prefix,manifest,...files]);
+}
 const attachmentSize=limit=>limit>=1024*1024?limit/(1024*1024)+' MiB':limit/1024+' KiB';
 function attachmentForm(path,revision,rules,remaining){
   const picker=el('input');
@@ -95,7 +106,9 @@ function attachmentForm(path,revision,rules,remaining){
     add(el('label','Fictional attachments'),picker),
     el('p','Choose files or drop them here. A new selection replaces the previous one.','hint'));
   const form=add(el('form'),drop,el('p','PDF, Word, Excel, PowerPoint, TXT, CSV, TSV, JSON, JSON Lines, Markdown, LOG and common raster images. Up to '+
-    attachmentSize(rules.maxFileBytes)+' per file (16 KiB for TXT), '+attachmentSize(rules.maxBatchBytes)+' per upload. '+
+    attachmentSize(rules.maxFileBytes)+' per file (16 KiB for TXT'+
+    (rules.largePdfMaxBytes?', '+attachmentSize(rules.largePdfMaxBytes)+' for PDF in this workspace':'')+'), '+
+    attachmentSize(rules.maxBatchBytes)+' per upload. '+
     'Four attachments per revision, 8 MiB and 256 files per workspace. Download only.','hint'),status,selection,submit);
   let files=[],preparing=false;
   const max=Math.min(remaining,rules.maxFilesPerBatch);
@@ -137,13 +150,17 @@ function attachmentForm(path,revision,rules,remaining){
     const identity=actor,seq=docsSeq,selected=files.slice(),fileErrors=[];
     const current=()=>actor===identity&&docsSeq===seq&&!docsPane.hidden&&form.isConnected;
     const invalid=(index,message)=>fileErrors.push({index,message});
-    let total=0;
+    let total=0,binary=false;
     for(const [index,file] of selected.entries()){
       total+=file.size;
       const format=rules.formats.find(format=>file.name.toLowerCase().endsWith(format.extension));
       if(!format)invalid(index,'Choose a supported file format.');
       else if(file.type&&file.type!==format.mediaType&&!format.aliases.includes(file.type))invalid(index,'The file type does not match the filename.');
-      else if(!file.size||file.size>format.maxFileBytes)invalid(index,'Choose a nonempty file up to '+attachmentSize(format.maxFileBytes)+'.');
+      else{
+        const limit=format.extension==='.pdf'&&rules.largePdfMaxBytes?rules.largePdfMaxBytes:format.maxFileBytes;
+        if(!file.size||file.size>limit)invalid(index,'Choose a nonempty file up to '+attachmentSize(limit)+'.');
+        if(file.size>format.maxFileBytes&&file.size<=limit)binary=true;
+      }
     }
     if(fileErrors.length)return show(fileErrors,'No attachments were uploaded. Fix the files listed below and retry.');
     if(total>rules.maxBatchBytes)return show([],'No attachments were uploaded. Choose no more than '+attachmentSize(rules.maxBatchBytes)+' total.');
@@ -151,7 +168,7 @@ function attachmentForm(path,revision,rules,remaining){
     show([],'Preparing '+selected.length+' attachment'+(selected.length===1?'':'s')+'…');
     try{
       const payload=[];
-      for(const [index,file] of selected.entries()){
+      if(!binary)for(const [index,file] of selected.entries()){
         try{
           const bytes=new Uint8Array(await file.arrayBuffer());
           if(!current())return;
@@ -162,12 +179,15 @@ function attachmentForm(path,revision,rules,remaining){
       }
       if(!current())return;
       if(!fileErrors.length){
-        await docsPost(path+'/attachments/batch',{files:payload,expectedRevision:revision},data=>{
+        const body=binary?binaryAttachmentBatch(selected,revision):{files:payload,expectedRevision:revision};
+        await docsPost(path+'/attachments/'+(binary?'binary-batch':'batch'),body,data=>{
           docsData=data;renderDocs();notice(rules.manualReview?
             selected.length+' attachment'+(selected.length===1?'':'s')+' staged for quarantine review.':
             selected.length===1?'Attachment added to the draft.':selected.length+' attachments added to the draft.');
-        },error=>fileErrors.push(...(error.fileErrors??[])));
+        },error=>fileErrors.push(...(error.fileErrors??[])),binary);
       }
+    }catch(error){
+      if(current())notice(error.message,true);
     }finally{
       preparing=false;
       if(current())show(fileErrors,fileErrors.length?'No attachments were uploaded. Fix the files listed below and retry.':undefined);

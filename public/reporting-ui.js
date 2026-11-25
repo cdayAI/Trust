@@ -5,16 +5,21 @@ let reportFilters={},reportSequence=0;
 function reportingQuery(filters){
   return new URLSearchParams(Object.entries(filters).filter(([,value])=>value!==null&&value!==undefined&&value!==''));
 }
-async function refreshReporting(announce=false){
+async function refreshReporting(announce=false,runId=null){
   const seq=++reportSequence;
   reportingPane.setAttribute('aria-busy','true');
   if(!reportingPane.children.length)reportingPane.append(el('p','Loading operational report…'));
   try{
-    const result=await read(reportingPath+'?'+reportingQuery(reportFilters));
+    const [result,history]=await Promise.all([
+      read(runId?reportingPath+'/runs/'+encodeURIComponent(runId):reportingPath+'?'+reportingQuery(reportFilters)),
+      read(reportingPath+'/runs')
+    ]);
     if(!reportingPane.hidden&&seq===reportSequence){
       reportFilters=result.filters;
-      renderOperationalReport(result);
-      if(announce)notice('Report updated. '+result.counts.total+' matched.');
+      renderOperationalReport(result,history);
+      if(announce)notice((runId?'Pinned report opened. ':'Report updated. ')+result.counts.total+' matched.');
+      if(runId)$('#report-results-heading')?.focus();
+      return true;
     }
   }catch(error){
     if(!reportingPane.hidden&&seq===reportSequence){
@@ -23,6 +28,38 @@ async function refreshReporting(announce=false){
     }
   }finally{if(seq===reportSequence)reportingPane.setAttribute('aria-busy','false')}
 }
+async function pinOperationalReport(filters,control){
+  if(busy)return;
+  busy=true;control.disabled=true;
+  const seq=++reportSequence;
+  reportingPane.setAttribute('aria-busy','true');
+  try{
+    const result=await read(reportingPath+'/runs',{method:'POST',
+      headers:{'Content-Type':'application/json','X-Demo-Actor':actor},body:JSON.stringify({filters})});
+    if(!reportingPane.hidden&&seq===reportSequence){
+      if(await refreshReporting(false,result.run.id))notice('Pinned report saved. Its downloads will not recalculate.');
+    }
+  }catch(error){if(!reportingPane.hidden&&seq===reportSequence)notice(error.message,true)}
+  finally{busy=false;control.disabled=false;if(seq===reportSequence)reportingPane.setAttribute('aria-busy','false')}
+}
+function renderReportRuns(history,options,current){
+  const list=add(el('section',undefined,'report-run-history'),heading('Pinned reports'));
+  list.append(el('p','Pinned reports expire after '+history.limits.retentionDays+' days. The oldest may be removed sooner to stay within workspace limits.','hint'));
+  if(!history.runs.length){list.append(el('p','No pinned reports yet.'));return list}
+  const rows=el('ul');
+  for(const saved of history.runs){
+    const when=saved.generatedAt.replace('T',' ').slice(0,19)+' UTC',
+      mode=saved.filters.dataset==='activity'?'Audit activity':'Workflow records',
+      area=options.workflows[saved.filters.workflow]??'All workflows';
+    const open=button('Open pinned report','button','secondary');
+    open.setAttribute('aria-label','Open pinned report: '+mode+', '+area+', '+when);
+    if(current===saved.id)open.setAttribute('aria-current','true');
+    open.onclick=()=>refreshReporting(true,saved.id);
+    rows.append(add(el('li'),add(el('div'),el('strong',mode+' · '+area),
+      el('p',when+' · '+saved.counts.total+' matched','hint')),open));
+  }
+  list.append(rows);return list;
+}
 function reportSelect(label,name,options,selected){
   const choices=Object.entries(options).map(([value,label])=>({value,label}));
   const field=el('select');field.name=name;
@@ -30,7 +67,7 @@ function reportSelect(label,name,options,selected){
   field.value=selected;
   return add(el('label',label),field);
 }
-function renderOperationalReport({filters,counts,rows,options}){
+function renderOperationalReport({filters,counts,rows,options,generatedAt,run},history){
   const activity=filters.dataset==='activity';
   const intro=add(el('section',undefined,'report-intro'),el('p','WORKSPACE INSIGHTS','eyebrow'),heading('Operational reporting'),
     el('p','Filter and export aggregate results from this workspace. Record names, account details, forms and evidence content are not included.'));
@@ -69,14 +106,25 @@ function renderOperationalReport({filters,counts,rows,options}){
   for(const [caption,count] of [[activity?'Matching audit events':'Matching workflow records',counts.total],['Workflows represented',counts.workflowCount],['Missing source date',counts.undated]]){
     totals.append(add(el('div',undefined,'metric'),el('strong',String(count)),el('span',caption)));
   }
-  const results=add(el('section',undefined,'report-results'),heading('Report results'),totals);
+  const resultHeading=heading('Report results');resultHeading.id='report-results-heading';resultHeading.tabIndex=-1;
+  const results=add(el('section',undefined,'report-results'),resultHeading);
+  if(run)results.append(el('p','Pinned report · Saved '+generatedAt.replace('T',' ').slice(0,19)+' UTC','hint'));
+  else results.append(el('p','Live preview. Live downloads may change if the workspace changes. Pin a report to keep exactly the same results.','hint'));
+  results.append(totals);
   const exports=el('div',undefined,'actions report-actions');
   for(const format of ['csv','json']){
     const link=el('a','Download '+format.toUpperCase(),'button quiet');
-    const params=reportingQuery(filters);params.set('format',format);
-    link.href=scopeUrl(reportingPath+'/export?'+params);
+    const params=run?new URLSearchParams():reportingQuery(filters);params.set('format',format);
+    link.href=scopeUrl(reportingPath+(run?'/runs/'+encodeURIComponent(run.id):'')+'/export?'+params);
     link.download='';
     exports.append(link);
+  }
+  if(run){
+    const live=button('Return to live report','button','secondary');
+    live.onclick=()=>refreshReporting(true);exports.append(live);
+  }else{
+    const pin=button('Pin current report','button','secondary');
+    pin.onclick=()=>pinOperationalReport(filters,pin);exports.append(pin);
   }
   results.append(exports);
   if(!rows.length)results.append(el('p','No report results match these filters.'));
@@ -103,6 +151,6 @@ function renderOperationalReport({filters,counts,rows,options}){
     results.append(wrap);
   }
   const focusId=document.activeElement?.id;
-  reportingPane.replaceChildren(intro,results);
+  reportingPane.replaceChildren(intro,results,renderReportRuns(history,options,run?.id));
   if(focusId==='report-apply'||focusId==='report-reset')document.getElementById(focusId).focus({preventScroll:true});
 }

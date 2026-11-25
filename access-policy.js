@@ -20,9 +20,13 @@ function route(method,value,roles){
 route('GET','operator/v1/jobs(?:/'+uuid+')?',operators);
 route('POST','operator/v1/jobs(?:/'+uuid+'/run)?',operators);
 route('POST','operator/v1/jobs/'+uuid+'/decision',['reviewer']);
+route('POST','operator/v1/jobs/'+uuid+'/retry',['analyst']);
+route('POST','operator/v1/jobs/'+uuid+'/reconcile',['reviewer']);
 route('GET','state',all);
 route('GET','workspace-home',rights);
 route('GET','assessment-config',operators);
+route('GET','reporting/runs(?:/'+uuid+'(?:/export)?)?',operators);
+route('POST','reporting/runs',operators);
 route('GET','processing-register(?:/export|/entries/'+uuid+'/versions/[1-9][0-9]*/export)?',operators);
 route('POST','processing-register/entries(?:/'+uuid+'/(?:edit|submit|revise))?',['analyst']);
 route('POST','processing-register/entries/'+uuid+'/(?:return|publish)',['reviewer']);
@@ -76,7 +80,7 @@ route('POST','modules/'+moduleId+'/records(?:/'+uuid+'/(?:update|advance))?',ope
 route('POST','governance-documents/records(?:/'+uuid+'/revise)?',operators);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:edit|submit|publish|return)',operators);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:read|download)',rights);
-route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments(?:/batch|/'+uuid+'/remove)?',operators);
+route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments(?:/batch|/binary-batch|/'+uuid+'/remove)?',operators);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments/'+uuid+'/download',rights);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments/'+uuid+'/review',['reviewer']);
 route('POST','trust-center/(?:privacy|rights|controls)/(?:draft|submit|approve|return|publish|withdraw)',operators);

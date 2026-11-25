@@ -3,7 +3,50 @@
 **Synthetic, unofficial prototype.** Use only fictional records. None of the
 commands deploy the application or require a GitHub, Marriott, or cloud account.
 
-## Install-free quickstart
+## Start the isolated release with SQLite
+
+With Node.js 22.13.0 or newer, open a terminal in the source or the extracted
+package. No dependencies are required for this launcher:
+
+```sh
+npm run start:release
+```
+
+Or run `node ./start-release.js` on macOS/Linux and
+`node .\start-release.js` in Windows PowerShell. The launch opens no browser
+or public listener. It prints a single JSON result containing the verified
+loopback URL, a private access-file path, and a run-directory path. Open the
+URL on the **same machine**; open the access file locally and use a synthetic
+`staff` account ID, its workspace ID (such as `harbor`), and its generated code.
+Do not use a work password or copy the access file into chat, Git, or a shared
+drive. The file also contains separate synthetic requester, employee and
+learner codes for the local portals at `/requester`, `/employee`, and `/training`.
+
+The launcher checks liveness, SQLite readiness, a real sign-in for each
+workspace and cross-workspace denial before announcing the URL. It starts
+with two empty fictional workspaces and enables local identity administration,
+group and document scope, account-scoped rights delegation, manual attachment
+review, the larger-PDF upload profile, and SQLite-backed operator jobs, along with the supported synthetic
+portals. Accounts expire after eight hours. It does not start corporate SSO,
+send external communications, or deploy anything. The optional `--port 4173`
+selects a specific loopback port; otherwise a free port is chosen. Existing
+demo, isolated JSON/SQLite, and corporate sign-in launchers are unchanged.
+
+Workspace data and access files are created in a fresh directory under the
+OS temporary directory, never in the source tree. Use your system's private
+temporary directory rather than a shared directory or network drive. On Unix
+the directory and access file have owner-only permissions; Windows uses the
+private temp directory's inherited permissions. Ctrl+C stops the release
+and removes the access file on graceful shutdown, leaving the database for
+local backup or inspection. A fresh launch does not re-open a prior run.
+Forced termination may leave the access file behind; remove the run directory
+when finished. Back up the database first if you need the fictional data.
+
+For an install-free preflight that starts the same app, checks it, and cleans
+up without leaving a server or access file, run
+`npm run start:release -- --check` or `node start-release.js --check`.
+
+## Other install-free launch modes
 
 Use Node.js 22.13.0 or newer. Node 24.22.3 is the pinned CI toolchain.
 The demo and isolated launchers run without `npm install`. The optional
@@ -62,7 +105,11 @@ tar -xzf ./dist/mvw-trust.tgz -C /path/to/existing/private-directory
 cd /path/to/existing/private-directory/package
 npm run release:verify
 npm run verify:startup -- --sqlite
+node start-release.js --check
 ```
+
+On Windows PowerShell, use `tar.exe -xzf .\dist\mvw-trust.tgz -C C:\path\to\private-folder`
+and run the verification from the extracted `package` directory.
 
 The local package command runs npm pack against an explicit source inventory
 in a temporary staging directory. No user npm configuration, lifecycle script,

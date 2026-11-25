@@ -11,6 +11,10 @@ const enableIdentityAdmin=process.env.TRUST_ENABLE_LOCAL_IDENTITY_ADMIN==='1';
 const enableGroupGovernance=process.env.TRUST_ENABLE_LOCAL_GROUP_GOVERNANCE==='1';
 const attachmentReviewSetting=process.env.TRUST_ATTACHMENT_REVIEW;
 if(attachmentReviewSetting!==undefined&&attachmentReviewSetting!=='manual')throw Error('TRUST_ATTACHMENT_REVIEW must be manual or unset.');
+const largePdfSetting=process.env.TRUST_LARGE_PDF_BATCH;
+if(largePdfSetting!==undefined&&largePdfSetting!=='1')throw Error('TRUST_LARGE_PDF_BATCH must be 1 or unset.');
+if(largePdfSetting&&(!process.env.TRUST_SQLITE_FILE||attachmentReviewSetting!=='manual'))
+  throw Error('Larger PDF batches require TRUST_SQLITE_FILE and TRUST_ATTACHMENT_REVIEW=manual.');
 const enableRecordScope=process.env.TRUST_ENABLE_LOCAL_RECORD_SCOPE==='1';
 if(enableRecordScope&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first to opt into local document access scope.');
 if(enableGroupGovernance&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first to opt into local group governance.');
@@ -47,6 +51,7 @@ writeFileSync(trainingCodes,JSON.stringify(learners,null,2)+'\n',{flag:'wx',mode
 const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,operationalEvents:true,isolated:{
   root:join(root,'workspaces'),enableIdentityAdmin,
   workspaces:[{id:'harbor',label:'Fictional Harbor'},{id:'orchard',label:'Fictional Orchard'}],
+  ...(largePdfSetting?{largePdfAttachmentWorkspaces:['harbor','orchard']}:{}),
   ...(attachmentReviewSetting?{attachmentReviewWorkspaces:['harbor','orchard']}:{}),
   ...(process.env.TRUST_ENABLE_LOCAL_RIGHTS_CASE_SCOPE==='1'?{rightsCaseScopeWorkspaces:['harbor','orchard']}:{}),
   ...(enableRecordScope?{documentScopeWorkspaces:['harbor','orchard']}:{}),

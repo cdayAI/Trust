@@ -7,15 +7,22 @@ const operatorJobActions = {
   'rights.case.assign': { label: 'Reassign rights case to case operator', idField: 'caseId', approval: true },
   'audit.plan.status': { label: 'Read audit plan status', idField: 'planId' },
   'audit.plan.begin': { label: 'Begin audit fieldwork', idField: 'planId', approval: true },
+  'audit.plan.receipt-rehearsal': { label: 'Rehearse audit receipt', idField: 'planId', approval: true },
 };
 const operatorJobStatuses = {
   'awaiting-approval': 'Awaiting approval', queued: 'Queued', succeeded: 'Succeeded', failed: 'Failed', rejected: 'Rejected',
+  retryable: 'Retry available', 'needs-reconciliation': 'Needs reconciliation',
+};
+const auditReceiptAttempts = {
+  'retryable-before-effect': 'Temporary failure before recording the receipt',
+  'acknowledgment-unknown': 'Receipt acknowledgment uncertain',
 };
 let operatorJobPrefill;
 
 function openAuditPlanJobs(plan) {
+  const actions = { planned: 'audit.plan.begin', finalized: 'audit.plan.receipt-rehearsal' };
   operatorJobPrefill = {
-    action: localSession.actor === 'analyst' && plan.status === 'planned' ? 'audit.plan.begin' : 'audit.plan.status',
+    action: (localSession.actor === 'analyst' ? actions[plan.status] : undefined) ?? 'audit.plan.status',
     recordId: plan.id,
     revision: plan.revision,
   };
@@ -98,6 +105,13 @@ function mountOperatorJobs() {
       if (job.args.expectedRevision !== undefined) card.append(el('p', 'Expected revision ' + job.args.expectedRevision));
       if (job.decision) card.append(el('p', (job.decision.value === 'approve' ? 'Approved' : 'Rejected') + ' by ' + job.decision.by));
       if (job.result) card.append(el('p', 'Record status ' + job.result.status + ' · Revision ' + job.result.revision));
+      if (job.attempts?.length) {
+        const attempts = el('ol');
+        for (const attempt of job.attempts) attempts.append(el('li', auditReceiptAttempts[attempt.outcome]));
+        card.append(add(el('details'), el('summary', 'Attempts (' + job.attempts.length + ')'), attempts));
+      }
+      if (job.result?.receiptId) card.append(el('p', 'Synthetic receipt ' + job.result.receiptId));
+      if (job.reconciliation) card.append(el('p', 'Reconciled by ' + job.reconciliation.by));
       if (job.failure) card.append(el('p', 'Failure ' + job.failure.code));
       if (job.status === 'awaiting-approval' && session.actor === 'reviewer' && job.requestedBy !== session.account) {
         const approve = button('Approve job'), reject = button('Reject job', 'button', 'secondary');
@@ -105,10 +119,16 @@ function mountOperatorJobs() {
         reject.onclick = () => perform(changeJob(job, 'decision', { decision: 'reject' }));
         card.append(add(el('div', undefined, 'actions'), approve, reject));
       }
-      if (job.status === 'queued' && job.requestedBy === session.account) {
-        const run = button('Run job');
-        run.onclick = () => perform(changeJob(job, 'run', {}));
+      if (['queued', 'retryable'].includes(job.status) && job.requestedBy === session.account) {
+        const retry = job.status === 'retryable';
+        const run = button(retry ? 'Retry job' : 'Run job');
+        run.onclick = () => perform(changeJob(job, retry ? 'retry' : 'run', {}));
         card.append(run);
+      }
+      if (job.status === 'needs-reconciliation' && session.actor === 'reviewer' && job.decision?.by === session.account) {
+        const reconcile = button('Reconcile receipt');
+        reconcile.onclick = () => perform(changeJob(job, 'reconcile', {}));
+        card.append(reconcile);
       }
       list.append(card);
       if (job.id === focusId) {
