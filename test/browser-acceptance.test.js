@@ -159,7 +159,7 @@ const views={
   'vendor-monitoring':'vendor-monitoring-view','data-map':'data-map-view',dictionary:'dictionary-view',
   preferences:'preferences-view',retention:'retention-view','governance-docs':'governance-docs-view',
   'employee-attestations':'employee-attestations-view',training:'training-view','risk-controls':'risk-controls-view',
-  'assessment-config':'assessment-config-view','audit-management':'audit-management-view','maturity-planning':'maturity-planning-view','workflow-studio':'workflow-studio-view',
+  'processing-register':'processing-register-view','assessment-config':'assessment-config-view','audit-management':'audit-management-view','maturity-planning':'maturity-planning-view','workflow-studio':'workflow-studio-view',
   'trust-center':'trust-center-view',report:'report-view',modules:'module-view'
 };
 test('browser inventory: all workbench views and JSON download controls, with role-specific control evidence',{...browserOnly,timeout:75000},async t=>{

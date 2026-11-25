@@ -58,6 +58,8 @@ The [local synthetic operator API](OPERATOR-API.md) uses this backend in isolate
 mode for durable jobs and independently reviewed rights-case reassignment.
 See [backup, restore, and migration](DURABLE-STORAGE.md). The legacy JSON
 backend remains available for local compatibility.
+Use the [fictional migration rehearsal](MIGRATION-REHEARSAL.md) for a dry run,
+confirmed isolated test import, and non-destructive rollback.
 
 ## Interface
 

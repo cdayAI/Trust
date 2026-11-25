@@ -12,6 +12,7 @@ const myWorkRoute=new RegExp('^/api/my-work(?:/tasks/('+myWorkToken+'))?$');
 const {createAccess}=require('./workspace-access');
 const policy=require('./access-policy');
 const groups=require('./group-governance');
+const documentScope=require('./document-scope');
 const {fixtureOptions}=require('./discovery-import');
 const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
@@ -26,6 +27,7 @@ const staticFiles = new Map([
   ['/index.html',['index.html','text/html; charset=utf-8']],
   ['/trust-center-ui.js',['trust-center-ui.js','text/javascript; charset=utf-8']],
   ['/identity-admin-ui.js',['identity-admin-ui.js','text/javascript; charset=utf-8']],
+  ['/document-access-ui.js',['document-access-ui.js','text/javascript; charset=utf-8']],
   ['/group-governance-ui.js',['group-governance-ui.js','text/javascript; charset=utf-8']],
   ['/training-admin-ui.js',['training-admin-ui.js','text/javascript; charset=utf-8']],
   ['/employee-admin-ui.js',['employee-admin-ui.js','text/javascript; charset=utf-8']],
@@ -47,6 +49,8 @@ const staticFiles = new Map([
   ['/rights-deadline-ui.js',['rights-deadline-ui.js','text/javascript; charset=utf-8']],
   ['/assessment-config-ui.js',['assessment-config-ui.js','text/javascript; charset=utf-8']],
   ['/assessment-config.css',['assessment-config.css','text/css; charset=utf-8']],
+  ['/processing-register-ui.js',['processing-register-ui.js','text/javascript; charset=utf-8']],
+  ['/processing-register.css',['processing-register.css','text/css; charset=utf-8']],
   ['/maturity-planning-ui.js',['maturity-planning-ui.js','text/javascript; charset=utf-8']],
   ['/maturity-planning.css',['maturity-planning.css','text/css; charset=utf-8']],
   ['/reporting-ui.js',['reporting-ui.js','text/javascript; charset=utf-8']],
@@ -76,8 +80,9 @@ async function readBody(req,limit=32768) {
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,operationalEvents=false}={}) {
   const scopedCatalogs=groups.provision(isolated);
+  const scopedDocuments=documentScope.provision(isolated);
   const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id),
-    id=>scopedCatalogs.has(id));
+    id=>({groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id)}));
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
     grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,now:isolated.now
   }):null;
@@ -91,10 +96,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     requesters:isolated.requesterGrants,employees:isolated.employeeGrants,now:isolated.now
   }):null;
   const database=sqliteFile===undefined?null:openSqlite(sqliteFile);
-  function openRuntime(stateFile,workflowFile,scope,empty){
+  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false){
     const storage=database?.scope(scope);
     const workflow=openWorkflowHttp(workflowFile,{storage});
-    return {store:openStore(stateFile,{empty,storage}),workflow};
+    return {store:openStore(stateFile,{empty,storage,scopeDocuments}),workflow};
   }
   let demo;
   try {
@@ -108,9 +113,12 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   function runtime(space){
     if(!space)return demo;
     if(!runtimes.has(space.id))runtimes.set(space.id,
-      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true));
+      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id)));
     return runtimes.get(space.id);
   }
+  try{
+    for(const id of scopedDocuments)runtime(access.spaceForProvisionedGrant(id));
+  }catch(error){database?.close();throw error;}
   const files=database?[sqliteFile]:access?isolated.workspaces.flatMap(({id})=>{
     const {file,workflowFile}=access.spaceForProvisionedGrant(id);
     return [file,workflowFile];
@@ -251,6 +259,20 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         policy.requirePermission(req.method,pathname,checked.actor);
         return send(res,200,store.groupGovernanceChange(groupContext(checked),body));
       }
+      const documentContext=checked=>({
+        role:checked.actor,account:checked.account,generation:checked.generation,at:access.identityTime(),
+        roster:access.identityRoster(checked.space.id),enabled:scopedDocuments.has(checked.space.id)
+      });
+      if(pathname==='/api/document-access'){
+        if(!scopedDocuments.has(selection?.space.id))return send(res,404,{error:'Not found.'});
+        if(searchParams.size)return send(res,422,{error:'Document access does not accept query filters.'});
+        if(req.method==='GET')return send(res,200,store.documentAccessView(documentContext(selection)));
+        if(req.method!=='POST')return send(res,404,{error:'Not found.'});
+        const body=await readBody(req);
+        const checked=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,checked.actor);
+        return send(res,200,store.documentAccessTransition(documentContext(checked),body));
+      }
       const mode=access?'local-isolated':'synthetic-demo';
       const workflowParts=pathname.startsWith('/api/workflows/')?pathname.slice(15).split('/'):null;
       const employeeEnabled=staff?.enabled(selection?.space.id);
@@ -305,7 +327,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           {'Content-Disposition':'attachment; filename="privacy-workbench-queue.json"'}):send(res,200,queue);
       }
       if (req.method==='GET'&&pathname==='/api/governance-documents'){
-        const docs=store.getDocuments(actor);
+        const docs=caseOperator?store.getCaseDocuments(documentContext(selection)):store.getDocuments(actor);
         return send(res,200,caseOperator?policy.caseDocumentView(docs):docs);
       }
       if (req.method==='GET'&&pathname==='/api/vendor-monitoring') return send(res,200,store.getVendorMonitoring());
@@ -315,6 +337,11 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         if(req.method==='GET'&&report)return send(res,200,store.getAuditReport(report[1]),undefined,
           {'Content-Disposition':'attachment; filename="synthetic-audit-'+report[1]+'.json"'});
       }
+      const processingVersion=pathname.match(/^\/api\/processing-register\/entries\/([a-f0-9-]{36})\/versions\/([1-9][0-9]*)\/export$/);
+      if(req.method==='GET'&&(pathname==='/api/processing-register/export'||processingVersion))
+        return send(res,200,store.getProcessingExport(processingVersion?.[1],processingVersion?Number(processingVersion[2]):undefined),undefined,
+          {'Content-Disposition':'attachment; filename="mvw-trust-processing-register.json"'});
+      if(req.method==='GET'&&pathname==='/api/processing-register')return send(res,200,store.getProcessingRegister());
       if(req.method==='GET'&&pathname==='/api/assessment-config')return send(res,200,store.getAssessmentConfiguration());
       if(req.method==='GET'&&pathname==='/api/maturity-planning')return send(res,200,store.getMaturityPlanning());
       const maturityReport=pathname.match(/^\/api\/maturity-planning\/plans\/([a-f0-9-]{36})\/versions\/([1-9][0-9]*)\/report$/);
@@ -382,9 +409,6 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         if(caseOperator){
           if(parts[0]==='rights'&&!store.getState().rightsCases?.some(row=>row.id===parts[2]&&row.owner===actor))
             return send(res,404,{error:'Rights case not found.'});
-          if(parts[0]==='governance-documents'&&!store.getDocuments(actor).documents
-            .some(doc=>doc.id===parts[2]&&doc.revisions.some(version=>version.id===parts[4])))
-            return send(res,404,{error:'That document revision was not found.'});
         }
         if(parts[0]==='training'&&parts.length===2){
           if(!trainingEnabled)return send(res,404,{error:'Policy training is not provisioned for this workspace.'});
@@ -399,13 +423,15 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           store.change(parts,actor,body,selection?.account);
           return send(res,200,store.trustCenterView(centerPath));
         }
+        const resourceChange=()=>caseOperator&&parts[0]==='governance-documents'?
+          store.readCaseDocument(parts,documentContext(current),body):store.change(parts,actor,body,selection?.account);
         if(parts.length===8&&parts[0]==='governance-documents'&&parts[1]==='records'&&parts[3]==='revisions'&&parts[5]==='attachments'&&parts[7]==='download'){
-          const {bytes,filename}=store.change(parts,actor,body,selection?.account);
+          const {bytes,filename}=resourceChange();
           return send(res,200,bytes,'application/octet-stream',{
             'Content-Disposition':'attachment; filename="'+filename+'"','Content-Security-Policy':"sandbox; default-src 'none'"
           });
         }
-        const result=store.change(parts,actor,body,selection?.account);
+        const result=resourceChange();
         if(caseOperator&&parts[0]==='rights')return send(res,200,policy.caseOperatorView(result));
         if(caseOperator&&parts[0]==='governance-documents')return send(res,200,policy.caseDocumentView(result));
         return send(res,200,access&&['projects','vendors','assessments','handoff'].includes(parts[0])?policy.operatorState(result,actor):result);

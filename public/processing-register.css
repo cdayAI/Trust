@@ -1,0 +1,13 @@
+.processing-card { display: grid; gap: 1rem; }
+.processing-grid, .processing-summary {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: .75rem;
+}
+.processing-card, .processing-grid > *, .processing-summary > * { min-width: 0; overflow-wrap: anywhere; }
+.processing-checklist, .processing-recipient, .processing-edition {
+  border: 1px solid var(--line, rgba(95, 127, 144, .3)); border-radius: 1rem; padding: .75rem 1rem; margin-block: .5rem;
+  background: linear-gradient(145deg, rgba(128, 170, 193, .13), rgba(128, 170, 193, .03));
+}
+.processing-checklist label { display: flex; gap: .55rem; align-items: baseline; margin-block: .35rem; }
+.processing-checklist input { width: auto; }
+.processing-summary p { margin: .25rem 0; }
+.processing-summary h4 { grid-column: 1 / -1; margin: .25rem 0 0; }

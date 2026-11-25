@@ -53,7 +53,7 @@ function renderModules(){
   const allRecords=moduleData.records??[];
   const records=m.records??allRecords.filter(r=>r.moduleId===m.id||r.module===m.id);
   const intro=add(el('section'),heading(titleOf(m)),el('p',m.description??'Track synthetic records and their workflow history.'));
-  if(legacyCase)intro.append(el('p','Historical register only. Open '+(m.id==='rights'?'Privacy rights':m.id==='incidents'?'Incidents':m.id==='retention'?'Retention':['risks','controls'].includes(m.id)?'Risk and controls':m.id==='third-party'?'Vendor monitoring':m.id==='policies'?'Policies and documents':'Data mapping')+' for the current workflow.','hint'));
+  if(legacyCase)intro.append(el('p','Historical register only. Open '+(m.id==='rights'?'Privacy rights':m.id==='incidents'?'Incidents':m.id==='processing'?'Processing register':m.id==='retention'?'Retention':['risks','controls'].includes(m.id)?'Risk and controls':m.id==='third-party'?'Vendor monitoring':m.id==='policies'?'Policies and documents':'Data mapping')+' for the current workflow.','hint'));
   else if(scheme.length)intro.append(el('p','Workflow: '+scheme.map(statusOf).join(' → '),'hint'));
   const form=el('form');
   if(!legacyCase&&actor==='analyst'){
@@ -105,7 +105,7 @@ function renderModules(){
   mview.replaceChildren(add(el('div',undefined,'module-grid'),add(el('aside'),add(el('section'),heading('Program modules'),nav)),content));
 }
 function switchView(view,{keepMyWorkLink=false}={}){
-  if(['ethics','group-governance','scoped-applications'].includes(view)&&!localSession)return;
+  if(['ethics','group-governance','scoped-applications','document-access'].includes(view)&&!localSession)return;
   if(localSession&&!localSession.capabilities.views.includes(view))return;
   if(!keepMyWorkLink)clearMyWorkLocation();
   $('#audit-export').hidden=view==='my-work'||!!localSession&&!localSession.capabilities.workspaceAudit;
@@ -124,12 +124,14 @@ function switchView(view,{keepMyWorkLink=false}={}){
   overview.hidden=view!=='assessments';mview.hidden=!moduleActive;$('#report-view').hidden=!reportActive;$('#rights-view').hidden=view!=='rights';$('#incident-view').hidden=view!=='incidents';$('#data-map-view').hidden=view!=='data-map';$('#dictionary-view').hidden=view!=='dictionary';$('#preferences-view').hidden=view!=='preferences';$('#retention-view').hidden=view!=='retention';$('#risk-controls-view').hidden=view!=='risk-controls';$('#audit-management-view').hidden=view!=='audit-management';$('#maturity-planning-view').hidden=view!=='maturity-planning';$('#vendor-monitoring-view').hidden=view!=='vendor-monitoring';$('#queue-view').hidden=view!=='queue';$('#governance-docs-view').hidden=view!=='governance-docs';$('#trust-center-view').hidden=view!=='trust-center';$('#employee-attestations-view').hidden=view!=='employee-attestations';$('#workflow-studio-view').hidden=view!=='workflow-studio';
   $('#ethics-view').hidden=view!=='ethics';
   $('#my-work-view').hidden=view!=='my-work';
+  $('#processing-register-view').hidden=view!=='processing-register';
   $('#assessment-config-view').hidden=view!=='assessment-config';
   $('#training-view').hidden=view!=='training';
   $('#identity-admin-view').hidden=view!=='identity-admin';
+  $('#document-access-view').hidden=view!=='document-access';
   $('#group-governance-view').hidden=view!=='group-governance';
   $('#scoped-applications-view').hidden=view!=='scoped-applications';
-  for(const name of ['group-governance','scoped-applications','identity-admin','ethics','assessments','assessment-config','rights','incidents','data-map','dictionary','preferences','retention','risk-controls','audit-management','maturity-planning','vendor-monitoring','queue','my-work','governance-docs','trust-center','employee-attestations','training','workflow-studio','modules','report']){
+  for(const name of ['document-access','group-governance','scoped-applications','identity-admin','ethics','assessments','assessment-config','rights','incidents','data-map','processing-register','dictionary','preferences','retention','risk-controls','audit-management','maturity-planning','vendor-monitoring','queue','my-work','governance-docs','trust-center','employee-attestations','training','workflow-studio','modules','report']){
     const b=$('#show-'+name),on=view===name;
     b.setAttribute('aria-current',String(on));b.classList.toggle('secondary',!on);
   }
@@ -145,6 +147,8 @@ function switchView(view,{keepMyWorkLink=false}={}){
     $('#incident-view').replaceChildren(el('p','Loading privacy incidents…'));refreshIncidents();
   }else if(view==='data-map'){
     $('#data-map-view').replaceChildren(el('p','Loading data map…'));refreshDataMap();
+  }else if(view==='processing-register'){
+    $('#processing-register-view').replaceChildren(el('p','Loading processing records…'));refreshProcessingRegister();
   }else if(view==='dictionary'){
     $('#dictionary-view').replaceChildren(el('p','Loading governed terms…'));refreshDictionary();
   }else if(view==='preferences'){
@@ -179,6 +183,8 @@ function switchView(view,{keepMyWorkLink=false}={}){
     $('#assessment-config-view').replaceChildren(el('p','Loading assessment configuration…'));refreshAssessmentConfig();
   }else if(view==='group-governance'||view==='scoped-applications'){
     refreshScopeView(view);
+  }else if(view==='document-access'){
+    refreshDocumentAccess();
   }else if(view==='workflow-studio'){
     $('#workflow-studio-view').replaceChildren(el('p','Loading workflow studio…'));refreshStudio();
   }else if(state)render();

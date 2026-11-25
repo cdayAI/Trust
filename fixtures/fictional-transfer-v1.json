@@ -1,0 +1,24 @@
+{
+  "format": "mvw-trust-fictional-transfer",
+  "version": 1,
+  "packageId": "fixture-0042",
+  "inventories": [
+    { "key": "n0002", "kind": "dataset", "owner": "operations", "profile": "events" },
+    { "key": "n0001", "kind": "system", "owner": "studio", "profile": "service" },
+    { "key": "n0003", "kind": "activity", "owner": "quality", "profile": "rehearsal" },
+    { "key": "n0002", "kind": "dataset", "owner": "operations", "profile": "events" }
+  ],
+  "relationships": [
+    { "key": "l0002", "kind": "reads", "from": "n0002", "to": "n0003" },
+    { "key": "l0001", "kind": "hosts", "from": "n0001", "to": "n0002" },
+    { "key": "l0003", "kind": "hosts", "from": "n0001", "to": "n0002" }
+  ],
+  "terms": [
+    { "key": "t0001", "kind": "sensitivity" },
+    { "key": "t0002", "kind": "purpose" }
+  ],
+  "termBindings": [
+    { "term": "t0001", "node": "n0002" },
+    { "term": "t0002", "node": "n0003" }
+  ]
+}

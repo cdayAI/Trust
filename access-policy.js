@@ -22,6 +22,9 @@ route('POST','operator/v1/jobs(?:/'+uuid+'/run)?',operators);
 route('POST','operator/v1/jobs/'+uuid+'/decision',['reviewer']);
 route('GET','state',all);
 route('GET','assessment-config',operators);
+route('GET','processing-register(?:/export|/entries/'+uuid+'/versions/[1-9][0-9]*/export)?',operators);
+route('POST','processing-register/entries(?:/'+uuid+'/(?:edit|submit|revise))?',['analyst']);
+route('POST','processing-register/entries/'+uuid+'/(?:return|publish)',['reviewer']);
 route('POST','assessment-config/(?:create|edit|submit)',['analyst']);
 route('POST','assessment-config/(?:return|publish)',['reviewer']);
 route('GET','my-work(?:/tasks/'+myWorkToken+')?',rights);
@@ -30,6 +33,8 @@ route('POST','identity-admin',['identity-admin']);
 route('GET','group-governance',['identity-admin','reviewer']);
 route('POST','group-governance',['identity-admin','reviewer']);
 route('GET','scoped-applications',['analyst','case-operator']);
+route('GET','document-access',['reviewer','identity-admin']);
+route('POST','document-access',['reviewer','identity-admin']);
 route('GET','(?:vendor-monitoring|risk-controls|retention|privacy-notices|dictionary|dictionary/export|modules|work-queue|work-queue/export|reporting|reporting/export)',operators);
 route('GET','(?:data-map|data-map/discovery|data-map/export|data-map/nodes/'+uuid+'/lineage)',operators);
 route('GET','(?:risk-controls/export|incidents/cases|audit-management|audit-management/plans/'+uuid+'/report)',operators);
@@ -78,18 +83,19 @@ route('POST','workflows/definitions',['publisher']);
 route('POST','workflows/(?:instances|instances/'+key+'/transitions)',operators);
 
 const views={
-  analyst:['assessments','assessment-config','my-work','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
-  reviewer:['assessments','assessment-config','my-work','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
+  analyst:['assessments','assessment-config','my-work','queue','rights','incidents','vendor-monitoring','data-map','processing-register','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
+  reviewer:['assessments','assessment-config','my-work','queue','rights','incidents','vendor-monitoring','data-map','processing-register','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
   publisher:['workflow-studio'],
   'identity-admin':['identity-admin'],
   'ethics-investigator':['ethics'],
   'ethics-reviewer':['ethics'],
   'case-operator':['rights','my-work','governance-docs'],
 };
-function capabilities(role,{groupGovernance=false}={}){
+function capabilities(role,{groupGovernance=false,documentScope=false}={}){
   const permitted=[...(Object.hasOwn(views,role)?views[role]:[])];
   if(groupGovernance&&['identity-admin','reviewer'].includes(role))permitted.push('group-governance');
   if(groupGovernance&&['analyst','case-operator'].includes(role))permitted.push('scoped-applications');
+  if(documentScope&&['reviewer','identity-admin'].includes(role))permitted.push('document-access');
   return {views:permitted,workspaceAudit:role==='reviewer'};
 }
 function requirePermission(method,pathname,role){

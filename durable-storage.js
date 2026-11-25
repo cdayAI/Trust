@@ -354,4 +354,4 @@ function migrateIsolated(root, dbFile) {
   return restoreDocuments('isolated',documents, dbFile);
 }
 
-module.exports = { openSqlite, backupDatabase, verifyBackup, restoreDatabase, migrateDemo, migrateIsolated, hasLegacySnapshot };
+module.exports = { openSqlite, backupDatabase, verifyBackup, restoreDatabase, migrateDemo, migrateIsolated, hasLegacySnapshot, publishNew, restoreDocuments };

@@ -164,6 +164,10 @@ test('module catalog supports one synthetic lifecycle advance in every workflow 
       };
       const fields = Object.fromEntries(m.fields.map(field => [field.key, value(field)]));
       const path = 'modules/' + m.id + '/records';
+      if (m.id === 'processing') {
+        await post(path, 'analyst', { title, fields }, 409);
+        return;
+      }
       await post(path, 'analyst', { title, fields });
       const record = (await catalog()).records.find(r => r.moduleId === m.id && r.title === title);
       assert.ok(record);

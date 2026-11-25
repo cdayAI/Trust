@@ -42,6 +42,7 @@ function validate(module,body) {
 function change(state,parts,actor,body,event) {
  const module=definitions.find(m=>m.id===parts[1]);
  if(!module || parts[2]!=='records') fail(404,'Unknown privacy module endpoint.');
+ if(module.id==='processing')fail(409,'Historical processing records are read-only. Use Processing register for current work.');
  const records=state.moduleRecords??=([]);
  const now=new Date().toISOString();
  if(parts.length===3) {

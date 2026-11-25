@@ -1,13 +1,14 @@
 'use strict';
 const fs = require('node:fs');
 const path = require('node:path');
-const {randomUUID} = require('node:crypto');
+const {createHash,randomUUID} = require('node:crypto');
 const {hasLegacySnapshot}=require('./durable-storage');
 const operatorJobs = require('./operator-jobs');
 const modules = require('./modules');
 const assessmentFlow = require('./assessment-workflow');
 const forms = require('./assessment-questionnaire');
 const assessmentConfig=require('./assessment-config');
+const processingRegister=require('./processing-register');
 const rights = require('./rights-workflow');
 const deadlines = require('./rights-deadline-policy');
 const incidents = require('./incident-workflow');
@@ -25,8 +26,9 @@ const ethics = require('./ethics-cases');
 const maturityPlanning = require('./maturity-planning');
 const vendorMonitoring = require('./vendor-monitoring');
 const documents = require('./governance-documents');
+const documentScope = require('./document-scope');
 const programs=new Map([
-  ['assessment-config',assessmentConfig],
+  ['assessment-config',assessmentConfig],['processing-register',processingRegister],
   ['dictionary',dictionary],['trust-center',trustCenter],['rights',rights],['incidents',incidents],['data-map',dataMap],
   ['privacy-notices',preferences],['retention',retention],['risk-controls',riskControls],['audit-management',auditManagement],['maturity-planning',maturityPlanning],['vendor-monitoring',vendorMonitoring],['governance-documents',documents]
 ]);
@@ -160,7 +162,7 @@ function seed() {
   createVendor(state,'system',{projectId:p.id,name:'Northstar Assist',description:'Fictional service that drafts support replies with AI. Humans review before messages are sent.',usesAI:true},'northstar');
   return state;
 }
-function openStore(file,{empty=false,storage}={}) {
+function openStore(file,{empty=false,storage,scopeDocuments=false}={}) {
   let saveSnapshot;
   function persist(next) {
     if(storage){
@@ -188,6 +190,11 @@ function openStore(file,{empty=false,storage}={}) {
       if(!empty)persist(state);
     }
     if (state.version!==1 || !['projects','vendors','assessments','audit','handoff','actors'].every(k=>Array.isArray(state[k]))) throw new Error('Unsupported or invalid state file.');
+    if(scopeDocuments&&state.documentAccessScope===undefined){
+      const next=structuredClone(state);
+      next.documentAccessScope={version:1,revision:0,grants:[]};
+      persist(next);state=next;
+    }
     if(state.assessments.some(a=>!a.questionnaire&&!a.routing)) {
       const migrated=structuredClone(state);
       for(const a of migrated.assessments.filter(a=>!a.questionnaire&&!a.routing)) {
@@ -237,7 +244,7 @@ function openStore(file,{empty=false,storage}={}) {
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,ethicsCases,rightsDeadlinePolicy,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,incidentPolicyBook:privateIncidentPolicy,...safe}=state;
+    const {fixtureMigrationReceipt,requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,ethicsCases,rightsDeadlinePolicy,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,...safe}=state;
     if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
@@ -342,11 +349,55 @@ function openStore(file,{empty=false,storage}={}) {
     getState:()=>state,
     publicState,
     getDocuments:actor=>documents.view(state,actor),
+    getCaseDocuments(ctx){
+      requireCurrentOperatorSession(ctx);
+      if(ctx.enabled)return documentScope.list(state,ctx);
+      const baseline=documents.view(state,ctx.role);
+      return state.documentAccessScope===undefined?baseline:{...baseline,documents:[]};
+    },
+    documentAccessView:ctx=>documentScope.boardView(state,ctx),
+    documentAccessTransition(ctx,body){
+      const next=structuredClone(state);
+      const result=documentScope.transition(next,ctx,body,(target,action,grant,details)=>{
+        event(target,ctx.role,action,null,grant.id,{
+          document:grant.document,edition:grant.edition,account:grant.account,level:grant.level,...details
+        });
+        target.audit.at(-1).account=ctx.account;
+      });
+      persist(next);state=next;
+      return result;
+    },
+    readCaseDocument(parts,ctx,body){
+      requireCurrentOperatorSession(ctx);
+      const attachment=parts.length===8&&parts[5]==='attachments'&&parts[7]==='download';
+      if(parts[1]!=='records'||parts[3]!=='revisions'||!(attachment||parts.length===6&&['read','download'].includes(parts[5])))
+        documentScope.missing();
+      let level;
+      if(ctx.enabled)level=documentScope.authorize(state,ctx,parts[2],parts[4],attachment);
+      else if(state.documentAccessScope!==undefined||!documents.view(state,ctx.role).documents
+        .some(doc=>doc.id===parts[2]&&doc.revisions.some(version=>version.id===parts[4])))
+        documentScope.missing();
+      if(!body||typeof body!=='object'||Array.isArray(body))fail(400,'Expected a JSON object.');
+      const next=structuredClone(state);
+      const commit=()=>{persist(next);state=next;};
+      let result;
+      try{
+        result=documents.change(next,parts,ctx.role,body,(target,role,action,project,entity,details)=>{
+          event(target,role,action,project,entity,details);target.audit.at(-1).account=ctx.account;
+        });
+      }catch(error){if(error.persistRefusal)commit();throw error;}
+      if(ctx.enabled&&!attachment&&createHash('sha256').update(result.text).digest('hex')!==result.version.contentHash)
+        throw Object.assign(Error('Document bytes do not match the approved edition.'),{status:409,code:'DOCUMENT_INTEGRITY'});
+      commit();
+      return level&&!attachment?{...result,version:documentScope.project(result.version,level)}:result;
+    },
     getModules:()=>modules.model(state),
     getRights:()=>rights.view(state),
     getRightsDeadlinePolicy:account=>deadlines.view(state,account),
     getIncidents:(actor,account)=>incidents.view(state,actor,account),
     getDictionary:()=>dictionary.view(state),
+    getProcessingRegister:()=>processingRegister.view(state),
+    getProcessingExport:(id,version)=>processingRegister.approved(state,id,version),
     getDataMap:()=>dataMap.view(state),
     getLineage:id=>dataMap.lineage(state,id),
     getPreferences:()=>preferences.view(state),
@@ -403,7 +454,7 @@ function openStore(file,{empty=false,storage}={}) {
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name!=='identityMembership')state=storage.read(workbench)??fresh();

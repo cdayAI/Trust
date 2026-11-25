@@ -12,7 +12,7 @@ const denied=(status,message)=>{throw Object.assign(new Error(message),{status})
 const cookie=(token='',age=0)=>cookieName+'='+token+'; Path=/; Max-Age='+age+'; HttpOnly; SameSite=Strict';
 
 function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdentityAdmin=false,now=Date.now},
-  readIdentityRecord=()=>({revision:0,disabled:false}),groupWorkspace=()=>false){
+  readIdentityRecord=()=>({revision:0,disabled:false}),workspaceFeatures=()=>({})){
   if(typeof root!=='string'||!root||!Number.isSafeInteger(sessionSeconds)||sessionSeconds<1||sessionSeconds>3600||
     typeof now!=='function'||typeof readIdentityRecord!=='function'||typeof enableIdentityAdmin!=='boolean'||!Array.isArray(workspaces)||!workspaces.length||!Array.isArray(accounts)||!accounts.length)
     throw new Error('Invalid isolated workspace configuration.');
@@ -73,7 +73,7 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
   }
   const describe=session=>({mode:'local-isolated',authenticated:!!session,...(session?{
     account:session.account.id,actor:session.account.grants.get(session.workspace),workspace:session.workspace,
-    capabilities:capabilities(session.account.grants.get(session.workspace),{groupGovernance:groupWorkspace(session.workspace)}),
+    capabilities:capabilities(session.account.grants.get(session.workspace),workspaceFeatures(session.workspace)),
     workspaces:[...session.account.grants].filter(([id])=>!membership(id,session.account.id).disabled).map(([id])=>({id,label:spaces.get(id).label}))
   }:{})});
   function issue(account,workspace,previous){
