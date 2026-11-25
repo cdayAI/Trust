@@ -75,7 +75,8 @@ async function readBody(req,limit=32768) {
     if (bytes>limit)throw tooLarge();
     chunks.push(chunk);
   }
-  try { return bytes?JSON.parse(Buffer.concat(chunks).toString('utf8')):{}; }
+  // Reject malformed UTF-8 instead of silently changing the submitted data.
+  try { return bytes?JSON.parse(new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(Buffer.concat(chunks))):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,operationalEvents=false}={}) {

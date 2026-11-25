@@ -936,3 +936,49 @@ test('legacy tracker and consent records are not exposed by the current app',asy
     assert.doesNotMatch(JSON.stringify(data),/HIDDEN_LEGACY/);
   assert.match(await readFile(dataFile,'utf8'),/HIDDEN_LEGACY/);
 });
+
+test('HTTP rejects malformed UTF-8 without changing project data', async t=>{
+  const {get,post,request}=await harness(t);
+  const before=await get();
+  const body=Buffer.concat([Buffer.from('{"name":"Invalid '),Buffer.from([0xc3,0x28]),Buffer.from('"}')]);
+  await request('projects',400,{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Actor':'analyst'},body});
+  assert.deepEqual(await get(),before);
+  const valid=await post('projects','analyst',{name:'Valid café \uFFFD'});
+  assert.ok(valid.projects.some(p=>p.name==='Valid café \uFFFD'));
+});
+
+test('stored governance text corruption fails closed on read, download and publication',async t=>{
+  const {post,request,dataFile,restart}=await harness(t);
+  const root='governance-documents/records';
+  const view=async()=>(await request('governance-documents',200,{headers:{'X-Demo-Actor':'analyst'}})).body;
+  const make=async title=>{
+    const result=await post(root,'analyst',{kind:'policy',title,content:'Original policy text',links:[],expectedRevision:(await view()).revision});
+    const doc=result.documents.find(d=>d.revisions[0].title===title);
+    const path=root+'/'+doc.id+'/revisions/'+doc.revisions[0].id;
+    await post(path+'/submit','analyst',{expectedRevision:result.revision});
+    return {id:doc.id,path};
+  };
+  const published=await make('Published fixture');
+  await post(published.path+'/publish','reviewer',{expectedRevision:(await view()).revision,note:'Reviewed original'});
+  assert.equal((await post(published.path+'/download','reviewer',{})).text,'Original policy text');
+  const pending=await make('Pending fixture');
+  const snapshot=JSON.parse(await readFile(dataFile,'utf8'));
+  for(const doc of snapshot.governanceDocuments.documents){
+    if([published.id,pending.id].includes(doc.id))doc.revisions[0].content='Modified policy text';
+  }
+  await writeFile(dataFile,JSON.stringify(snapshot));
+  await restart();
+  const revision=(await view()).revision;
+  for(const action of ['read','download']){
+    const refusal=await post(published.path+'/'+action,'reviewer',{},409);
+    assert.equal(refusal.code,'DOCUMENT_INTEGRITY_FAILED');
+    assert.doesNotMatch(JSON.stringify(refusal),/Modified policy text/);
+  }
+  const refused=await post(pending.path+'/publish','reviewer',{expectedRevision:revision,note:'Cannot approve corrupted text'},409);
+  assert.equal(refused.code,'DOCUMENT_INTEGRITY_FAILED');
+  const after=await view();
+  assert.equal(after.revision,revision);
+  assert.equal(after.documents.find(d=>d.id===pending.id).revisions[0].status,'review');
+  const audit=(await request('audit/export',200)).body.audit;
+  assert.equal(audit.filter(e=>e.action==='governance-documents.refused'&&e.details.code==='DOCUMENT_INTEGRITY_FAILED').length,3);
+});

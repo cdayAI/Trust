@@ -10,6 +10,12 @@ function required(x,label,max){
   return x.trim();
 }
 function digest(content){return createHash('sha256').update(content).digest('hex')}
+function intactText(v){
+  return typeof v.content==='string'&&Buffer.byteLength(v.content)===v.contentLength&&digest(v.content)===v.contentHash;
+}
+function requireIntactText(v){
+  if(!intactText(v))issue(409,'DOCUMENT_INTEGRITY_FAILED','The stored document text failed its integrity check.');
+}
 function candidates(s){
   return [
     ...(s.riskControls?.risks??[]).map(x=>({type:'risk',id:x.id,label:x.title})),
@@ -87,6 +93,7 @@ function change(s,parts,actor,body,event){
         audit(action,doc,v,{attachmentId:row.id,version:v.number});
         return result;
       }
+      requireIntactText(v);
       audit(action,doc,v,{hash:v.contentHash,version:v.number});
       return {id:doc.id,kind:doc.kind,version:redactVersion(v),text:v.content,filename:'synthetic-'+doc.kind+'-v'+v.number+'.txt'};
     }
@@ -129,6 +136,7 @@ function change(s,parts,actor,body,event){
         audit(action,doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
         return;
       }
+      if(action==='submit'||action==='publish')requireIntactText(v);
       if(action==='submit'){v.status='review';v.reviewNote=null}
       if(review){
         if(v.authoredBy===actor)issue(403,'INDEPENDENT_REVIEW_REQUIRED','The author cannot review the same revision.');
@@ -156,7 +164,7 @@ function policyEdition(state,document,edition){
   const doc=docsOf(state).documents.find(x=>x.kind==='policy'&&x.id===document);
   const v=doc?.revisions.find(x=>x.id===edition&&x.status==='published');
   if(!v)return null;
-  if(digest(v.content)!==v.contentHash)issue(409,'EDITION_UNAVAILABLE','Published policy integrity check failed.');
+  if(!intactText(v))issue(409,'EDITION_UNAVAILABLE','Published policy integrity check failed.');
   return {document:doc.id,edition:v.id,number:v.number,hash:v.contentHash,title:v.title,text:v.content};
 }
 function listPolicyEditions(state){
