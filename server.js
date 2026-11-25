@@ -21,6 +21,7 @@ const staticFiles = new Map([
   ['/governance-docs-ui.js',['governance-docs-ui.js','text/javascript; charset=utf-8']],
   ['/work-queue-ui.js',['work-queue-ui.js','text/javascript; charset=utf-8']],
   ['/vendor-monitoring-ui.js',['vendor-monitoring-ui.js','text/javascript; charset=utf-8']],
+  ['/audit-management-ui.js',['audit-management-ui.js','text/javascript; charset=utf-8']],
   ['/risk-controls-ui.js',['risk-controls-ui.js','text/javascript; charset=utf-8']],
   ['/retention-ui.js',['retention-ui.js','text/javascript; charset=utf-8']],
   ['/privacy-notices-ui.js',['privacy-notices-ui.js','text/javascript; charset=utf-8']],
@@ -29,6 +30,7 @@ const staticFiles = new Map([
   ['/incident-ui.js',['incident-ui.js','text/javascript; charset=utf-8']],
   ['/rights-ui.js',['rights-ui.js','text/javascript; charset=utf-8']],
   ['/modules-ui.js',['modules-ui.js','text/javascript; charset=utf-8']],
+  ['/mvw-horizon.svg',['mvw-horizon.svg','image/svg+xml']],
   ['/styles.css',['styles.css','text/css; charset=utf-8']],
   ['/style.css',['style.css','text/css; charset=utf-8']]
 ]);
@@ -149,6 +151,13 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       if (req.method==='GET'&&pathname==='/api/governance-documents') return send(res,200,store.getDocuments(actor));
       if (req.method==='GET'&&pathname==='/api/vendor-monitoring') return send(res,200,store.getVendorMonitoring());
+      if(pathname==='/api/audit-management'||pathname.startsWith('/api/audit-management/')){
+        if(access&&!['analyst','reviewer'].includes(actor))return send(res,403,{error:'An audit analyst or reviewer is required.'});
+        if(req.method==='GET'&&pathname==='/api/audit-management') return send(res,200,store.getAuditManagement());
+        const report=pathname.match(/^\/api\/audit-management\/plans\/([a-f0-9-]{36})\/report$/);
+        if(req.method==='GET'&&report)return send(res,200,store.getAuditReport(report[1]),undefined,
+          {'Content-Disposition':'attachment; filename="synthetic-audit-'+report[1]+'.json"'});
+      }
       if (req.method==='GET'&&pathname==='/api/risk-controls') return send(res,200,store.getRiskControls());
       if (req.method==='GET'&&pathname==='/api/risk-controls/export') return send(res,200,{schemaVersion:1,mode,
         program:store.getRiskControls(),audit:store.getProgramAudit('risk-controls')},undefined,

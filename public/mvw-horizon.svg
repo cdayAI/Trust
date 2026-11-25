@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="400" viewBox="0 0 1000 400" fill="none">
+  <defs>
+    <linearGradient id="rim" x1="406" y1="336" x2="872" y2="46" gradientUnits="userSpaceOnUse"><stop stop-color="#72D4E3" stop-opacity="0"/><stop offset=".53" stop-color="#76D6ED" stop-opacity=".65"/><stop offset="1" stop-color="#FAAA91" stop-opacity=".9"/></linearGradient>
+    <radialGradient id="warm"><stop stop-color="#F88D72" stop-opacity=".6"/><stop offset="1" stop-color="#F88D72" stop-opacity="0"/></radialGradient>
+    <radialGradient id="cool"><stop stop-color="#75D0F9" stop-opacity=".62"/><stop offset="1" stop-color="#75D0F9" stop-opacity="0"/></radialGradient>
+    <linearGradient id="glass" x1="557" y1="400" x2="906" y2="31" gradientUnits="userSpaceOnUse"><stop stop-color="#3F86C4" stop-opacity="0"/><stop offset=".56" stop-color="#7EC6EF" stop-opacity=".15"/><stop offset="1" stop-color="#FBC8B1" stop-opacity=".21"/></linearGradient>
+  </defs>
+  <ellipse cx="844" cy="10" rx="348" ry="250" fill="url(#warm)"/>
+  <ellipse cx="868" cy="328" rx="442" ry="274" fill="url(#cool)"/>
+  <path d="M438 413C533 285 595 206 708 183c94-20 193 12 304-108v230c-67 26-139 21-209 19-101-3-200 24-270 89H438Z" fill="url(#glass)" stroke="url(#rim)" stroke-width="1.4"/>
+  <path d="M464 415c84-118 156-187 258-206 104-20 198 13 289-94M498 415c77-93 141-155 241-174 85-16 181 7 271-83M538 415c62-69 130-124 222-139 79-13 161 8 250-67" stroke="url(#rim)" stroke-opacity=".54"/>
+  <circle cx="839" cy="105" r="63" stroke="#FDE1D6" stroke-opacity=".4"/><circle cx="839" cy="105" r="47" stroke="#FFF8EF" stroke-opacity=".31"/>
+  <path d="M839 28v154m-77-77h154" stroke="#F6F2FF" stroke-opacity=".22"/>
+</svg>

@@ -130,9 +130,20 @@ function renderReport(){
   pane.replaceChildren(head,output,activity);
 }
 function switchView(view){
+  const item=$('#show-'+view);
+  $('#view-title').textContent=view==='assessments'?'Assessment workspace':item.textContent;
+  $('#view-description').textContent=view==='assessments'?
+    'Manage project and vendor reviews, then verify an independent approval.':
+    'Review and manage synthetic records in this local workspace.';
+  $('#workspace-metrics').hidden=view!=='assessments';
+  $('#mobile-nav').setAttribute('aria-expanded','false');
+  $('#work-tabs').classList.remove('open');
+  if(window.matchMedia('(max-width: 760px)').matches&&item.contains(document.activeElement))
+    $('#view-title').setAttribute('tabindex','-1'),$('#view-title').focus();
+
   moduleActive=view==='modules';reportActive=view==='report';
-  overview.hidden=view!=='assessments';mview.hidden=!moduleActive;$('#report-view').hidden=!reportActive;$('#rights-view').hidden=view!=='rights';$('#incident-view').hidden=view!=='incidents';$('#data-map-view').hidden=view!=='data-map';$('#dictionary-view').hidden=view!=='dictionary';$('#preferences-view').hidden=view!=='preferences';$('#retention-view').hidden=view!=='retention';$('#risk-controls-view').hidden=view!=='risk-controls';$('#vendor-monitoring-view').hidden=view!=='vendor-monitoring';$('#queue-view').hidden=view!=='queue';$('#governance-docs-view').hidden=view!=='governance-docs';$('#trust-center-view').hidden=view!=='trust-center';$('#employee-attestations-view').hidden=view!=='employee-attestations';$('#workflow-studio-view').hidden=view!=='workflow-studio';
-  for(const name of ['assessments','rights','incidents','data-map','dictionary','preferences','retention','risk-controls','vendor-monitoring','queue','governance-docs','trust-center','employee-attestations','workflow-studio','modules','report']){
+  overview.hidden=view!=='assessments';mview.hidden=!moduleActive;$('#report-view').hidden=!reportActive;$('#rights-view').hidden=view!=='rights';$('#incident-view').hidden=view!=='incidents';$('#data-map-view').hidden=view!=='data-map';$('#dictionary-view').hidden=view!=='dictionary';$('#preferences-view').hidden=view!=='preferences';$('#retention-view').hidden=view!=='retention';$('#risk-controls-view').hidden=view!=='risk-controls';$('#audit-management-view').hidden=view!=='audit-management';$('#vendor-monitoring-view').hidden=view!=='vendor-monitoring';$('#queue-view').hidden=view!=='queue';$('#governance-docs-view').hidden=view!=='governance-docs';$('#trust-center-view').hidden=view!=='trust-center';$('#employee-attestations-view').hidden=view!=='employee-attestations';$('#workflow-studio-view').hidden=view!=='workflow-studio';
+  for(const name of ['assessments','rights','incidents','data-map','dictionary','preferences','retention','risk-controls','audit-management','vendor-monitoring','queue','governance-docs','trust-center','employee-attestations','workflow-studio','modules','report']){
     const b=$('#show-'+name),on=view===name;
     b.setAttribute('aria-current',String(on));b.classList.toggle('secondary',!on);
   }
@@ -156,6 +167,8 @@ function switchView(view){
     $('#retention-view').replaceChildren(el('p','Loading retention…'));refreshRetention();
   }else if(view==='risk-controls'){
     $('#risk-controls-view').replaceChildren(el('p','Loading risk and controls…'));refreshRiskControls();
+  }else if(view==='audit-management'){
+    $('#audit-management-view').replaceChildren(el('p','Loading audit plans…'));refreshAuditManagement();
   }else if(view==='vendor-monitoring'){
     $('#vendor-monitoring-view').replaceChildren(el('p','Loading vendor monitoring…'));refreshVendors();
   }else if(view==='queue'){

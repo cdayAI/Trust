@@ -15,11 +15,12 @@ const employee = require('./employee-attestations');
 const preferences = require('./privacy-notices');
 const retention = require('./retention-workflow');
 const riskControls = require('./risk-controls');
+const auditManagement = require('./audit-management');
 const vendorMonitoring = require('./vendor-monitoring');
 const documents = require('./governance-documents');
 const programs=new Map([
   ['dictionary',dictionary],['trust-center',trustCenter],['rights',rights],['incidents',incidents],['data-map',dataMap],
-  ['privacy-notices',preferences],['retention',retention],['risk-controls',riskControls],['vendor-monitoring',vendorMonitoring],['governance-documents',documents]
+  ['privacy-notices',preferences],['retention',retention],['risk-controls',riskControls],['audit-management',auditManagement],['vendor-monitoring',vendorMonitoring],['governance-documents',documents]
 ]);
 const actors = [
   {id:'analyst',name:'Alex Morgan',role:'analyst'},
@@ -243,6 +244,8 @@ function openStore(file,{empty=false}={}) {
     getPreferences:()=>preferences.view(state),
     getRetention:()=>retention.view(state),
     getRiskControls:()=>riskControls.view(state),
+    getAuditManagement:()=>auditManagement.view(state),
+    getAuditReport:id=>auditManagement.report(state,id),
     getVendorMonitoring:()=>vendorMonitoring.view(state),
     getProgramAudit:prefix=>state.audit.filter(e=>e.action.startsWith(prefix+'.')),
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
@@ -267,7 +270,7 @@ function openStore(file,{empty=false}={}) {
         if(!result.changed)return {result,map:dataMap.view(state)};
         commit();return {result,map:dataMap.view(state)};
       } else if(program){
-        try{result=program.change(next,parts,actor,body,event,createVendorAssessments);}
+        try{result=program.change(next,parts,actor,body,event,createVendorAssessments,account);}
         catch(error){
           if(error.persistRefusal)commit();
           throw error;

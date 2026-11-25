@@ -77,7 +77,7 @@ test('browser smoke: synthetic intake to independent approval, mock retry and au
     }
     await page.getByLabel('Demo identity').selectOption('analyst');
     await page.getByRole('button', { name: 'Send mock handoff' }).click();
-    await page.getByText(/MOCK_TIMEOUT/).waitFor();
+    await page.locator('p.error').filter({hasText:/MOCK_TIMEOUT/}).waitFor();
     await page.getByRole('button', { name: 'Retry mock handoff' }).click();
     await page.getByText(/^Mock receipt:/).waitFor();
     const [download] = await Promise.all([
@@ -140,7 +140,7 @@ test('browser smoke: synthetic intake to independent approval, mock retry and au
     await page.getByRole('heading',{name:'Lineage for Fictional fixture system'}).waitFor();
     assert.equal(await page.locator('#lineage-output').getByText('None',{exact:true}).count(),2);
     await page.getByRole('button',{name:'Privacy notices',exact:true}).click();
-    await page.getByRole('heading',{name:'Privacy notices',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Privacy notices',exact:true,level:1}).waitFor();
     await page.getByText('No privacy notices yet.',{exact:true}).waitFor();
     await page.getByRole('button',{name:'Retention',exact:true}).click();
     await page.getByRole('heading',{name:'Retention and holds',exact:true}).waitFor();
@@ -167,7 +167,7 @@ test('browser smoke: synthetic intake to independent approval, mock retry and au
     await page.getByRole('button',{name:'Open linked assessments',exact:true}).click();
     await page.getByRole('heading',{name:'HarborDesk',exact:true}).waitFor();
     await page.getByRole('button',{name:'Work queue',exact:true}).click();
-    await page.getByRole('heading',{name:'Work queue',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Work queue',exact:true,level:2}).waitFor();
     await page.getByLabel('Workflow filter').selectOption('vendor-monitoring');
     await page.getByRole('button',{name:'Apply filters',exact:true}).click();
     await page.getByRole('button',{name:/Open record: HarborDesk.*Collect cycle evidence/}).click();
@@ -207,6 +207,7 @@ test('browser smoke: isolated sign-in, selected workspace, reload and sign-out',
   const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
   try{
     const page=await browser.newPage();
+    page.setDefaultTimeout(6500);
     const errors=[];
     page.on('pageerror',e=>errors.push(e.message));
     await page.goto('http://127.0.0.1:'+server.address().port);
@@ -228,8 +229,8 @@ test('browser smoke: isolated sign-in, selected workspace, reload and sign-out',
     await page.getByText('pilot-user · reviewer').waitFor();
     assert.equal(await page.getByRole('heading',{name:'Synthetic Alpha project'}).count(),0);
     assert.equal(await page.getByRole('button',{name:'Create project'}).isDisabled(),true);
-    const restricted=await page.request.get(oldPath.startsWith('/')?new URL(oldPath,page.url()).href:oldPath);
-    assert.equal(restricted.status(),403);
+    const restricted=await page.evaluate(async path=>(await fetch(path)).status,oldPath);
+    assert.equal(restricted,403);
     await page.getByRole('button',{name:'Sign out'}).click();
     await page.getByRole('heading',{name:'Sign in to a local workspace'}).waitFor();
     assert.deepEqual(errors,[]);
@@ -429,6 +430,43 @@ test('browser smoke: publish a structured fictional workflow and launch its pinn
     await page.getByRole('button',{name:'Run submit-for-review'}).click();
     await page.getByLabel('Workflow demo identity').selectOption('reviewer');
     await page.getByRole('button',{name:'Run approve'}).waitFor();
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close()}
+});
+
+test('browser smoke: MVW Trust desktop and mobile shell, solid surfaces and audit navigation',{
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright installed',timeout:30_000,
+},async t=>{
+  const {chromium}=require('playwright');
+  const dir=await mkdtemp(join(tmpdir(),'mvw-brand-browser-'));
+  const server=createServer({dataFile:join(dir,'state.json')}).listen(0,'127.0.0.1');
+  await once(server,'listening');
+  t.after(async()=>{server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await rm(dir,{recursive:true,force:true})});
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  try{
+    const url='http://127.0.0.1:'+server.address().port,errors=[];
+    const desktop=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
+    desktop.on('pageerror',e=>errors.push(e.message));
+    desktop.setDefaultTimeout(6000);
+    await desktop.goto(url);
+    await desktop.getByRole('heading',{name:'Assessment workspace'}).waitFor();
+    assert.equal(await desktop.locator('#workspace-metrics strong').count(),3);
+    assert.equal(await desktop.evaluate(()=>document.documentElement.scrollWidth),1440);
+    await desktop.getByRole('button',{name:'Solid surfaces'}).click();
+    assert.equal(await desktop.getByRole('button',{name:'Solid surfaces'}).getAttribute('aria-pressed'),'true');
+    assert.equal(await desktop.locator('.workspace-nav').evaluate(e=>getComputedStyle(e).backdropFilter),'none');
+    await desktop.getByRole('button',{name:'Audit management',exact:true}).click();
+    await desktop.getByText('No audit plans yet.').waitFor();
+    const mobile=await browser.newPage({viewport:{width:390,height:844},isMobile:true,hasTouch:true});
+    mobile.setDefaultTimeout(6000);
+    mobile.on('pageerror',e=>errors.push(e.message));
+    await mobile.goto(url);
+    await mobile.getByRole('heading',{name:'Assessment workspace'}).waitFor();
+    assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth),390);
+    await mobile.getByRole('button',{name:'Browse workspace'}).click();
+    await mobile.getByRole('button',{name:'Privacy rights',exact:true}).click();
+    await mobile.getByRole('heading',{name:'Privacy rights',level:1}).waitFor();
+    assert.equal(await mobile.getByRole('button',{name:'Browse workspace'}).getAttribute('aria-expanded'),'false');
     assert.deepEqual(errors,[]);
   }finally{await browser.close()}
 });

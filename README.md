@@ -1,6 +1,6 @@
-# Trust
+# MVW Trust
 
-A work-in-progress, local-only privacy operations prototype with synthetic fixtures. It is not a production release. Use fictional records only.
+A work-in-progress privacy operations prototype with synthetic fixtures. It is not an official Marriott Vacations Worldwide service or a production release. Use fictional records only.
 
 ## Run
 
@@ -48,6 +48,18 @@ For local API tests, non-session endpoints require `?workspace=<active-id>`
 and the issued cookie. Writes also require the exact loopback origin and JSON.
 Sign-in is `POST /api/session/login` with `account`, `workspace`, and `code`;
 the browser handles the resulting cookie. See `test/workspace-access.test.js`.
+
+## Interface
+
+The web workbench uses a Liquid Glass-inspired visual system for the
+navigation, summary cards, and important controls, while keeping task forms
+and tables on opaque surfaces. Reduced transparency and motion settings are
+respected; the toolbar also offers **Solid surfaces**. The product mark and
+horizon illustration are original prototype artwork. Color direction is
+informed by the public [Marriott Vacations Worldwide corporate site](https://www.marriottvacationsworldwide.com/);
+this is not an approved corporate brand kit.
+
+See [enterprise readiness](ENTERPRISE-READINESS.md) for the outstanding gates.
 
 ## Verify
 

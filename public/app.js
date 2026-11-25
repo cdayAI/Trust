@@ -98,9 +98,20 @@ function renderAssessment(parent,a){
   }
   parent.append(card);
 }
+function renderWorkspaceMetrics(){
+  const overview=$('#workspace-metrics');
+  if(!state||overview.hidden)return;
+  const cards=[
+    ['Projects',state.projects.length,'Synthetic workspace records'],
+    ['In review',state.assessments.filter(x=>x.status==='in_review').length,'Awaiting independent review'],
+    ['Approved',state.assessments.filter(x=>x.status==='approved').length,'Recorded assessment decisions']
+  ];
+  overview.replaceChildren(...cards.map(([label,count,caption])=>add(el('div',undefined,'workspace-metric'),el('span',label),el('strong',String(count)),el('small',caption))));
+}
 function render(){
+  renderWorkspaceMetrics();
   const role=$('#actor');if(!localSession){role.replaceChildren(...state.actors.map(a=>{const o=el('option',a.name);o.value=a.id;return o}));role.value=actor;
-  role.onchange=()=>{actor=role.value;notice('');render()};}
+  }
   selected=state.projects.some(p=>p.id===selected)?selected:state.projects[0]?.id;
   const projects=$('#projects');projects.replaceChildren();
   for(const p of state.projects){const b=button(p.name,'button','secondary');if(p.id===selected)b.setAttribute('aria-current','true');b.onclick=()=>{selected=p.id;notice('');render()};projects.append(b)}
@@ -197,5 +208,24 @@ async function start(){
     $('#local-error').textContent='Unable to load workbench: '+error.message;
   }
 }
+// Update the shared role before view-specific listeners render.
+$('#actor').addEventListener('change',event=>{
+  if(localSession||!state)return;
+  actor=event.currentTarget.value;
+  notice('');
+  render();
+});
 start();
 
+
+$('#glass-toggle').onclick=event=>{
+  const button=event.currentTarget;
+  const enabled=document.body.classList.toggle('solid-surfaces');
+  button.setAttribute('aria-pressed',String(enabled));
+};
+$('#mobile-nav').onclick=event=>{
+  const button=event.currentTarget;
+  const open=button.getAttribute('aria-expanded')!=='true';
+  button.setAttribute('aria-expanded',String(open));
+  $('#work-tabs').classList.toggle('open',open);
+};

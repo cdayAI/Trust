@@ -30,7 +30,7 @@ This table describes the standalone local prototype, not production readiness or
 | Trust center | Partial: versioned bundled synthetic cards, independent review, explicit local publication and withdrawal, and a separate visitor projection. No public deployment, authentication for real visitors, evidence exchange, customer self-service, or browser verification. |
 | Users and groups | Partial: synthetic local sessions authenticate accounts, select verified workspace memberships and segregate records and exports. No groups, fine-grained policies, production authentication or browser verification. |
 | Platform home and tasks | Partial: shared read-only queue derived from seven actual workflow families, owner/workflow/timing filters and record navigation. No notifications or verified browser run. |
-| Audit management | not built. Audit event export is not this module. |
+| Audit management | Partial: scoped synthetic audit plans, versioned assessed evidence, structured findings, independent finalization and immutable report export. No external audit or actual assurance. |
 | Helpline and ethics cases | not built. |
 | Maturity and planning | not built. |
 | Policy and notice management offering | Shared local policy and notice pieces exist; no verified parity with the separate offering. |
