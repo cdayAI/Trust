@@ -13,39 +13,59 @@ describe it as ready for production based on local tests or design quality.
 | Workflow acceptance | Verified enterprise requirements and acceptance evidence for the scoped workflows, permission failures, rework, expiration and escalation. Tracking and consent management are not in scope. |
 | Integrations and rollout | Written approval for authorized connectors and approved design assets, isolated QA in the receiving environment, staged rollout, rollback plan and sign-off from accountable owners. |
 
-Current baseline: synthetic local workflows, local account isolation, optional
-local transactional SQLite with tested migration and recovery, mock handoff,
-and no live deployment. Production storage, encryption, and recovery
-objectives remain outstanding. The design prototype uses
-public identity cues, not an official corporate brand kit.
+Current baseline: an isolated, synthetic local workbench with transactional
+SQLite, a receiving rehearsal and restore checks, mock handoff, and no live
+deployment. The design uses public identity cues, not an official corporate
+brand kit. A successful local rehearsal is evidence for a specific workflow,
+not approval to use corporate data, infrastructure, or identity accounts.
 
 ## Evidence from the local release
 
-- **Data and recovery:** The opt-in SQLite backend has restart, concurrent
-  command, backup integrity, isolated restore, and offline migration rehearsal
-  tests, including read-only reconciliation of a restored synthetic import.
-  Real platform mappings, managed encrypted backups, and an agreed
-  recovery objective are still separate.
+- **Data and recovery:** The SQLite backend has restart, concurrent command,
+  backup integrity, and isolated restore checks. The [receiving rehearsal](MIGRATION-REHEARSAL.md)
+  revalidates an untouched synthetic import and opens an editable scratch copy
+  without changing the source. [Optional encrypted offline archives](DURABLE-STORAGE.md)
+  use a private POSIX key file. They do not encrypt the restored database or
+  replace managed backup, key rotation, and recovery objectives.
 - **Authorization:** Local workspace isolation, role denials, account
   revocation, group grants, and exact-edition document grants are covered.
-  Grants do not silently carry across document versions. OpenID Connect
-  is exercised against a local identity fixture; company tenant federation
-  and broad record/field-level policy still require validation.
+  Grants do not silently carry across document versions. An optional
+  [restricted reviewer seat](DOCUMENT-REVIEW-SEATS.md) can review only assigned
+  text-only editions, not manage other queues. OpenID Connect is exercised
+  against a local identity fixture. Corporate federation, multi-seat staffing,
+  and broad record- and field-level policy still require validation.
 - **Documents:** Real Chromium covers multi-select, drag-and-drop,
   all-or-nothing validation, and byte-exact downloads for supported formats.
   An opt-in quarantine blocks pending or rejected bytes and requires a
   separate reviewer before release. Structural validation and manual review
   are not malware scanning or a production evidence retention policy.
 - **Workflows:** Scoped assessments, rights, incidents, audits, processing,
-  training, disclosures, and more have independent review and role checks.
-  The local operator jobs implement a narrow authorized and audited subset.
-  No external transmission or real corporate decisions are simulated as real.
+  training and disclosures have independent review and role checks. Staff can
+  rehearse [redacted fictional retrieval](RIGHTS-RETRIEVAL.md); it neither
+  retrieves real records nor bypasses requester release. The opt-in local
+  [report worker](REPORTING.md) processes approved named schedules without
+  outbound delivery; manual approvals remain manual. [Offline audit checks](AUDIT-VERIFICATION.md)
+  verify bytes and references, not signer identity or authenticity.
 - **Operator experience:** The role-specific Home links to scoped live queues and
   operational views. Case operators see their assigned work only.
-- **Verification:** [Browser acceptance](BROWSER-ACCEPTANCE.md) distinguishes
-  controls that were exercised from controls merely observed. Hosted CI,
-  additional browser engines/devices, screen readers, and all populated/error
-  variants need their own evidence.
+- **Verification:** [Browser acceptance](BROWSER-ACCEPTANCE.md) and the
+  [isolated navigation audit](BROWSER-ISOLATED-RELEASE-ACCEPTANCE.md) distinguish
+  controls exercised from controls merely observed. Linux CI runs Chromium and
+  synthetic HTTPS sign-in; Windows CI checks scripted PowerShell/SQLite startup.
+  These are separate checks. Interactive Windows use, additional browsers and
+  devices, screen readers, and untested data/error states need their own evidence.
+
+## What to decide before a private pilot
+
+1. Name the approved private host, pilot audience, owner and disposable dataset.
+   Keep sample data isolated; do not reuse a work identity or secret.
+2. Confirm the permitted workflows, their owners, the cases that must be
+   denied, and who can independently approve the pilot. Record unresolved
+   workflow and migration differences instead of inferring parity.
+3. Select the required sign-in, backup, restore, monitoring and rollback
+   checks for that environment. Record actual results and the tested build.
+4. Authorize any additional connector, real data or distribution separately.
+   A local package or a green CI job is not a running pilot.
 
 Use [Local release](LOCAL-RELEASE.md) to build a runnable source archive and
 [Operations](OPERATIONS.md) to exercise startup, probes, and recovery privately.

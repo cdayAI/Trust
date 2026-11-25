@@ -2,7 +2,7 @@
 
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { mkdir, mkdtemp, rm, symlink, writeFile } = require('node:fs/promises');
+const { mkdir, mkdtemp, rm, symlink, truncate, writeFile } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { checkRuntime } = require('../scripts/runtime-check');
@@ -41,4 +41,21 @@ test('source release hashes the explicit inventory and refuses unsafe and privat
     await setInventory(['shortcut.md']);
     assert.throws(() => sourceManifest(room), /regular source file/);
   }
+});
+
+test('release inventory supports more than 250 explicit source files within bounded count and total bytes', async t => {
+  const room = await mkdtemp(join(tmpdir(), 'trust-release-capacity-'));
+  t.after(() => rm(room, { recursive: true, force: true }));
+  await mkdir(join(room, 'scripts'));
+  await writeFile(join(room, 'package.json'), JSON.stringify({ name: 'test', version: '0.0.0', private: true, engines: { node: '>=22.13.0' } }));
+  const names = Array.from({ length: 512 }, (_, i) => 'fictional-' + i + '.md');
+  const setInventory = files => writeFile(join(room, 'scripts', 'release-files.json'), JSON.stringify(['package.json', ...files]));
+  for (const name of names.slice(0, 250)) await writeFile(join(room, name), 'Synthetic fixture\n');
+  await setInventory(names.slice(0, 250));
+  assert.equal(sourceManifest(room).manifest.files.length, 251);
+  await setInventory(names);
+  assert.throws(() => sourceManifest(room), /Invalid release inventory/);
+  await setInventory(names.slice(0, 8));
+  for (const name of names.slice(0, 8)) await truncate(join(room, name), 4 * 1024 * 1024);
+  assert.throws(() => sourceManifest(room), /32 MiB total input limit/);
 });

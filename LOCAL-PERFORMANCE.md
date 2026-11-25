@@ -95,3 +95,32 @@ after four warm-ups, median click-to-queue was 127.8 ms before and 82.7 ms
 after; p95 was 157.1 and 114.9 ms. Timings are illustrative local samples,
 not production or vendor benchmarks. The server still derives and sorts
 the complete matching queue to preserve counts and cursor consistency.
+
+
+## Bounded SQLite resilience proof
+
+```sh
+npm run --silent verify:resilience
+```
+
+This opt-in verification executes **100 named operations**, not 100 platform
+passes. It creates two isolated fictional workspaces, six throwaway staff
+sessions, temporary SQLite files, and its own ephemeral loopback listener.
+It does not accept an endpoint, database, data or credential arguments.
+The operation sequence is fixed; random fixture IDs and generated session
+tokens vary between runs and are never printed. Scratch data is removed on
+normal completion or failure. The 25-second watchdog is a local bound, not
+a performance SLA.
+
+Five scenarios verify role and tenant fences, independent rights and stale
+actions, idempotent job assignment, exact evidence and quarantine/hold rules,
+and controlled close/reopen/checkpoint recovery. The report shows status
+codes, expected denials, and elapsed times per scenario and named step.
+Each startup check includes its own readiness probe inside that local step.
+A restore is intentionally from before two legitimate writes; both survive
+restart of the original file, and neither appears in the restored file.
+The restore also preserves the expected audit order, evidence bytes, and
+receipts without leaking across workspaces.
+
+Neither the workbench nor any result claims a security audit, performance
+target, production failover, or recovery point objective.

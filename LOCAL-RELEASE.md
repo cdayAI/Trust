@@ -152,7 +152,9 @@ archive contains `RELEASE-MANIFEST.json`, with an explicit per-file SHA-256 and
 size for the package sources excluding the manifest itself. The manifest and
 archive checksum are not signatures. The source list deliberately excludes data,
 configuration secrets, local access codes, database artifacts, browser
-binaries and dependency directories. Two builds from identical bytes and the
+binaries and dependency directories. The input is bounded to 512 explicitly
+listed regular source files, 4 MiB per file and 32 MiB total before packaging.
+Two builds from identical bytes and the
 same toolchain should compare byte for byte; CI verifies this and runs startup
 from the extracted source. Maintain `scripts/release-files.json` when adding
 runtime, documentation, or test files that need to ship.

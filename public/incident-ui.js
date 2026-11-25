@@ -8,21 +8,30 @@ const incAction={
   'plan-notice':'Record mock notice plan',close:'Close incident'
 };
 const capitalize=s=>s[0].toUpperCase()+s.slice(1).replaceAll('-',' ');
-async function refreshIncidents(){
+async function refreshIncidents(focusId){
   const seq=++incidentSeq;
   try {
     const model=await read(incidentsPath);
-    if(seq===incidentSeq&&!incidentPane.hidden){incidentData=model;renderIncidents()}
+    if(seq===incidentSeq&&!incidentPane.hidden){
+      incidentData=model;renderIncidents();
+      if(typeof focusId==='string'){
+        const target=document.getElementById(focusId);
+        const heading=target?.matches('article')?target.querySelector('h3'):target;
+        if(heading&&incidentPane.contains(heading)){heading.tabIndex=-1;heading.focus()}
+      }
+    }
   }catch(error){
     if(seq===incidentSeq&&!incidentPane.hidden){incidentPane.replaceChildren(el('p','Incidents could not be loaded.'));notice(error.message,true)}
   }
 }
 function incidentForm(parent,path,fields,caption,revision,payload=raw=>raw){
-  const form=add(el('form'),...fields,button(caption,'submit'));
+  const save=button(caption,'submit'),form=add(el('form'),...fields,save);
+  let conflict;
   form.onsubmit=async evt=>{
     evt.preventDefault();
     if(busy)return;
-    busy=true;const save=form.querySelector('button'),seq=incidentSeq,identity=actor;save.disabled=true;
+    busy=true;const seq=incidentSeq,identity=actor;save.disabled=true;
+    conflict?.remove();
     try{
       const body=payload(Object.fromEntries(new FormData(form)));
       if(revision!==undefined)body.expectedRevision=revision;
@@ -32,19 +41,24 @@ function incidentForm(parent,path,fields,caption,revision,payload=raw=>raw){
       }
     }catch(error){
       if(seq===incidentSeq&&identity===actor&&!incidentPane.hidden){
-        notice(error.message,true);
         if(error.status===409&&error.message.includes('Reload')){
+          notice('');
+          const alert=el('p',error.message,'error');
+          alert.setAttribute('role','alert');alert.tabIndex=-1;
           const reload=button('Reload incidents','button','secondary');
-          reload.onclick=async()=>{notice('');await refreshIncidents()};
-          $('#notice').append(document.createTextNode(' '),reload);
-        }
+          const focusId=parent.closest('article[id]')?.id??'incident-policy-heading';
+          reload.onclick=()=>refreshIncidents(focusId);
+          conflict=add(el('div'),alert,reload);form.append(conflict);
+          alert.focus();
+        }else notice(error.message,true);
       }
     }finally{busy=false;save.disabled=false}
   };
   parent.append(form);
 }
 function policyPanel(policy){
-  const section=add(el('section'),heading('Synthetic incident workflow policy'),
+  const title=heading('Synthetic incident workflow policy');title.id='incident-policy-heading';
+  const section=add(el('section'),title,
     el('p','Policy windows are internal simulation targets, not legal deadlines. Nothing sends a notice. Cases keep the policy version that was active when they opened.'));
   const last=policy.releases.at(-1);
   section.append(el('p',policy.activeVersion?'Active policy version '+policy.activeVersion:'Built-in routing is active. No configurable policy is published.'));

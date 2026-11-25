@@ -15,6 +15,7 @@
     "start:corporate": "node start-corporate.js",
     "test:corporate": "node --test oidc/signin-check.js",
     "storage": "node storage-cli.js",
+    "verify:resilience": "node scripts/verify-sqlite-resilience.js",
     "verify:runtime": "node scripts/runtime-check.js",
     "verify:startup": "node scripts/smoke-local.js",
     "test:browser": "node scripts/run-browser-verification.js",

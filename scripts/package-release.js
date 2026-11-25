@@ -9,16 +9,19 @@ const { checkRuntime } = require('./runtime-check');
 
 const maxFileBytes = 4 * 1024 * 1024;
 const maxArchiveBytes = 32 * 1024 * 1024;
+const maxSourceFiles = 512;
+const maxSourceBytes = 32 * 1024 * 1024;
 const root = resolve(__dirname, '..');
 const checksum = buffer => createHash('sha256').update(buffer).digest('hex');
 
-function readSource(directory, relative) {
+function inspectSource(directory, relative) {
   if (typeof relative !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(relative) ||
       relative.split('/').some(segment => !segment || segment.startsWith('.'))) {
     throw new Error('Unsafe release path: ' + relative);
   }
   const parts = relative.split('/');
   let full = directory;
+  let size = 0;
   for (const [i, part] of parts.entries()) {
     full = join(full, part);
     const info = lstatSync(full);
@@ -26,22 +29,40 @@ function readSource(directory, relative) {
       if (!info.isDirectory()) throw new Error('Unsafe release directory: ' + relative);
     } else if (!info.isFile() || info.nlink !== 1 || info.size > maxFileBytes) {
       throw new Error('Release input is not a single-link regular source file: ' + relative);
+    } else {
+      size = info.size;
     }
   }
-  return readFileSync(full);
+  return { full, size };
+}
+
+function readSource(directory, relative) {
+  const { full } = inspectSource(directory, relative);
+  const bytes = readFileSync(full);
+  if (bytes.length > maxFileBytes) throw new Error('Release source grew beyond its per-file limit: ' + relative);
+  return bytes;
 }
 
 function sourceManifest(directory) {
   const declared = JSON.parse(readSource(directory, 'scripts/release-files.json'));
   if (!Array.isArray(declared) || !declared.includes('package.json') ||
-      new Set(declared).size !== declared.length || declared.length > 250) {
+      new Set(declared).size !== declared.length || declared.length > maxSourceFiles) {
     throw new Error('Invalid release inventory.');
   }
-  const files = declared.sort().map(path => {
+  const paths = declared.sort();
+  let total = 0;
+  for (const path of paths) {
     if (/^(?:data|dist|node_modules)(?:\/|$)|(?:^|\/)(?:node_modules|.*access\.json)(?:\/|$)|\.(?:zip|tgz|sqlite3?|db)(?:$|-)/i.test(path)) {
       throw new Error('Runtime data must not be included in the release: ' + path);
     }
+    total += inspectSource(directory, path).size;
+    if (total > maxSourceBytes) throw new Error('Release source exceeds the 32 MiB total input limit.');
+  }
+  let loaded = 0;
+  const files = paths.map(path => {
     const bytes = readSource(directory, path);
+    loaded += bytes.length;
+    if (loaded > maxSourceBytes) throw new Error('Release source exceeds the 32 MiB total input limit.');
     if (bytes.includes(0)) throw new Error('Only source and documentation text is packaged: ' + path);
     return { path, bytes };
   });
