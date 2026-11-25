@@ -11,17 +11,34 @@ function ethicsSelect(label,name,values){
   }
   return add(el('label',label),input);
 }
-async function refreshEthics(){
+function focusEthicsQueue(caseId){
+  const card=caseId?document.getElementById('ethics-case-'+caseId):null;
+  const title=card?.querySelector('h3')??$('#ethics-queue-heading');
+  if(title){title.tabIndex=-1;title.focus();}
+}
+function offerEthicsReload(message,caseId,focus){
+  notice(message,true);
+  const reload=button('Reload ethics cases','button','secondary');
+  reload.onclick=async()=>{notice('');await refreshEthics({caseId,focus:true});};
+  $('#notice').append(document.createTextNode(' '),reload);
+  if(focus)reload.focus();
+}
+async function refreshEthics({caseId,focus=false,failureMessage}={}){
   const marker=++ethicsTicket;
   try{
     const result=await read('/api/ethics/cases');
-    if(marker===ethicsTicket&&!ethicsView.hidden)renderEthics(result);
+    if(marker===ethicsTicket&&!ethicsView.hidden){
+      renderEthics(result);
+      if(focus)focusEthicsQueue(caseId);
+      return true;
+    }
   }catch(error){
     if(marker===ethicsTicket&&!ethicsView.hidden){
       ethicsView.replaceChildren(el('p','Synthetic ethics cases could not be loaded.'));
-      notice(error.message,true);
+      offerEthicsReload(failureMessage??error.message,caseId,focus);
     }
   }
+  return false;
 }
 function renderEthics({catalog,role,cases}){
   const investigator=role==='ethics-investigator';
@@ -29,6 +46,7 @@ function renderEthics({catalog,role,cases}){
     el('p','Fictional exercises only. This is not a reporting line. Do not enter a real allegation, identity or evidence.'));
   function form(parent,route,title,controls,fields,after){
     const node=add(el('form'),...controls,button(title,'submit'));
+    const caseId=parent.dataset.ethicsCase;
     node.onsubmit=async event=>{
       event.preventDefault();
       if(busy)return;
@@ -36,16 +54,18 @@ function renderEthics({catalog,role,cases}){
       const submit=node.querySelector('button');submit.disabled=true;
       try{
         const payload=fields(Object.fromEntries(new FormData(node)));
-        await read(route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-        if(!ethicsView.hidden){await refreshEthics();notice(after);}
+        const saved=await read(route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+        if(!ethicsView.hidden&&await refreshEthics({caseId:caseId??saved.case?.id,focus:true,
+          failureMessage:'The change was saved, but the current ethics cases could not be loaded.'}))notice(after);
       }catch(error){
         if(!ethicsView.hidden){
-          notice(error.message,true);
-          if(error.status===409){
-            const reload=button('Reload ethics cases');
-            reload.onclick=()=>{notice('');return refreshEthics();};
-            $('#notice').append(document.createTextNode(' '),reload);
-          }
+          const unreachable=!error.status||error.status>=500;
+          if(error.status===404||error.status===409||unreachable){
+            // Do not keep a previously visible review artifact/action on
+            // screen once the server refuses the view or its revision.
+            if(caseId)parent.replaceChildren(el('p','The saved case view must be reloaded.'));
+            offerEthicsReload(unreachable?'The change could not be confirmed. Reload ethics cases before retrying.':error.message,caseId,true);
+          }else notice(error.message,true);
         }
       }finally{busy=false;submit.disabled=false;}
     };
@@ -57,12 +77,16 @@ function renderEthics({catalog,role,cases}){
       ethicsSelect('Fictional intake priority','urgency',catalog.urgency)
     ],values=>values,'Synthetic intake opened.');
   }
-  const list=add(el('section'),heading(investigator?'Assigned synthetic cases':'Independent synthetic review queue'));
+  const queueTitle=heading(investigator?'Assigned synthetic cases':'Independent synthetic review queue');
+  queueTitle.id='ethics-queue-heading';
+  const list=add(el('section'),queueTitle);
   if(!cases.length)list.append(el('p',investigator?'No synthetic cases yet.':'No case has been submitted for independent review.'));
   for(const c of cases){
     const panel=add(el('article',undefined,'module-record'),
       el('h3','ETH-'+c.number+' · '+catalog.categories[c.category]),
       el('p',catalog.statuses[c.status]+' · '+catalog.urgency[c.urgency]+' · Revision '+c.revision));
+    panel.dataset.ethicsCase=c.id;
+    panel.id='ethics-case-'+c.id;
     if(c.route)panel.append(el('p','Review path: '+catalog.routes[c.route]));
     const path='/api/ethics/cases/'+c.id+'/';
     const withVersion=values=>({...values,expectedRevision:c.revision});

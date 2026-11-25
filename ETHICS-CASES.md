@@ -4,7 +4,7 @@ This is an operator exercise, not a reporting line. Never use real reports,
 allegations, identities or evidence. There is no public form, file field,
 free-form intake, contact mechanism, external transport or actual investigation.
 
-With `npm run start:isolated`, use the separate synthetic investigator and
+With `npm run start:release` or `npm run start:isolated`, use the separate synthetic investigator and
 reviewer seats in Fictional Harbor:
 
 1. An investigator opens a fictional case using an enumerated category and
@@ -24,8 +24,11 @@ The role check is separate from general program and global audit permissions.
 Investigators only see their assigned exercises. Reviewers see exercises only
 after submission or closure, not intake, fieldwork or returned drafts.
 Accepted decisions and findings persist with the case in JSON or SQLite.
-The feature is unavailable in ordinary demo mode. It does not claim
+A stale decision hides the old review and offers a read-only reload. If a
+confirmed write is followed by a failed refresh, reload the cases instead of
+repeating the decision. The feature is unavailable in ordinary demo mode. It does not claim
 compliance, tamper-resistant logging, or readiness for employee use.
 
 Focused tests: `node --test test/ethics-cases.test.js`. Enable the
-Chromium test using the normal browser test configuration.
+Chromium tests using the normal browser test configuration;
+`test/browser-release-ethics.test.js` exercises the composed SQLite release.

@@ -192,6 +192,7 @@
   "test/browser-edge-controls.test.js",
   "test/browser-isolated-release-nav.test.js",
   "test/browser-portal-controls.test.js",
+  "test/browser-release-ethics.test.js",
   "test/browser-release-evidence-dispute.test.js",
   "test/browser-release-incident-policy-stale.test.js",
   "test/browser-release-report-schedule-race.test.js",
