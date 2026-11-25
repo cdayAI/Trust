@@ -15,6 +15,7 @@ function localFlag(name){
 launchLocalServer(()=>{
 const enableIdentityAdmin=localFlag('TRUST_ENABLE_LOCAL_IDENTITY_ADMIN');
 const enableGroupGovernance=localFlag('TRUST_ENABLE_LOCAL_GROUP_GOVERNANCE');
+const enableDocumentReviewSeat=localFlag('TRUST_ENABLE_LOCAL_DOCUMENT_REVIEW_SEAT');
 const enableDirectoryLifecycle=localFlag('TRUST_ENABLE_LOCAL_DIRECTORY_LIFECYCLE');
 if(enableDirectoryLifecycle&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first for local directory reconciliation.');
 const attachmentReviewSetting=process.env.TRUST_ATTACHMENT_REVIEW;
@@ -44,6 +45,7 @@ const seats=[
   ['sample-ethics-reviewer',{harbor:'ethics-reviewer'}],
   ['sample-case-operator',{harbor:'case-operator',orchard:'case-operator'}],
 ];
+if(enableDocumentReviewSeat)seats.push(['sample-document-reviewer',{harbor:'reviewer',orchard:'reviewer'}]);
 if(enableIdentityAdmin)seats.push(['sample-identity-admin',{harbor:'identity-admin',orchard:'identity-admin'}]);
 const accounts=seats.map(([id,memberships])=>({id,memberships,code:randomBytes(32).toString('base64url')}));
 writeFileSync(codes,JSON.stringify(accounts,null,2)+'\n',{flag:'wx',mode:0o600});
@@ -69,6 +71,7 @@ const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,operationalE
   ...(enableRightsScope?{rightsCaseScopeWorkspaces:['harbor','orchard']}:{}),
   ...(enableRecordScope?{documentScopeWorkspaces:['harbor','orchard']}:{}),
   ...(enableDirectoryLifecycle?{directoryLifecycleWorkspaces:['harbor','orchard']}:{}),
+  ...(enableDocumentReviewSeat?{documentReviewSeats:['harbor','orchard'].map(workspace=>({workspace,account:'sample-document-reviewer'}))}:{}),
   ...(enableGroupGovernance?{groupApplications:['harbor','orchard'].map(workspace=>({workspace,applications:[
     {id:'sample-case-reference',name:'Sample Case Reference',summary:'Fictional reference application for the scoped access walkthrough.'},
     {id:'sample-service-register',name:'Sample Service Register',summary:'Fictional service summary. This is not connected to an external system.'}

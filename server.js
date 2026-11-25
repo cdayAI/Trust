@@ -19,6 +19,7 @@ const {createAccess}=require('./workspace-access');
 const policy=require('./access-policy');
 const groups=require('./group-governance');
 const documentScope=require('./document-scope');
+const documentReviewSeats=require('./document-review-seats');
 const directoryLifecycle=require('./directory-lifecycle');
 const rightsCaseScope=require('./rights-case-scope');
 const {fixtureOptions}=require('./discovery-import');
@@ -103,20 +104,22 @@ async function readBody(req,limit=32768) {
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false}={}) {
   const pageWorkQueue=queuePager();
-  const directoryScopes=directoryLifecycle.provision(isolated,corporate===undefined);
+  const reviewerSeats=documentReviewSeats.provision(isolated,corporate===undefined);
+  const authorityConfig=documentReviewSeats.primaryConfig(isolated,reviewerSeats);
+  const directoryScopes=directoryLifecycle.provision(authorityConfig,corporate===undefined);
   const oidcModule=corporate===undefined?null:require('./oidc/client');
   const oidc=oidcModule?.createOidc(corporate);
   if((oidc&&!isolated)||Boolean(tls)!==Boolean(oidc?.secure))
     throw new Error('Corporate sign-in requires an isolated workspace and the configured transport.');
-  const scopedCatalogs=groups.provision(isolated);
-  const scopedDocuments=documentScope.provision(isolated);
+  const scopedCatalogs=groups.provision(authorityConfig);
+  const scopedDocuments=documentScope.provision(authorityConfig);
   const scopedRights=rightsCaseScope.provision(isolated);
   const stagedDiscovery=discoveryRuns.provision(isolated,sqliteFile,corporate);
-  const manualReview=provisionReview(isolated);
+  const manualReview=provisionReview(authorityConfig);
   const largePdfScopes=binaryAttachments.provision(isolated,sqliteFile,manualReview);
   if(oidc&&largePdfScopes.size)throw Error('Larger PDF batches are limited to the local synthetic workbench.');
   const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id),
-    id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id),directoryLifecycle:directoryScopes.has(id)}),oidc);
+    id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id),directoryLifecycle:directoryScopes.has(id)}),oidc,(workspace,id)=>reviewerSeats.get(workspace)===id);
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
     grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,releaseWorkspaces:oidc?[]:isolated.requesterReleaseWorkspaces,now:isolated.now
   }):null;
@@ -290,7 +293,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       const selection=access?.context(req,expected);
       const actor=access?selection.actor:req.headers['x-demo-actor'];
       if(access){
-        policy.requirePermission(req.method,pathname,actor);
+        policy.requirePermission(req.method,pathname,actor,selection);
         searchParams.delete('workspace');
       }
       const caseOperator=!!access&&actor==='case-operator';
@@ -344,6 +347,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         policy.requirePermission(req.method,pathname,checked.actor);
         return send(res,200,store.groupGovernanceChange(groupContext(checked),body));
       }
+      const documentReviewContext=checked=>({
+        role:checked.actor,account:checked.account,generation:checked.generation,limited:checked.documentReviewer===true,
+        configured:reviewerSeats.get(checked.space.id),roster:access.identityRoster(checked.space.id),at:access.identityTime()
+      });
       const scopeContext=checked=>({
         role:checked.actor,account:checked.account,generation:checked.generation,at:access.identityTime(),
         roster:access.identityRoster(checked.space.id),enabled:scopedDocuments.has(checked.space.id),
@@ -453,7 +460,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           {'Content-Disposition':'attachment; filename="privacy-workbench-queue.json"'}):send(res,200,queue);
       }
       if (req.method==='GET'&&pathname==='/api/governance-documents'){
-        const docs=caseOperator?store.getCaseDocuments(scopeContext(selection)):store.getDocuments(actor,selection?.account);
+        const docs=caseOperator?store.getCaseDocuments(scopeContext(selection)):store.getDocuments(actor,selection?.account,selection?documentReviewContext(selection):undefined);
         return send(res,200,caseOperator?policy.caseDocumentView(docs):docs);
       }
       if (req.method==='GET'&&pathname==='/api/vendor-monitoring') return send(res,200,store.getVendorMonitoring());
@@ -552,7 +559,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if (req.method==='GET'&&pathname==='/api/modules') return send(res,200,store.getModules());
       if (req.method==='GET'&&pathname==='/api/state'){
         const state=store.publicState();
-        return send(res,200,access?policy.operatorState(state,actor):state);
+        return send(res,200,access?policy.operatorState(state,selection.documentReviewer?'case-operator':actor):state);
       }
       if (req.method==='GET'&&pathname==='/api/audit/export') {
         const audit=store.visibleAudit();
@@ -622,8 +629,14 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           store.change(parts,actor,body,selection?.account);
           return send(res,200,store.trustCenterView(centerPath));
         }
+        const docReview=parts[0]==='governance-documents'&&current?documentReviewContext(current):undefined;
+        if(parts.length===6&&parts[0]==='governance-documents'&&parts[5]==='assign-reviewer'){
+          if(!docReview)return send(res,404,{error:'Not found.'});
+          if(searchParams.size)return send(res,422,{error:'Review assignment does not accept query filters.'});
+          return send(res,200,store.assignDocumentReviewer(docReview,parts[2],parts[4],body));
+        }
         const resourceChange=()=>caseOperator&&parts[0]==='governance-documents'?
-          store.readCaseDocument(parts,scopeContext(current),body):store.change(parts,actor,body,selection?.account,current?.generation,rightsContext);
+          store.readCaseDocument(parts,scopeContext(current),body):store.change(parts,actor,body,selection?.account,current?.generation,rightsContext,docReview);
         if(parts.length===8&&parts[0]==='governance-documents'&&parts[1]==='records'&&parts[3]==='revisions'&&parts[5]==='attachments'&&parts[7]==='download'){
           const {bytes,filename}=resourceChange();
           return send(res,200,bytes,'application/octet-stream',{

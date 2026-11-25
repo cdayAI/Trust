@@ -10,7 +10,7 @@ const digest=value=>createHash('sha256').update(value).digest();
 const denied=(status,message)=>{throw Object.assign(new Error(message),{status})};
 
 function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdentityAdmin=false,now=Date.now},
-  readIdentityRecord=()=>({revision:0,disabled:false}),workspaceFeatures=()=>({}),oidc=null){
+  readIdentityRecord=()=>({revision:0,disabled:false}),workspaceFeatures=()=>({}),oidc=null,documentReviewer=()=>false){
   if(typeof root!=='string'||!root||!Number.isSafeInteger(sessionSeconds)||sessionSeconds<1||sessionSeconds>3600||
     typeof now!=='function'||typeof readIdentityRecord!=='function'||typeof enableIdentityAdmin!=='boolean'||!Array.isArray(workspaces)||!workspaces.length||!Array.isArray(accounts)||!accounts.length)
     throw new Error('Invalid isolated workspace configuration.');
@@ -55,8 +55,11 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
     const grants=new Map();
     for(const [space,role] of Object.entries(memberships)){
       const seat=space+':'+role;
-      if(!spaces.has(space)||(!roles.has(role)&&!(enableIdentityAdmin&&role==='identity-admin'))||seats.has(seat))throw new Error('Invalid or duplicated workspace role assignment.');
-      seats.add(seat);grants.set(space,role);
+      const limited=role==='reviewer'&&documentReviewer(space,id);
+      if(!spaces.has(space)||(!roles.has(role)&&!(enableIdentityAdmin&&role==='identity-admin'))||
+        (limited&&oidc)||(!limited&&seats.has(seat)))throw new Error('Invalid or duplicated workspace role assignment.');
+      if(!limited)seats.add(seat);
+      grants.set(space,role);
     }
     users.set(id,{id,hash:oidc?null:Buffer.from(codeHash,'hex'),subject,initialWorkspace,grants,disabled,validUntil});
   }
@@ -83,11 +86,13 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
     if(!current)denied(401,oidc?'Sign in with your organization.':'Sign in to a local workspace.');
     if(expected.length!==1||expected[0]!==current.workspace)denied(403,'This request does not match the active workspace.');
     return {space:spaces.get(current.workspace),actor:current.account.grants.get(current.workspace),
-      account:current.account.id,generation:current.generation};
+      account:current.account.id,generation:current.generation,
+      ...(documentReviewer(current.workspace,current.account.id)?{documentReviewer:true}:{})};
   }
   const describe=session=>({mode,authenticated:!!session,...(session?{
     account:session.account.id,actor:session.account.grants.get(session.workspace),workspace:session.workspace,
-    capabilities:capabilities(session.account.grants.get(session.workspace),workspaceFeatures(session.workspace)),
+    capabilities:documentReviewer(session.workspace,session.account.id)?{views:['governance-docs'],workspaceAudit:false}:
+      capabilities(session.account.grants.get(session.workspace),workspaceFeatures(session.workspace)),
     workspaces:[...session.account.grants].filter(([id])=>!membership(id,session.account.id).disabled).map(([id])=>({id,label:spaces.get(id).label}))
   }:{})});
   function issue(account,workspace,previous,authenticationUntil=Infinity){

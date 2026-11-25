@@ -95,6 +95,7 @@ route('POST','privacy-notices/notices(?:/'+uuid+'/(?:edit|submit|return|publish)
 route('POST','data-map/(?:nodes(?:/'+uuid+'/(?:update|archive))?|links(?:/'+uuid+'/archive)?|discovery/(?:preview|apply))',operators);
 route('POST','modules/'+moduleId+'/records(?:/'+uuid+'/(?:update|advance))?',operators);
 route('POST','governance-documents/records(?:/'+uuid+'/revise)?',operators);
+route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/assign-reviewer',['analyst']);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:edit|submit|publish|return)',operators);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:read|download)',rights);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments(?:/batch|/binary-batch|/'+uuid+'/remove)?',operators);
@@ -128,7 +129,11 @@ function capabilities(role,{groupGovernance=false,documentScope=false,operatorJo
   if(operatorJobs&&operators.includes(role))permitted.push('operator-jobs');
   return {views:permitted,workspaceAudit:role==='reviewer'};
 }
-function requirePermission(method,pathname,role){
+const limitedReviewWrite=new RegExp('^/api/governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:read|return|publish)$');
+function requirePermission(method,pathname,role,{documentReviewer=false}={}){
+  if(documentReviewer&&(role!=='reviewer'||!(method==='GET'&&['/api/state','/api/governance-documents'].includes(pathname)||
+    method==='POST'&&limitedReviewWrite.test(pathname))))
+    throw Object.assign(new Error('This account is limited to assigned document reviews.'),{status:403,code:'DOCUMENT_REVIEW_SEAT_LIMITED'});
   const rule=routes.find(x=>x.method===method&&x.path.test(pathname));
   if(!rule)throw Object.assign(new Error('Not found.'),{status:404});
   if(!rule.roles.includes(role))throw Object.assign(new Error('This workspace role is not authorized for that action.'),{status:403,code:'ACCESS_DENIED'});

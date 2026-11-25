@@ -151,7 +151,7 @@ test('misspelled isolated security flags fail closed before creating codes or st
   for (const key of [
     'TRUST_ENABLE_LOCAL_IDENTITY_ADMIN', 'TRUST_ENABLE_LOCAL_DIRECTORY_LIFECYCLE',
     'TRUST_ENABLE_LOCAL_GROUP_GOVERNANCE', 'TRUST_ENABLE_LOCAL_RECORD_SCOPE',
-    'TRUST_ENABLE_LOCAL_RIGHTS_CASE_SCOPE',
+    'TRUST_ENABLE_LOCAL_RIGHTS_CASE_SCOPE', 'TRUST_ENABLE_LOCAL_DOCUMENT_REVIEW_SEAT',
   ]) {
     const workbench = launch(t, 'start-isolated.js', dir, {[key]: 'true'});
     assert.deepEqual(await workbench.closed, [1, null], key);
@@ -161,6 +161,32 @@ test('misspelled isolated security flags fail closed before creating codes or st
   const workbench = launch(t, 'start-isolated.js', dir, {TRUST_ENABLE_LOCAL_RECORD_SCOPE: '0'});
   await workbench.started;
   assert.deepEqual(await workbench.stop(), [0, null]);
+});
+
+test('document-review opt-in launches a distinct seat with only assigned-policy navigation', async t => {
+  const dir = await scratch(t);
+  const workbench = launch(t, 'start-isolated.js', dir, {
+    TEMP: dir, TMP: dir, TRUST_ENABLE_LOCAL_DOCUMENT_REVIEW_SEAT: '1',
+  });
+  const url = await workbench.started;
+  const saved = (await readdir(dir)).filter(name => name.startsWith('trust-synthetic-'));
+  assert.equal(saved.length, 1);
+  const accounts = JSON.parse(await readFile(join(dir, saved[0], 'local-access.json'), 'utf8'));
+  const seat = accounts.find(row => row.id === 'sample-document-reviewer');
+  assert.ok(seat);
+  const login = await fetch(url+'/api/session/login', {
+    method:'POST', headers:{Origin:url,'Content-Type':'application/json'},
+    body:JSON.stringify({account:seat.id,workspace:'harbor',code:seat.code}),
+  });
+  assert.equal(login.status, 200);
+  const session = await login.json(), headers = {Cookie:login.headers.get('set-cookie').split(';')[0]};
+  assert.deepEqual(session.capabilities.views, ['governance-docs']);
+  const queue = await fetch(url+'/api/work-queue?workspace=harbor',{headers});
+  assert.equal(queue.status,403);
+  const docs = await fetch(url+'/api/governance-documents?workspace=harbor',{headers});
+  assert.equal(docs.status,200);
+  assert.deepEqual((await docs.json()).documents,[]);
+  assert.deepEqual(await workbench.stop(),[0,null]);
 });
 
 test('configuration readiness checks the loopback listener and readable workbench assets', async t => {

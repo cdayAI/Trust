@@ -2,6 +2,7 @@
 const {createHash}=require('node:crypto');
 const {view:queueView}=require('./work-queue');
 const authorship=require('./document-provenance');
+const reviewSeats=require('./document-review-seats');
 
 const supportedRoles=new Set(['analyst','reviewer','case-operator']);
 const taskToken='[a-f0-9]{64}';
@@ -28,14 +29,14 @@ function localTasks(state,actor,account){
     const revision=doc.revisions.at(-1);
     if(!revision||authorship.reviewStatus(state,doc,revision,actor,account)!=='eligible')continue;
     if(revision.status==='draft')add('governance-docs',revision,'submit','Submit document draft',revision.authoredBy);
-    if(revision.status==='review'&&revision.authoredBy!=='reviewer')
+    if(revision.status==='review'&&revision.authoredBy!=='reviewer'&&!reviewSeats.assignment(state,doc,revision))
       add('governance-docs',revision,'review','Review document publication independently','reviewer');
   }
   return out;
 }
 
 
-// Each workspace currently provisions at most one account to each workflow role.
+// This general inbox retains one broad seat per role; restricted document reviewers use their assignment list instead.
 // The verified role is the assigned seat, never a request-supplied owner selector.
 function assigned(state,{space,actor,account},allowedViews,asOf){
   if(!space?.id||typeof account!=='string'||!supportedRoles.has(actor))error('My work is unavailable.',404);

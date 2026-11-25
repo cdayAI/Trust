@@ -311,7 +311,7 @@ function evidenceRehearsalControls(card,path,edition,revision,rules){
   card.append(region);
 }
 function renderDocs(){
-  const {documents,revision,targets,legacyRecords,attachmentRules}=docsData;
+  const {documents,revision,targets,legacyRecords,attachmentRules,restrictedDocumentReview}=docsData;
   const intro=add(el('section'),heading('Policies and evidence documents'),el('p','Use only original fictional text and attachments. Documents are role-scoped; nothing is published outside the local workspace.'));
   if(actor==='analyst'){
     const panel=docsPanel(intro,'Draft a document');
@@ -319,7 +319,7 @@ function renderDocs(){
       'Create document draft',f=>({...documentPayload(f),kind:f.get('kind')}),revision);
   }
   const list=add(el('section'),heading('Document revisions'));
-  if(!documents.length)list.append(el('p','No documents are visible to this demo identity.'));
+  if(!documents.length)list.append(el('p',restrictedDocumentReview?'No assigned document reviews are available.':'No documents are visible to this demo identity.'));
   const byTarget=new Map(targets.map(t=>[t.type+':'+t.id,t.label]));
   for(const d of documents.slice().reverse()){
     const container=add(el('article',undefined,'module-record'),el('p',d.kind+' · '+d.id,'hint'));
@@ -347,8 +347,10 @@ function renderDocs(){
       readButton.onclick=()=>docsPost(path+'/read',{},data=>{output.textContent=data.text;output.hidden=false;notice('Document access recorded.')});
       const download=button('Download text','button','secondary');
       download.onclick=()=>docsPost(path+'/download',{},data=>{downloadDocument(data);notice('Document download recorded.')});
-      card.append(readButton,download,output);
-      attachmentControls(card,path,v,revision,attachmentRules);
+      card.append(readButton);
+      if(!restrictedDocumentReview)card.append(download);
+      card.append(output);
+      if(!restrictedDocumentReview)attachmentControls(card,path,v,revision,attachmentRules);
       evidenceHoldControls(card,path,v,revision,docsData.evidenceHoldReasons);
       evidenceRehearsalControls(card,path,v,revision,docsData.evidenceRetentionRules);
       if(mayAct&&actor==='analyst'&&v.status==='draft'){
@@ -363,6 +365,20 @@ function renderDocs(){
         if(v.attachments.some(row=>row.reviewStatus&&row.reviewStatus!=='released'))
           card.append(el('p','Clear attachment quarantine or remove unavailable files before submitting this revision.','hint'));
         else docsForm(card,path+'/submit',[],'Submit for review',()=>({}),revision);
+      }
+      if(v.publicationAuthority==='assigned')card.append(el('p',
+        'This submission is assigned to a separate named reviewer.','hint'));
+      if(actor==='analyst'&&v.status==='review'){
+        if(v.reviewAssignee){
+          card.append(el('p','Assigned reviewer: '+v.reviewAssignee,'hint'));
+          docsForm(docsPanel(card,'Clear named review assignment'),path+'/assign-reviewer',[],
+            'Clear review assignment',()=>({reviewer:null}),revision);
+        }
+        if(v.reviewCandidate&&v.reviewCandidate!==v.reviewAssignee){
+          const select=rightsSelect('Named document reviewer','reviewer',[{value:v.reviewCandidate,label:v.reviewCandidate}]);
+          docsForm(docsPanel(card,'Assign a named reviewer'),path+'/assign-reviewer',[select],
+            'Assign document review',f=>({reviewer:f.get('reviewer')}),revision);
+        }
       }
       if(mayAct&&actor==='reviewer'&&v.status==='review'){
         for(const [action,caption] of [['publish','Publish locally'],['return','Return to draft']])

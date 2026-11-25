@@ -34,6 +34,7 @@ const maturityPlanning = require('./maturity-planning');
 const vendorMonitoring = require('./vendor-monitoring');
 const documents = require('./governance-documents');
 const documentScope = require('./document-scope');
+const documentReviewSeats=require('./document-review-seats');
 const rightsCaseScope=require('./rights-case-scope');
 const programs=new Map([
   ['assessment-config',assessmentConfig],['processing-register',processingRegister],
@@ -272,7 +273,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {fixtureMigrationReceipt,requesterReceipts,requesterReleases,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,directoryLifecycle:privateDirectory,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,reportScheduleBook:privateReportSchedules,discoveryRuns:privateDiscoveryRuns,auditRemediation:privateAuditRemediation,...safe}=state;
+    const {fixtureMigrationReceipt,requesterReceipts,requesterReleases,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,directoryLifecycle:privateDirectory,groupGovernance:privateGroupGovernance,documentAccessScope,documentReviewerAssignments,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,reportScheduleBook:privateReportSchedules,discoveryRuns:privateDiscoveryRuns,auditRemediation:privateAuditRemediation,...safe}=state;
     if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,requesterIntake,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
@@ -313,6 +314,8 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     return {model,version:before===after?intakeVersion(generation,after):null};
   }
   const documentCapabilities={largePdf:!!storage&&largePdf};
+  const documentModel=(actor,account,review)=>review?.limited?documentReviewSeats.limitedModel(state,review):
+    documentReviewSeats.projection(state,documents.view(state,actor,documentCapabilities,account),review);
   const applyProgram = (snapshot, parts, actor, body, appendEvent, account) =>
     programs.get(parts[0]).change(snapshot, parts, actor, body, appendEvent, createVendorAssessments, account, documentCapabilities);
   let membershipGeneration=-1, membershipState={};
@@ -442,7 +445,19 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     },
     getState:()=>state,
     publicState,
-    getDocuments:(actor,account)=>documents.view(state,actor,documentCapabilities,account),
+    getDocuments(actor,account,review){
+      if(review?.limited)requireCurrentOperatorSession(review);
+      return documentModel(actor,account,review);
+    },
+    assignDocumentReviewer(ctx,doc,edition,body){
+      requireCurrentOperatorSession(ctx);
+      const next=structuredClone(state);
+      documentReviewSeats.update(next,ctx,doc,edition,body,(state,actor,kind,project,id,details)=>{
+        event(state,actor,kind,project,id,details);state.audit.at(-1).account=ctx.account;
+      });
+      persist(next);state=next;
+      return documentModel(ctx.role,ctx.account,ctx);
+    },
     getCaseDocuments(ctx){
       requireCurrentOperatorSession(ctx);
       if(ctx.enabled)return documentScope.list(state,ctx);
@@ -590,13 +605,14 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       return bytes;
     },
     reportSnapshot:()=>({state,audit:state.audit.filter(e=>!excludedAudit(e))}),
-    change(parts,actor,body,account,generation,rightsContext) {
+    change(parts,actor,body,account,generation,rightsContext,docReview) {
       if(rightsContext){
         requireCurrentOperatorSession(rightsContext);
         if(rightsContext.role==='case-operator')rightsCaseScope.verifyTarget(state,rightsContext,parts[2]);
       }
       if(generation!==undefined&&parts[0]==='governance-documents')
         requireCurrentOperatorSession({account,generation});
+      documentReviewSeats.enforce(state,parts,docReview);
       if (!actors.some(a=>a.id===actor)) fail(403,'Select a valid demo identity.');
       if (actor===rights.backupActor.id&&!['rights','governance-documents'].includes(parts[0])) fail(403,'This identity is assigned to rights cases only.');
       if (!body || typeof body!=='object'||Array.isArray(body)) fail(400,'Expected a JSON object.');
@@ -634,14 +650,17 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       } else if (parts.length===3&&parts[0]==='handoff') {
         actionHandoff(next,actor,find(next,'handoff',parts[1]),parts[2]);
       } else fail(404,'Endpoint not found.');
+      if(docReview&&actor==='reviewer'&&parts.length===6&&['publish','return'].includes(parts[5]))
+        documentReviewSeats.finish(next,parts[4]);
       commit();
+      if(docReview?.limited&&result)return documentReviewSeats.textProjection(result);
       if(rightsContext&&!result)return projectRights(state,rightsContext);
-      return result??(parts[0]==='modules'?modules.model(state):program===documents?documents.view(state,actor,documentCapabilities,account):
+      return result??(parts[0]==='modules'?modules.model(state):program===documents?documentModel(actor,account,docReview):
         program?program.view(state,actor,account):publicState());
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRequesterIntakeForm','pinReportRun','createRightsIntake','changeReportSchedule','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['assignDocumentReviewer','directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRequesterIntakeForm','pinReportRun','createRightsIntake','changeReportSchedule','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name==='getRightsIntake'){
