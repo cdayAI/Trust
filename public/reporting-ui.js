@@ -32,15 +32,33 @@ async function pinOperationalReport(filters,control){
   if(busy)return;
   busy=true;control.disabled=true;
   const seq=++reportSequence;
+  let committed=false;
   reportingPane.setAttribute('aria-busy','true');
   try{
     const result=await read(reportingPath+'/runs',{method:'POST',
       headers:{'Content-Type':'application/json','X-Demo-Actor':actor},body:JSON.stringify({filters})});
+    committed=true;
     if(!reportingPane.hidden&&seq===reportSequence){
-      if(await refreshReporting(false,result.run.id))notice('Pinned report saved. Its downloads will not recalculate.');
+      const saved=result.run.id, previewSequence=reportSequence+1;
+      if(await refreshReporting(false,saved))notice('Pinned report saved. Its downloads will not recalculate.');
+      else if(!reportingPane.hidden&&previewSequence===reportSequence&&control.isConnected){
+        const retry=button('Reopen saved report','button','secondary');
+        const info=el('p','Report saved. Its preview could not be loaded.');
+        info.setAttribute('role','status');
+        control.after(retry,info);
+        retry.onclick=async()=>{
+          retry.disabled=true;
+          if(await refreshReporting(false,saved))notice('Pinned report opened. Its downloads will not recalculate.');
+          else if(retry.isConnected&&!reportingPane.hidden){
+            retry.disabled=false;
+            retry.focus();
+          }
+        };
+        retry.focus();
+      }
     }
   }catch(error){if(!reportingPane.hidden&&seq===reportSequence)notice(error.message,true)}
-  finally{busy=false;control.disabled=false;if(seq===reportSequence)reportingPane.setAttribute('aria-busy','false')}
+  finally{busy=false;if(!committed)control.disabled=false;if(seq===reportSequence)reportingPane.setAttribute('aria-busy','false')}
 }
 function renderReportRuns(history,options,current){
   const list=add(el('section',undefined,'report-run-history'),heading('Pinned reports'));

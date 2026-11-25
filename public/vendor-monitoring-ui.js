@@ -1,6 +1,6 @@
 'use strict';
 const vendorPane=$('#vendor-monitoring-view'),vendorPath='/api/vendor-monitoring';
-let vendorData,vendorRequest=0;
+let vendorData,vendorRequest=0,vendorAssessmentRequest=0;
 async function refreshVendors(){
   const tag=++vendorRequest;
   try{const model=await read(vendorPath);if(!vendorPane.hidden&&tag===vendorRequest){vendorData=model;renderVendorMonitoring()}}
@@ -67,11 +67,16 @@ function renderVendorMonitoring(){
     card.append(checks);
     const project=button('Open linked assessments','button','secondary');
     project.onclick=async()=>{
+      const tag=++vendorAssessmentRequest,identity=actor,session=localSession;
+      const current=()=>tag===vendorAssessmentRequest&&identity===actor&&session===localSession&&
+        !vendorPane.hidden&&!$('#workbench').hidden&&vendorPane.contains(project);
       try{
-        state=await read('/api/state');selected=c.projectId;
+        const next=await read('/api/state');
+        if(!current())return;
+        state=next;selected=c.projectId;
         switchView('assessments',{engagementAssessments:c.engagement?{id:c.id,title:c.engagement.title,cycle:cycle.number,assessmentIds:cycle.assessmentIds}:null});
       }
-      catch(e){notice(e.message,true)}
+      catch(e){if(current())notice(e.message,true)}
     };
     card.append(project);
     if(mayEdit&&c.status==='collecting'){

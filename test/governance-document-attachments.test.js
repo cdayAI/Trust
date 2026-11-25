@@ -260,9 +260,21 @@ test('browser: governance file picker enforces limits and uploads, downloads, re
     await picker.setInputFiles({name:'large.txt',mimeType:'text/plain',buffer:Buffer.alloc(16*1024+1,65)});
     await upload.click();
     await analyst.getByText(/large\.txt.*up to 16 KiB/).waitFor();
+    const editor=analyst.locator('details').filter({has:analyst.locator('summary').getByText('Edit draft',{exact:true})});
+    await editor.locator('summary').click();
+    const unsavedTitle='Fictional pending title change',unsavedText='Fictional pending text change from the open editor.';
+    await editor.getByLabel('Fictional title',{exact:true}).fill(unsavedTitle);
+    await editor.getByLabel('Original fictional text',{exact:true}).fill(unsavedText);
+    async function assertPendingEditor(){
+      assert.equal(await editor.getAttribute('open'),'');
+      assert.equal(await editor.getByLabel('Fictional title',{exact:true}).inputValue(),unsavedTitle);
+      assert.equal(await editor.getByLabel('Original fictional text',{exact:true}).inputValue(),unsavedText);
+      assert.equal(await analyst.getByRole('heading',{name:doc.title,exact:true}).count(),1);
+    }
     await picker.setInputFiles({name:filename,mimeType:'text/plain',buffer:Buffer.from(original)});
     await upload.click();
     await analyst.getByRole('button',{name:'Remove attachment '+cleanFilename,exact:true}).waitFor();
+    await assertPendingEditor();
     const [download]=await Promise.all([analyst.waitForEvent('download'),analyst.getByRole('button',{name:'Download attachment '+cleanFilename,exact:true}).click()]);
     assert.equal(download.suggestedFilename(),cleanFilename);
     const chunks=[];
@@ -271,9 +283,15 @@ test('browser: governance file picker enforces limits and uploads, downloads, re
     assert.equal(await analyst.getByText(original.trim(),{exact:true}).count(),0);
     await analyst.getByRole('button',{name:'Remove attachment '+cleanFilename,exact:true}).click();
     await analyst.getByText('No attachments.',{exact:true}).waitFor();
+    await assertPendingEditor();
     await picker.setInputFiles({name:filename,mimeType:'text/plain',buffer:Buffer.from(original)});
     await upload.click();
     await analyst.getByRole('button',{name:'Remove attachment '+cleanFilename,exact:true}).waitFor();
+    await assertPendingEditor();
+    await editor.getByRole('button',{name:'Save draft',exact:true}).click();
+    await analyst.getByRole('heading',{name:unsavedTitle,exact:true}).waitFor();
+    await analyst.getByRole('button',{name:'View fictional text',exact:true}).click();
+    await analyst.getByText(unsavedText,{exact:true}).waitFor();
     await analyst.getByRole('button',{name:'Submit for review',exact:true}).click();
     await analyst.getByText('review',{exact:true}).waitFor();
     assert.equal(await upload.count(),0);

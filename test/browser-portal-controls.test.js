@@ -291,6 +291,50 @@ test('browser portal: learner grant with no work cannot open peer training; assi
   f.finish();
 });
 
+test('browser portal: clearing a learner while a lesson is delayed allows immediate sign-in as another learner',enabled,async t=>{
+  const f=await fixture(t),title='Fictional delayed training';
+  const pin=await f.publishFixturePolicy('Fictional delayed policy','This fictional lesson is held briefly by the test.');
+  let data=await f.api('training/create','analyst',{title,template:'fictional-policy-practice-v1',...pin});
+  const action=async (name,actor,fields={})=>{
+    const [{id,revision}]=data.courses;
+    data=await f.api('training/'+name,actor,{course:id,revision,...fields});
+  };
+  await action('submit','analyst');
+  await action('publish','reviewer',{note:'Independent approval of the delayed fictional exercise.'});
+  await action('assign','analyst',{learner:'sample-learner-a'});
+
+  const page=await f.page('/training'),code='Synthetic learner code',open='Open '+title;
+  const ready=Promise.withResolvers(),release=Promise.withResolvers(),finished=Promise.withResolvers();
+  t.after(()=>release.resolve());
+  await page.route('**/api/training-learner/lesson',async route=>{
+    try{
+      const response=await route.fetch();
+      assert.equal(response.status(),200);
+      ready.resolve();
+      await release.promise;
+      await route.fulfill({response}).catch(()=>{}); // Clearing access may cancel the request.
+    }catch(error){ready.reject(error);}
+    finally{finished.resolve();}
+  });
+
+  await f.fill(page,code,f.codes['learner-a']);
+  await f.click(page,'View my assignments','Assigned learner sees the fictional training',()=>b(page,open).waitFor());
+  await b(page,open).click();
+  await ready.promise;
+  try{
+    await f.click(page,'Clear learner access','Prior course disappears while its response is outstanding',()=>gone(page,title));
+    await f.fill(page,code,f.codes['learner-b']);
+    await f.click(page,'View my assignments','The next learner can sign in before the previous request finishes',()=>
+      seen(page,'No training is assigned to this synthetic learner.'));
+  }finally{
+    release.resolve();
+  }
+  await finished.promise;
+  await f.absent(page,'button',open);
+  await f.absent(page,'button','Start exercise');
+  f.finish();
+});
+
 test('browser portal: separately reviewed trust center drafts, local publication, replacement and withdrawal',enabled,async t=>{
   const f=await fixture(t),author=await f.operator('analyst','Trust center'),reviewer=await f.operator('reviewer');
   const a=author.locator('#trust-center-view'),r=reviewer.locator('#trust-center-view');
@@ -593,3 +637,60 @@ test('browser documents: owned case evidence, reviewer actions and version-bound
   await f.absent(s,'heading','Other owner evidence');
   f.finish();
 });
+
+for (const profile of [
+  {portal:'requester',input:'Synthetic access code',button:'Check my request',api:'requester/status',oldText:'Received',
+    nextText:'No request submitted',async prepare(f,page){
+      await f.fill(page,this.input,f.codes['requester-a']);
+      await f.click(page,this.button,'First requester code initially has no request',()=>seen(page,'No request submitted'));
+      await f.click(page,'Submit synthetic request','First requester has a distinguishable response',()=>seen(page,this.oldText));
+      await b(page,'Clear access code').click();
+    }},
+  {portal:'employee',input:'Synthetic employee code',button:'View my assignments',api:'employee/assignments',
+    oldText:'Fictional policy only for first employee',nextText:'You have no assigned policy editions.',async prepare(f){
+      const pin=await f.publishFixturePolicy(this.oldText,'A fictional exact edition.');
+      await f.api('employee-attestations','analyst',{employee:'sample-staff-employee-a',...pin});
+    }}
+]){
+  test('browser portal: '+profile.portal+' can start new access while a cleared access response is delayed',enabled,async t=>{
+    const f=await fixture(t),page=await f.page('/'+profile.portal);
+    await profile.prepare(f,page);
+    const first=f.codes[profile.portal+'-a'],next=f.codes[profile.portal+'-b'];
+    const ready=Promise.withResolvers(),release=Promise.withResolvers(),finished=Promise.withResolvers();
+    t.after(()=>release.resolve());
+    await page.route('**/api/'+profile.api,async route=>{
+      if(route.request().postDataJSON().code!==first)return route.continue();
+      try{
+        const response=await route.fetch();
+        assert.equal(response.status(),200);
+        ready.resolve();
+        await release.promise;
+        await route.fulfill({response});
+      }catch(error){ready.reject(error);}
+      finally{finished.resolve();}
+    });
+    const field=label(page,profile.input);
+    await f.fill(page,profile.input,first);
+    await b(page,profile.button).click();
+    await ready.promise;
+    try{
+      await f.click(page,'Clear access code','Clear returns focus and enables the primary control immediately',async()=>{
+        assert.equal(await field.evaluate(e=>e===document.activeElement),true);
+        assert.equal(await b(page,profile.button).isEnabled(),true);
+      });
+      await f.fill(page,profile.input,next);
+      await f.click(page,profile.button,'New authorized access completes while the old response waits',()=>seen(page,profile.nextText));
+      await field.focus();
+      const oldResponse=page.waitForResponse(response=>response.url().endsWith('/api/'+profile.api)&&
+        response.request().postDataJSON().code===first);
+      release.resolve();
+      await oldResponse;
+      await finished.promise;
+      await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+      await seen(page,profile.nextText);
+      await gone(page,profile.oldText);
+      assert.equal(await field.evaluate(e=>e===document.activeElement),true);
+    }finally{release.resolve();}
+    f.finish();
+  });
+}

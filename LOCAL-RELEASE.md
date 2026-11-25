@@ -179,9 +179,12 @@ in a temporary staging directory. No user npm configuration, lifecycle script,
 package fetch, registry publication or server deployment is required. It refuses
 to overwrite an existing destination and reports the archive SHA-256. The
 archive contains `RELEASE-MANIFEST.json`, with an explicit per-file SHA-256 and
-size for the package sources excluding the manifest itself. The manifest and
-archive checksum are not signatures. The source list deliberately excludes data,
-configuration secrets, local access codes, database artifacts, browser
+size for the package sources excluding the manifest itself. Verify a clean
+extraction before using it or installing browser tools: the verifier rejects extra
+files and directories, as well as missing or changed source files. The manifest
+and archive checksum are not signatures. The source list deliberately excludes
+data, configuration secrets, local access codes, the private resume profile,
+database artifacts, browser
 binaries and dependency directories. The input is bounded to 512 explicitly
 listed regular source files, 4 MiB per file and 32 MiB total before packaging.
 Two builds from identical bytes and the

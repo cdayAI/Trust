@@ -1,5 +1,6 @@
 'use strict';
 const codeForm=document.querySelector('#portal-code'),result=document.querySelector('#portal-result'),clear=document.querySelector('#portal-clear');
+const codeSubmit=codeForm.querySelector('button');
 let localCode,epoch=0;
 const make=(tag,content)=>{const n=document.createElement(tag);if(content!==undefined)n.textContent=content;return n};
 async function call(operation,body){
@@ -112,14 +113,17 @@ async function check(trigger){
     if(current===epoch){show(data);if(concealed)focusStatus();}
   }catch(error){if(current===epoch)denyAccess(error);}
 
-  finally{trigger.disabled=false}
+  finally{if(current===epoch)trigger.disabled=false}
 }
 codeForm.onsubmit=e=>{
-  e.preventDefault();const submit=codeForm.querySelector('button');
-  if(submit.disabled)return;
+  e.preventDefault();
+  if(codeSubmit.disabled)return;
   epoch++;const input=codeForm.elements.code;
   localCode=input.value;input.value='';clear.hidden=false;result.replaceChildren();
-  check(submit);
+  check(codeSubmit);
 };
-clear.onclick=()=>{epoch++;localCode=undefined;codeForm.reset();clear.hidden=true;result.replaceChildren();codeForm.elements.code.focus()};
-window.addEventListener('pagehide',()=>{epoch++;localCode=undefined;codeForm.reset();clear.hidden=true;result.replaceChildren()});
+function clearAccess(){
+  epoch++;localCode=undefined;codeForm.reset();codeSubmit.disabled=false;clear.hidden=true;result.replaceChildren();
+}
+clear.onclick=()=>{clearAccess();codeForm.elements.code.focus()};
+window.addEventListener('pagehide',clearAccess);

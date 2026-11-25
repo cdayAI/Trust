@@ -155,3 +155,40 @@ test('Chromium: pin a mobile report, reopen after source changes, then download 
     assert.deepEqual(errors,[]);
   }finally{await browser.close()}
 });
+
+test('Chromium: a saved pin with an unavailable preview can be reopened without creating a duplicate',{
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright installed',timeout:35_000
+},async t=>{
+  const {chromium}=require('playwright');
+  const root=await mkdtemp(join(tmpdir(),'pin-preview-recovery-'));
+  const server=createServer({dataFile:join(root,'reports.json')});
+  const url=await listen(server);
+  t.after(async()=>{await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true})});
+  await request(url,'/api/incidents/cases',{actor:'analyst',body:{title:'Fictional pin recovery incident',scope:'Synthetic fixture scope'}});
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH??'/usr/bin/chromium',args:['--no-sandbox']});
+  try{
+    const page=await browser.newPage();page.setDefaultTimeout(4500);
+    let writes=0,previewReads=0;
+    await page.route(url+'/api/reporting/runs**',route=>{
+      const request=route.request(),pathname=new URL(request.url()).pathname;
+      if(request.method()==='POST'&&pathname==='/api/reporting/runs')writes++;
+      if(request.method()==='GET'&&pathname.startsWith('/api/reporting/runs/')&&++previewReads===1)return route.abort('failed');
+      return route.continue();
+    });
+    await page.goto(url);
+    await page.getByRole('button',{name:'Reporting',exact:true}).click();
+    const pin=page.getByRole('button',{name:'Pin current report'});
+    await pin.press('Enter');
+    const retry=page.getByRole('button',{name:'Reopen saved report'});
+    await retry.waitFor();
+    assert.equal(await page.getByText('Report saved. Its preview could not be loaded.').count(),1);
+    assert.equal(await pin.isDisabled(),true);
+    assert.equal(await retry.evaluate(element=>element===document.activeElement),true);
+    await retry.press('Enter');
+    await page.getByText(/^Pinned report · Saved/).waitFor();
+    assert.match(await page.locator('#notice').textContent(),/^Pinned report opened/);
+    assert.equal(writes,1);
+    assert.equal(previewReads,2);
+    assert.equal((await request(url,path,{actor:'analyst'})).data.runs.length,1);
+  }finally{await browser.close()}
+});

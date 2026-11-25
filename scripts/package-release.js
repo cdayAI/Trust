@@ -1,6 +1,6 @@
 'use strict';
 
-const { closeSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, fsyncSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
+const { closeSync, linkSync, lstatSync, mkdirSync, mkdtempSync, openSync, opendirSync, fsyncSync, readFileSync, rmSync, writeFileSync } = require('node:fs');
 const { basename, dirname, isAbsolute, join, resolve, sep } = require('node:path');
 const { tmpdir } = require('node:os');
 const { createHash, randomUUID } = require('node:crypto');
@@ -52,7 +52,7 @@ function sourceManifest(directory) {
   const paths = declared.sort();
   let total = 0;
   for (const path of paths) {
-    if (/^(?:data|dist|node_modules)(?:\/|$)|(?:^|\/)(?:node_modules|.*access\.json)(?:\/|$)|\.(?:zip|tgz|sqlite3?|db)(?:$|-)/i.test(path)) {
+    if (/^(?:data|dist|node_modules)(?:\/|$)|(?:^|\/)(?:node_modules|release-profile\.json|.*access\.json)(?:\/|$)|\.(?:zip|tgz|sqlite3?|db)(?:$|-)/i.test(path)) {
       throw new Error('Runtime data must not be included in the release: ' + path);
     }
     total += inspectSource(directory, path).size;
@@ -139,12 +139,37 @@ function packageRelease({ directory = root, target, npm = process.env.npm_execpa
   }
 }
 
+function verifyExactTree(directory, manifest) {
+  const files = new Set(['RELEASE-MANIFEST.json', ...manifest.files.map(file => file.path)]);
+  const directories = new Set();
+  for (const file of files) {
+    for (let end = file.lastIndexOf('/'); end !== -1; end = file.lastIndexOf('/', end - 1)) {
+      directories.add(file.slice(0, end));
+    }
+  }
+  const pending = [''];
+  while (pending.length) {
+    const relativeDir = pending.pop();
+    const handle = opendirSync(join(directory, relativeDir));
+    try {
+      for (let entry; (entry = handle.readSync()) !== null;) {
+        const relative = relativeDir === '' ? entry.name : relativeDir + '/' + entry.name;
+        if (entry.isDirectory() && directories.has(relative)) pending.push(relative);
+        else if (!entry.isFile() || !files.has(relative)) {
+          throw new Error('Unexpected entry in extracted release: ' + JSON.stringify(relative));
+        }
+      }
+    } finally { handle.closeSync(); }
+  }
+}
+
 function verifyExtracted(directory = root) {
   const actual = JSON.parse(readSource(directory, 'RELEASE-MANIFEST.json'));
   const { manifest } = sourceManifest(directory);
   if (JSON.stringify(actual) !== JSON.stringify(manifest)) {
     throw new Error('Extracted package does not match its release manifest.');
   }
+  verifyExactTree(directory, manifest);
   return { package: manifest.package, packageVersion: manifest.packageVersion, files: manifest.files.length };
 }
 

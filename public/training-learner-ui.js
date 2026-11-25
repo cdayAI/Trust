@@ -1,7 +1,7 @@
 'use strict';
 const target=document.querySelector('#learner-content'),access=document.querySelector('#learner-access');
 const statusLine=document.querySelector('#learner-notice'),clearAccess=document.querySelector('#learner-clear');
-let code='',busy=false,requestVersion=0;
+let code='',activeRequest;
 const node=(tag,value)=>{const n=document.createElement(tag);if(value!==undefined)n.textContent=value;return n;};
 const add=(parent,...children)=>{parent.append(...children);return parent;};
 function button(label,type='button'){
@@ -11,14 +11,14 @@ function notice(message,error=false){
   statusLine.textContent=message;statusLine.className=error?'error':'success';
 }
 async function run(action,fields={},supplied=code){
-  if(busy)return;
-  busy=true;
-  const request=++requestVersion;
+  if(activeRequest)return;
+  const request=new AbortController();
+  activeRequest=request;
   try{
     const response=await fetch('/api/training-learner/'+action,{method:'POST',credentials:'omit',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({code:supplied,...fields})});
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({code:supplied,...fields}),signal:request.signal});
     const data=await response.json();
-    if(request!==requestVersion)return;
+    if(activeRequest!==request)return;
     if(!response.ok){
       if(response.status===401||response.status===429){code='';target.replaceChildren();access.hidden=false;clearAccess.hidden=true;}
       throw new Error(data.error||'Training request failed.');
@@ -27,8 +27,8 @@ async function run(action,fields={},supplied=code){
     render(data);
     notice(action==='complete'&&data.lesson.status==='completed'?'Training completed.':
       action==='complete'?'Score '+data.lesson.lastScore+' of '+data.lesson.questions.length+'.':'');
-  }catch(error){if(request===requestVersion)notice(error.message,true);}
-  finally{busy=false;}
+  }catch(error){if(activeRequest===request)notice(error.message,true);}
+  finally{if(activeRequest===request)activeRequest=undefined;}
 }
 function showReceipt(parent,receipt){
   const details=add(node('details'),node('summary','Completion receipt'),node('p','Receipt ID: '+receipt.id),
@@ -87,6 +87,9 @@ function render(data){
 }
 access.onsubmit=e=>{e.preventDefault();run('list',{},access.elements.code.value);};
 clearAccess.onclick=()=>{
-  requestVersion++;code='';access.reset();access.hidden=false;clearAccess.hidden=true;target.replaceChildren();notice('Learner access cleared.');
+  const retired=activeRequest;
+  activeRequest=undefined;
+  retired?.abort();
+  code='';access.reset();access.hidden=false;clearAccess.hidden=true;target.replaceChildren();notice('Learner access cleared.');
   access.elements.code.focus();
 };

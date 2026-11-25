@@ -164,6 +164,29 @@ test('Chromium: two named services for one vendor, scoped linked assessments and
     await card(A.id).getByText('Cycle and evidence history').click();
     await card(A.id).getByText(/SYN-LODGE01: Lodging evidence/).waitFor();
     assert.equal(await card(B.id).getByText(/SYN-LODGE01/).count(),0);
+    const snapshotURL=url+'/api/state';
+    await page.evaluate(()=>{
+      const initialRead=window.read;
+      window.vendorSnapshotDispatched=false;
+      window.read=function(path,...args){
+        const pending=initialRead(path,...args);
+        if(path==='/api/state')pending.then(()=>queueMicrotask(()=>queueMicrotask(()=>{window.vendorSnapshotDispatched=true})));
+        return pending;
+      };
+    });
+    let release;
+    const held=new Promise(resolve=>{release=resolve});
+    await page.route(snapshotURL,async route=>{await held;await route.continue()},{times:1});
+    const start=page.waitForRequest(snapshotURL);
+    await card(A.id).getByRole('button',{name:'Open linked assessments'}).click();
+    await start;
+    await page.getByRole('button',{name:'Browse workspace'}).click();
+    await page.getByRole('button',{name:'Home',exact:true}).click();
+    await page.locator('#home-view').waitFor();
+    release();
+    await page.waitForFunction(()=>window.vendorSnapshotDispatched);
+    assert.equal(await page.locator('#home-view').isVisible(),true,'a late assessment snapshot must not override a newer navigation');
+    await open();
     await card(A.id).getByRole('button',{name:'Open linked assessments'}).click();
     await page.getByRole('heading',{name:titleA,exact:true}).waitFor();
     const a=A.assessmentStatus[0].id,b=B.assessmentStatus[0].id;

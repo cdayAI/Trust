@@ -3,7 +3,7 @@
 const assert=require('node:assert/strict');
 const {spawn,execFile}=require('node:child_process');
 const {once}=require('node:events');
-const {mkdtemp,readFile,readdir,stat,rm}=require('node:fs/promises');
+const {copyFile,mkdir,mkdtemp,readFile,readdir,stat,rm,writeFile}=require('node:fs/promises');
 const http=require('node:http');
 const {tmpdir}=require('node:os');
 const {join,resolve}=require('node:path');
@@ -24,6 +24,45 @@ const tempEnv=room=>({...process.env,TMPDIR:room,TMP:room,TEMP:room});
 async function binary(room,...args){
   return invoke(process.execPath,[launcher,...args],{cwd:room,env:tempEnv(room),timeout});
 }
+test('release verification rejects files and directories outside the exact package inventory',async t=>{
+  const room=await scratch(t);
+  const scripts=join(room,'scripts'),extras=join(room,'empty-directory');
+  await mkdir(scripts);
+  for(const file of ['package-release.js','runtime-check.js']){
+    await copyFile(join(source,'scripts',file),join(scripts,file));
+  }
+  const paths=['package.json','scripts/release-files.json','scripts/package-release.js','scripts/runtime-check.js'];
+  await writeFile(join(room,'package.json'),JSON.stringify({name:'fictional-release-test',version:'1.0.0',
+    private:true,engines:{node:'>=22.13.0'}}));
+  await writeFile(join(scripts,'release-files.json'),JSON.stringify(paths));
+  const {sourceManifest}=require('../scripts/package-release');
+  const {manifest}=sourceManifest(room);
+  await writeFile(join(room,'RELEASE-MANIFEST.json'),JSON.stringify(manifest));
+  const verify=()=>invoke(process.execPath,[join(scripts,'package-release.js'),'--verify-extracted'],
+    {cwd:room,env:tempEnv(room),timeout});
+
+  assert.deepEqual(JSON.parse((await verify()).stdout),{package:'fictional-release-test',packageVersion:'1.0.0',files:paths.length});
+  const unlisted=join(scripts,'unlisted-test-notes.txt');
+  await writeFile(unlisted,'Fictional test notes not present in release inventory.');
+  await assert.rejects(verify(),error=>error.code===1&&error.stdout===''&&error.stderr.includes('scripts/unlisted-test-notes.txt'));
+  await rm(unlisted);
+  await mkdir(extras);
+  await assert.rejects(verify(),error=>error.code===1&&error.stdout===''&&error.stderr.includes('empty-directory'));
+  await rm(extras,{recursive:true});
+  assert.equal(JSON.parse((await verify()).stdout).files,paths.length);
+});
+
+test('release inventory cannot include the launcher’s private resume profile',async t=>{
+  const room=await scratch(t),scripts=join(room,'scripts');
+  await mkdir(scripts);
+  await writeFile(join(room,'package.json'),JSON.stringify({name:'fictional-release-test',version:'1.0.0',
+    private:true,engines:{node:'>=22.13.0'}}));
+  await writeFile(join(room,'release-profile.json'),JSON.stringify({note:'Fictional, not a credential.'}));
+  await writeFile(join(scripts,'release-files.json'),JSON.stringify(['package.json','release-profile.json']));
+  const {sourceManifest}=require('../scripts/package-release');
+  assert.throws(()=>sourceManifest(room),/Runtime data must not be included in the release: release-profile\.json/);
+});
+
 test('install-free release preflight validates real SQLite and loopback, leaves no runtime artifacts',async t=>{
   const room=await scratch(t);
   assert.deepEqual(JSON.parse((await binary(room,'--check')).stdout),{status:'verified',mode:'local-synthetic',storage:'sqlite',workspaceCount:2});

@@ -1,9 +1,10 @@
 'use strict';
 const form=document.querySelector('#employee-code'),list=document.querySelector('#employee-list'),clear=document.querySelector('#employee-clear'),message=document.querySelector('#employee-message');
+const codeSubmit=form.querySelector('button');
 let localCode,operationId=0;
 function n(tag,text){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;return element}
 function clearPage(){
-  operationId++;localCode=undefined;form.reset();list.replaceChildren();clear.hidden=true;message.textContent='';
+  operationId++;localCode=undefined;form.reset();codeSubmit.disabled=false;list.replaceChildren();clear.hidden=true;message.textContent='';
 }
 async function send(action,fields){
   const r=await fetch('/api/employee/'+action,{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},
@@ -21,7 +22,7 @@ async function run(action,fields,trigger){
       if(error.status===401||error.status===429)clearPage();
       message.textContent=error.message;
     }
-  }finally{trigger.disabled=false}
+  }finally{if(current===operationId)trigger.disabled=false}
 }
 function render(data){
   const sections=[];
@@ -43,10 +44,10 @@ function render(data){
   list.replaceChildren(...(sections.length?sections:[n('p','You have no assigned policy editions.')]));
 }
 form.onsubmit=event=>{
-  event.preventDefault();const submit=form.querySelector('button');
-  if(submit.disabled)return;
+  event.preventDefault();
+  if(codeSubmit.disabled)return;
   operationId++;localCode=form.elements.code.value;form.reset();list.replaceChildren();clear.hidden=false;
-  run('assignments',{},submit);
+  run('assignments',{},codeSubmit);
 };
 clear.onclick=()=>{clearPage();form.elements.code.focus()};
 window.addEventListener('pagehide',clearPage);

@@ -202,7 +202,7 @@ function attachmentForm(path,revision,rules,remaining){
       if(!fileErrors.length){
         const body=binary?binaryAttachmentBatch(selected,revision):{files:payload,expectedRevision:revision};
         await docsPost(path+'/attachments/'+(binary?'binary-batch':'batch'),body,data=>{
-          docsData=data;renderDocs();notice(rules.manualReview?
+          docsData=data;renderDocs({keepDraftEdits:true});notice(rules.manualReview?
             selected.length+' attachment'+(selected.length===1?'':'s')+' staged for quarantine review.':
             selected.length===1?'Attachment added to the draft.':selected.length+' attachments added to the draft.');
         },error=>fileErrors.push(...(error.fileErrors??[])),binary);
@@ -249,7 +249,7 @@ function attachmentControls(card,path,version,revision,rules){
     if(mayAct&&actor==='analyst'&&version.status==='draft'){
       const remove=button('Remove attachment '+row.name,'button','secondary');
       remove.onclick=()=>docsPost(path+'/attachments/'+row.id+'/remove',{expectedRevision:revision},data=>{
-        docsData=data;renderDocs();notice('Draft attachment removed.');
+        docsData=data;renderDocs({keepDraftEdits:true});notice('Draft attachment removed.');
       });
       item.append(remove);
     }
@@ -331,7 +331,14 @@ function evidenceRehearsalControls(card,path,edition,revision,rules){
   }
   card.append(region);
 }
-function renderDocs(){
+function renderDocs({keepDraftEdits=false}={}){
+  // Attachment-only updates advance the workspace revision but do not save text edits.
+  // Keep local edits in matching draft editors while rebuilding their write controls.
+  const edits=new Map();
+  if(keepDraftEdits)for(const panel of docsPane.querySelectorAll('details[data-draft-edition]')){
+    const fields=documentPayload(new FormData(panel.querySelector('form')));
+    edits.set(panel.dataset.draftEdition,{fields,open:panel.open});
+  }
   const {documents,revision,targets,legacyRecords,attachmentRules,restrictedDocumentReview}=docsData;
   const intro=add(el('section'),heading('Policies and evidence documents'),el('p','Use only original fictional text and attachments. Documents are role-scoped; nothing is published outside the local workspace.'));
   if(actor==='analyst'){
@@ -376,9 +383,14 @@ function renderDocs(){
       evidenceRehearsalControls(card,path,v,revision,docsData.evidenceRetentionRules);
       if(mayAct&&actor==='analyst'&&v.status==='draft'){
         const edit=docsPanel(card,'Edit draft');
+        edit.dataset.draftEdition=v.id;
         const fields=documentFields(targets);
-        fields[0].querySelector('input').value=v.title;
-        for(const opt of fields[2].querySelector('select').options)opt.selected=v.links.some(l=>opt.value===l.type+':'+l.id);
+        const pending=edits.get(v.id);
+        if(pending?.open)edit.open=true;
+        fields[0].querySelector('input').value=pending?.fields.title??v.title;
+        fields[1].querySelector('textarea').value=pending?.fields.content??'';
+        for(const opt of fields[2].querySelector('select').options)
+          opt.selected=(pending?.fields.links??v.links).some(l=>opt.value===l.type+':'+l.id);
         const load=button('Load current text into editor','button','secondary');
         load.onclick=()=>docsPost(path+'/read',{},data=>{fields[1].querySelector('textarea').value=data.text;notice('Document access recorded.')});
         edit.append(load);
