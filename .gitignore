@@ -4,3 +4,8 @@
 .env.*
 *.zip
 *access.json
+
+# Local databases and snapshots
+*.sqlite
+*.sqlite-*
+*.trust-backup.json

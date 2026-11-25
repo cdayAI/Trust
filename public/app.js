@@ -188,12 +188,16 @@ $('#local-logout').onclick=async()=>{
   try{await sessionPost('logout',{});$('#workbench').hidden=true;location.reload()}
   catch(error){notice(error.message,true)}
 };
+function showSkipDestination(id,label){
+  const link=$('#skip-to-content');
+  link.href='#'+id;link.textContent=label;link.hidden=false;
+}
 async function start(){
   try{
     const session=await read('/api/session');
     if(session.mode==='local-isolated'){
       localSession=session;
-      if(!session.authenticated){$('#local-signin').hidden=false;return}
+      if(!session.authenticated){$('#local-signin').hidden=false;showSkipDestination('local-signin','Skip to sign-in');return}
       actor=session.actor;
       const workspace=$('#local-workspace');
       workspace.replaceChildren(...session.workspaces.map(x=>{const option=el('option',x.label);option.value=x.id;return option}));
@@ -202,9 +206,21 @@ async function start(){
       $('#local-context').hidden=false;
     }else if(session.mode==='synthetic-demo'){$('#demo-identity').hidden=false}
     else throw Error('Unknown workspace mode.');
-    state=await read('/api/state');$('#audit-export').href=scopeUrl('/api/audit/export');render();$('#workbench').hidden=false;
+    state=await read('/api/state');
+    const auditLink=$('#audit-export');
+    auditLink.href=scopeUrl('/api/audit/export');
+    auditLink.hidden=!!localSession&&!localSession.capabilities.workspaceAudit;
+    if(localSession){
+      const allowed=localSession.capabilities.views;
+      for(const b of $('#work-tabs').querySelectorAll('button[id^="show-"]'))b.hidden=!allowed.includes(b.id.slice(5));
+      for(const group of $('#work-tabs').querySelectorAll('.nav-group'))group.hidden=!group.querySelector('button:not([hidden])');
+      if(!allowed.length)throw Error('No workspace views are available for this account.');
+      if(!allowed.includes('assessments'))switchView(allowed[0]);
+      else render();
+    }else render();
+    $('#workbench').hidden=false;showSkipDestination('workbench','Skip to workbench');
   }catch(error){
-    $('#local-signin').hidden=false;$('#local-login').hidden=true;
+    $('#local-signin').hidden=false;$('#local-login').hidden=true;showSkipDestination('local-signin','Skip to sign-in');
     $('#local-error').textContent='Unable to load workbench: '+error.message;
   }
 }

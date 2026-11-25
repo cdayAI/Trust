@@ -4,7 +4,7 @@ A work-in-progress privacy operations prototype with synthetic fixtures. It is n
 
 ## Run
 
-Use Node.js 22 or newer. There are no runtime npm packages to install.
+Use Node.js 22.13 or newer. There are no runtime npm packages to install.
 
 ```sh
 npm start
@@ -48,6 +48,12 @@ For local API tests, non-session endpoints require `?workspace=<active-id>`
 and the issued cookie. Writes also require the exact loopback origin and JSON.
 Sign-in is `POST /api/session/login` with `account`, `workspace`, and `code`;
 the browser handles the resulting cookie. See `test/workspace-access.test.js`.
+
+## Durable local mode
+
+Set `TRUST_SQLITE_FILE` to use the optional transactional SQLite backend.
+See [backup, restore, and migration](DURABLE-STORAGE.md). The legacy JSON
+backend remains available for local compatibility.
 
 ## Interface
 

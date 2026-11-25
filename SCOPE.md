@@ -20,11 +20,11 @@ This table describes the standalone local prototype, not production readiness or
 | Data discovery | Partial: schema-only discovery over bundled fictional fixtures, rule-based label hints, non-mutating preview and reviewed inventory import. No real scans, value inspection, data sources or production classification. |
 | Campaigns | Not built. |
 | Dashboards | Partial: local metrics and cross-workflow owner/reviewer work queue with filters. No configurable dashboards or production feature completeness. |
-| Documents | Partial: role-scoped original fictional text, typed case/control links, independent review, version integrity, audited read/download. No attachments, enterprise identity integration, durable file object storage or browser verification. |
+| Documents | Partial: role-scoped original fictional text, typed case/control links, independent review, version integrity, audited read/download. Includes bounded synthetic text attachments with audited forced downloads. No enterprise identity integration, general document ingestion, or durable file object storage. |
 | Employee portal | Partial: separate provisioned synthetic access, version-pinned published policy assignment, explicit idempotent acknowledgment and locally signed receipt. No directory, onboarding, training or real identity integration. |
 | Global data management | Partial: typed independently reviewed dictionary versions, current-version assignment, exact inventory pins, consumer impact and retirement/archival guards verified over local HTTP. No enterprise reference-data sync, administrator customization or browser verification. |
 | Integrations | Registry and one mock retry only; no real transport, credentials or delivery. |
-| Reports | Audit JSON, local counts and scoped queue export use real workflow state. No scheduled delivery or configurable reports. |
+| Reports | Role-scoped workflow and audit reporting supports filters, grouping, JSON and CSV. No scheduled or external delivery. |
 | Risks | Partial: explicit and auditable inherent/residual scores and per-control eligibility in a standalone view. No multi-program reporting, automated imports or browser verification. |
 | Self-service portal | Partial: isolated, provisioned synthetic requester codes, one case per code in the actual rights workflow, scoped receipt and coarse status. No open public intake, communications, identity proof, uploads, real disclosures or browser verification. |
 | Trust center | Partial: versioned bundled synthetic cards, independent review, explicit local publication and withdrawal, and a separate visitor projection. No public deployment, authentication for real visitors, evidence exchange, customer self-service, or browser verification. |

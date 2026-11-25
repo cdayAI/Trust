@@ -13,6 +13,8 @@ describe it as ready for production based on local tests or design quality.
 | Workflow acceptance | Verified enterprise requirements and acceptance evidence for the scoped workflows, permission failures, rework, expiration and escalation. Tracking and consent management are not in scope. |
 | Integrations and rollout | Written approval for authorized connectors and approved design assets, isolated QA in the receiving environment, staged rollout, rollback plan and sign-off from accountable owners. |
 
-Current baseline: synthetic local workflows, local account isolation, single-process
-JSON storage, mock handoff, and no live deployment. The design prototype uses
+Current baseline: synthetic local workflows, local account isolation, optional
+local transactional SQLite with tested migration and recovery, mock handoff,
+and no live deployment. Production storage, encryption, and recovery
+objectives remain outstanding. The design prototype uses
 public identity cues, not an official corporate brand kit.

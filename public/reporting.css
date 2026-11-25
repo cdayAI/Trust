@@ -1,0 +1,13 @@
+.report-intro .eyebrow{margin:0 0 5px;color:var(--navy)}
+.report-filter-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,155px),1fr));column-gap:13px;row-gap:4px;align-items:end}
+.report-actions,.report-date-hint{grid-column:1/-1}
+.report-actions{margin:8px 0 12px}
+.report-metrics{margin:10px 0 14px}
+.report-table-wrap{overflow-x:auto}
+.report-table{width:100%;min-width:340px;border-collapse:collapse;text-align:left}
+.report-table caption{text-align:left;font-weight:700;margin:6px 0}
+.report-table td,.report-table th{padding:9px 8px;border-bottom:1px solid var(--line)}
+.report-table thead th{background:var(--surface)}
+.report-table td:nth-child(2){font-variant-numeric:tabular-nums}
+.report-table td:last-child{white-space:nowrap}
+.report-table meter{width:min(11vw,120px);min-width:46px;margin-right:9px;accent-color:var(--navy)}

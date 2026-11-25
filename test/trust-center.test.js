@@ -92,7 +92,7 @@ test('only exact independently reviewed copy reaches the correct local visitor s
   await action('publish',a,revision(12,2),409);
   const state=(await request('/api/state?workspace=a',200,{cookie:a})).data;
   assert.equal(state.trustCenter,undefined);
-  const audit=(await request('/api/audit/export?workspace=a',200,{cookie:a})).data.audit;
+  const audit=(await request('/api/audit/export?workspace=a',200,{cookie:r})).data.audit;
   assert.ok(audit.some(e=>e.action==='trust-center.approve'&&e.account==='reviewer'));
   assert.ok(audit.some(e=>e.action==='trust-center.withdraw'&&e.account==='analyst'));
   assert.doesNotMatch(JSON.stringify(audit),/REJECTED_PUBLIC_OVERRIDE/);

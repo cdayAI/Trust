@@ -103,7 +103,9 @@ function renderStudio(){
     }
   }
   const audit=add(el('section'),heading('Recent workflow audit'));
-  const link=el('a','Export full workflow audit JSON','button quiet');link.href=scopeUrl(studioPath+'/audit');link.download='';audit.append(link);
+  if(!localSession||localSession.capabilities.workspaceAudit){
+    const link=el('a','Export full workflow audit JSON','button quiet');link.href=scopeUrl(studioPath+'/audit');link.download='';audit.append(link);
+  }
   const log=el('ol');
   for(const event of studio.recentAudit)log.append(el('li',event.kind+' · '+event.outcome+' · '+(event.actor?.id??'Unrecognized')+
     ' · '+(event.code??event.transitionId??event.definitionId??'')+' · '+event.at));
@@ -130,7 +132,7 @@ function buildStudioDraft(pane,source,expectedVersion){
       labelled('From state ID','from',value.from,'input'),labelled('To state ID','to',value.to,'input'),
       labelled('Required field keys (comma-separated)','requiredKeys',value.requiredFields.join(', '),'input',false));
     const roles=el('fieldset');roles.append(el('legend','Permitted roles'));
-    for(const role of ['publisher','initiator','reviewer']){
+    for(const role of localSession?['initiator','reviewer']:['publisher','initiator','reviewer']){
       const cb=el('input');cb.type='checkbox';cb.name='allowedRole';cb.value=role;cb.checked=value.roles.includes(role);
       roles.append(add(el('label',role),cb));
     }

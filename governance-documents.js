@@ -1,5 +1,6 @@
 'use strict';
 const {createHash,randomUUID}=require('node:crypto');
+const attachments=require('./governance-document-attachments');
 const docsOf=s=>s.governanceDocuments??{revision:0,documents:[]};
 const kinds=['policy','evidence'];
 const linkKinds={risk:'Risk',control:'Control','rights-case':'Rights case',incident:'Incident'};
@@ -18,8 +19,8 @@ function candidates(s){
   ];
 }
 function redactVersion(version){
-  const {content,...safe}=version;
-  return safe;
+  const {content,attachments:rows,...safe}=version;
+  return {...safe,attachments:(rows??[]).map(attachments.metadata)};
 }
 function permitted(s,doc,v,actor){
   if(!s.actors.some(x=>x.id===actor))return false;
@@ -37,7 +38,7 @@ function view(s,actor){
     const currentRevisionId=revisions.findLast(v=>v.status==='published')?.id??null;
     return {...doc,revisions,currentRevisionId};
   }).filter(Boolean);
-  return {revision:administrator?book.revision:null,kinds,linkKinds,documents,targets:administrator?candidates(s):[],
+  return {revision:administrator?book.revision:null,kinds,linkKinds,attachmentRules:attachments.rules,documents,targets:administrator?candidates(s):[],
     legacyRecords:administrator?(s.moduleRecords??[]).filter(x=>x.moduleId==='policies'):[]};
 }
 function versionFields(s,kind,body){
@@ -56,23 +57,35 @@ function versionFields(s,kind,body){
 }
 const actionKeys={
   create:['kind','title','content','links'],revise:['title','content','links'],edit:['title','content','links'],
-  submit:[],publish:['note'],return:['note'],read:[],download:[]
+  submit:[],publish:['note'],return:['note'],read:[],download:[],
+  'attachment-upload':['filename','mediaType','data'],'attachment-remove':[],'attachment-download':[]
 };
 function change(s,parts,actor,body,event){
   const book=s.governanceDocuments??=docsOf(s);
-  const [,collection,docId,part,revId,operation]=parts;
-  const action=parts.length===2?'create':parts.length===4&&part==='revise'?'revise':parts.length===6&&part==='revisions'?operation:null;
-  if(collection!=='records'||!action||!Object.hasOwn(actionKeys,action)||
-    (parts.length===6&&['create','revise'].includes(action)))issue(404,'NOT_FOUND','Governance document action not found.');
+  const [,collection,docId,part,revId,operation,attachmentId,attachmentOperation]=parts;
+  let action=parts.length===2?'create':parts.length===4&&part==='revise'?'revise':null;
+  if(part==='revisions'){
+    if(parts.length===6&&['edit','submit','publish','return','read','download'].includes(operation))action=operation;
+    if(operation==='attachments'&&parts.length===6)action='attachment-upload';
+    if(operation==='attachments'&&parts.length===8&&['download','remove'].includes(attachmentOperation))action='attachment-'+attachmentOperation;
+  }
+  if(collection!=='records'||!action)issue(404,'NOT_FOUND','Governance document action not found.');
   const doc=book.documents.find(x=>x.id===docId);
   const v=doc?.revisions.find(x=>x.id===revId);
   const audit=(kind,document,version,details)=>event(s,actor,'governance-documents.'+kind,null,document?.id??null,
     {versionId:version?.id??null,...details});
   try{
     if(Object.keys(body).some(k=>!['expectedRevision',...actionKeys[action]].includes(k)))issue(422,'UNKNOWN_FIELDS','Only structured text and record links are supported.');
-    if(['read','download'].includes(action)){
+    if(['read','download','attachment-download'].includes(action)){
       if(!doc||!v)issue(404,'RECORD_NOT_FOUND','That document revision was not found.');
       if(!permitted(s,doc,v,actor))issue(403,'DOCUMENT_READ_DENIED','This demo identity cannot access that revision.');
+      if(action==='attachment-download'){
+        const row=v.attachments?.find(x=>x.id===attachmentId);
+        if(!row)issue(404,'ATTACHMENT_NOT_FOUND','Attachment not found in this document revision.');
+        const result=attachments.download(row);
+        audit(action,doc,v,{attachmentId:row.id,version:v.number});
+        return result;
+      }
       audit(action,doc,v,{hash:v.contentHash,version:v.number});
       return {id:doc.id,kind:doc.kind,version:redactVersion(v),text:v.content,filename:'synthetic-'+doc.kind+'-v'+v.number+'.txt'};
     }
@@ -92,7 +105,7 @@ function change(s,parts,actor,body,event){
         if(d.revisions.at(-1).status!=='published')issue(409,'DRAFT_EXISTS','Finish the current revision before starting the next.');
       }
       row={id:randomUUID(),number:d.revisions.length+1,...versionFields(s,d.kind,body),status:'draft',authoredBy:actor,createdAt:now,
-        updatedAt:now,publishedAt:null,publishedBy:null,reviewNote:null};
+        attachments:[],updatedAt:now,publishedAt:null,publishedBy:null,reviewNote:null};
       d.revisions.push(row);
       if(action==='create')book.documents.push(d);
     }else{
@@ -100,6 +113,21 @@ function change(s,parts,actor,body,event){
       if(v.status==='published')issue(409,'IMMUTABLE_REVISION','Published revisions cannot be changed.');
       if(v.status!==(review?'review':'draft'))issue(409,'OUT_OF_ORDER','This action is unavailable for the current revision stage.');
       if(action==='edit')Object.assign(v,versionFields(s,doc.kind,body));
+      if(action==='attachment-upload'){
+        const row=attachments.attachment(body,book,v);
+        (v.attachments??=[]).push(row);
+        book.revision++;v.updatedAt=now;
+        audit(action,doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
+        return;
+      }
+      if(action==='attachment-remove'){
+        const at=v.attachments?.findIndex(x=>x.id===attachmentId)??-1;
+        if(at<0)issue(404,'ATTACHMENT_NOT_FOUND','Attachment not found in this document revision.');
+        const [row]=v.attachments.splice(at,1);
+        book.revision++;v.updatedAt=now;
+        audit(action,doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
+        return;
+      }
       if(action==='submit'){v.status='review';v.reviewNote=null}
       if(review){
         if(v.authoredBy===actor)issue(403,'INDEPENDENT_REVIEW_REQUIRED','The author cannot review the same revision.');

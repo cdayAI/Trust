@@ -16,6 +16,7 @@ const seats=[
   ['sample-review',{harbor:'reviewer'}],
   ['sample-publisher',{harbor:'publisher',orchard:'publisher'}],
   ['sample-orchard',{orchard:'analyst'}],
+  ['sample-case-operator',{harbor:'case-operator',orchard:'case-operator'}],
 ];
 const accounts=seats.map(([id,memberships])=>({id,memberships,code:randomBytes(32).toString('base64url')}));
 writeFileSync(codes,JSON.stringify(accounts,null,2)+'\n',{flag:'wx',mode:0o600});
@@ -28,7 +29,7 @@ const employees=['harbor','orchard'].map(workspace=>({
   alias:'sample-staff-'+workspace,workspace,code:randomBytes(32).toString('base64url'),expiresAt:Date.now()+8*3600000
 }));
 writeFileSync(employeeCodes,JSON.stringify(employees,null,2)+'\n',{flag:'wx',mode:0o600});
-const server=createServer({isolated:{
+const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,isolated:{
   root:join(root,'workspaces'),
   workspaces:[{id:'harbor',label:'Fictional Harbor'},{id:'orchard',label:'Fictional Orchard'}],
   employeeGrants:employees.map(({code,...seat})=>({...seat,codeHash:codeHash(code)})),

@@ -20,9 +20,9 @@ function moduleField(f,value){
 async function refreshModules(announce){
   try{
     moduleData=await read('/api/modules');
-    if(moduleActive)renderModules();if(reportActive)renderReport();
+    if(moduleActive)renderModules();
     if(announce)notice(announce);
-  }catch(error){if(moduleActive||reportActive){(reportActive?$('#report-view'):mview).replaceChildren(el('p','Could not load program records.'));notice(error.message,true)}}
+  }catch(error){if(moduleActive){mview.replaceChildren(el('p','Could not load program records.'));notice(error.message,true)}}
 }
 async function saveModule(path,body,announce,form){
   if(busy)return;
@@ -104,32 +104,8 @@ function renderModules(){
   content.append(listing);
   mview.replaceChildren(add(el('div',undefined,'module-grid'),add(el('aside'),add(el('section'),heading('Program modules'),nav)),content));
 }
-function renderReport(){
-  const pane=$('#report-view');
-  if(!state||!moduleData)return;
-  const {modules,records}=moduleData;
-  const inReview=state.assessments.filter(a=>a.status==='in_review').length;
-  const failed=state.handoff.filter(p=>p.status==='failed').length;
-  const head=add(el('section'),heading('Program summary'),el('p','Counts reflect the local synthetic workspace only.'));
-  const metrics=el('div',undefined,'metrics');
-  for(const [caption,value] of [['Projects',state.projects.length],['Vendors',state.vendors.length],['Assessments in review',inReview],['Failed handoffs',failed],['Rights cases',(state.rightsCases??[]).length],['Incidents',(state.incidentCases??[]).length],['Data map records',(state.dataMap?.nodes??[]).filter(n=>!n.archivedAt).length],['Program records',records.length],['Audit events',state.audit.length]]){
-    metrics.append(add(el('div',undefined,'metric'),el('strong',String(value)),el('span',caption)));
-  }
-  head.append(metrics);
-  const output=add(el('section'),heading('Record counts by stage'));
-  const list=el('ul',undefined,'log');
-  for(const m of modules){
-    const rows=records.filter(r=>r.moduleId===m.id);
-    list.append(add(el('li'),el('strong',m.name+': '),document.createTextNode(m.statuses.map(stage=>stage+' '+rows.filter(r=>r.status===stage).length).join(' · '))));
-  }
-  output.append(list);
-  const activity=add(el('section'),heading('Recent audit activity'));
-  const log=el('ol',undefined,'log');
-  for(const item of state.audit.slice(-15).reverse())log.append(el('li',item.action+' · '+item.actor+' · '+item.at));
-  activity.append(log);
-  pane.replaceChildren(head,output,activity);
-}
 function switchView(view){
+  if(localSession&&!localSession.capabilities.views.includes(view))return;
   const item=$('#show-'+view);
   $('#view-title').textContent=view==='assessments'?'Assessment workspace':item.textContent;
   $('#view-description').textContent=view==='assessments'?
@@ -148,11 +124,11 @@ function switchView(view){
     b.setAttribute('aria-current',String(on));b.classList.toggle('secondary',!on);
   }
   notice('');
-  if(moduleActive||reportActive){
-    const pane=reportActive?$('#report-view'):mview;
-    pane.replaceChildren(el('p','Loading program records…'));
-    if(reportActive)read('/api/state').then(next=>{state=next;return refreshModules()}).catch(error=>{if(reportActive)notice(error.message,true)});
-    else refreshModules();
+  if(reportActive){
+    refreshReporting();
+  }else if(moduleActive){
+    mview.replaceChildren(el('p','Loading program records…'));
+    refreshModules();
   }else if(view==='rights'){
     $('#rights-view').replaceChildren(el('p','Loading privacy rights cases…'));refreshRights();
   }else if(view==='incidents'){

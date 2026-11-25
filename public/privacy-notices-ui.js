@@ -22,7 +22,7 @@ function prefsForm(parent,url,fields,caption,payload,onSuccess){
       const data=await read(prefsPath+url,{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Actor':actor},
         body:JSON.stringify(payload(new FormData(form)))});
       if(!prefsPane.hidden)onSuccess(data);
-      elseprefsData=data;
+      else prefsData=data;
     }catch(error){
       if(!prefsPane.hidden){
         notice(error.message,true);

@@ -154,7 +154,7 @@ test('browser smoke: synthetic intake to independent approval, mock retry and au
     await page.getByRole('button',{name:'Save disposition preview',exact:true}).click();
     await page.getByText('No active schedule',{exact:true}).waitFor();
     await page.getByRole('button',{name:'Risk and controls',exact:true}).click();
-    await page.getByRole('heading',{name:'Risk and controls',exact:true}).waitFor();
+    await page.getByRole('heading',{name:'Risk and controls',exact:true,level:2}).waitFor();
     await page.locator('#risk-controls-view summary').getByText('Add risk',{exact:true}).click();
     await page.getByLabel('Fictional risk title').fill('Fictional risk smoke case');
     await page.getByLabel('Fictional risk scenario').fill('Only fictional accounts are included.');
@@ -222,11 +222,13 @@ test('browser smoke: isolated sign-in, selected workspace, reload and sign-out',
     await page.getByLabel('Project name').fill('Synthetic Alpha project');
     await page.getByRole('button',{name:'Create project'}).click();
     await page.getByRole('heading',{name:'Synthetic Alpha project'}).waitFor();
-    const oldPath=await page.getByRole('link',{name:'Export audit JSON'}).getAttribute('href');
+    assert.equal(await page.locator('#audit-export').isVisible(),false);
+    const oldPath=await page.locator('#audit-export').getAttribute('href');
     assert.match(oldPath,/workspace=alpha$/);
     await page.getByLabel('Workspace',{exact:true}).selectOption('beta');
     await page.getByRole('button',{name:'Switch workspace'}).click();
     await page.getByText('pilot-user · reviewer').waitFor();
+    assert.equal(await page.getByRole('link',{name:'Export audit JSON'}).isVisible(),true);
     assert.equal(await page.getByRole('heading',{name:'Synthetic Alpha project'}).count(),0);
     assert.equal(await page.getByRole('button',{name:'Create project'}).isDisabled(),true);
     const restricted=await page.evaluate(async path=>(await fetch(path)).status,oldPath);

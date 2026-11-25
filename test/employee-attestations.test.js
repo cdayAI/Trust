@@ -101,7 +101,7 @@ test('assign and attest only a scoped published edition, once, with a durable ve
   await portal('first','attest',{...confirm,assignment:list[1].assignment},409);
   const global=(await req('/api/state',200,{cookie:a,workspace:'alpha'})).data;
   assert.equal(global.employeeAttestations,undefined);
-  const events=(await req('/api/audit/export',200,{cookie:a,workspace:'alpha'})).data.audit;
+  const events=(await req('/api/audit/export',200,{cookie:r,workspace:'alpha'})).data.audit;
   assert.equal(events.filter(e=>e.action==='employee-attestations.assigned').length,2);
   assert.equal(events.filter(e=>e.action==='employee-attestations.acknowledged').length,1);
   const file=await readFile(join(root,'alpha','state.json'),'utf8');

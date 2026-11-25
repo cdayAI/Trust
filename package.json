@@ -4,11 +4,12 @@
   "private": true,
   "description": "Local-only synthetic privacy assessment and handoff prototype",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.13.0"
   },
   "scripts": {
     "start": "node server.js",
     "test": "node --test",
-    "start:isolated": "node start-isolated.js"
+    "start:isolated": "node start-isolated.js",
+    "storage": "node storage-cli.js"
   }
 }

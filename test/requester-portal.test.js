@@ -86,7 +86,7 @@ test('synthetic requester opens one durable case and sees only its permitted pub
   assert.doesNotMatch(JSON.stringify(closed),/Operator|sample-requester|analyst|reviewer|due|identity|caseId/i);
   const state=(await request('/api/state?workspace=alpha',200,{cookie:a})).payload;
   assert.equal(state.requesterReceipts,undefined);
-  const audit=(await request('/api/audit/export?workspace=alpha',200,{cookie:a})).payload.audit;
+  const audit=(await request('/api/audit/export?workspace=alpha',200,{cookie:r})).payload.audit;
   assert.equal(audit.filter(e=>e.action==='rights.case.opened').length,1);
   assert.equal(audit.filter(e=>e.action==='rights.case.portal-receipt-issued').length,1);
   assert.equal(audit.find(e=>e.action==='rights.case.verify').account,'reviewer');

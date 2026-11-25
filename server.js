@@ -4,12 +4,15 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const {openStore} = require('./store');
 const {openWorkflowHttp} = require('./workflow-http');
+const {openSqlite} = require('./durable-storage');
 const {view:workQueue}=require('./work-queue');
 const {createAccess}=require('./workspace-access');
+const policy=require('./access-policy');
 const {fixtureOptions}=require('./discovery-import');
 const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
 const employee=require('./employee-attestations');
+const reporting=require('./reporting');
 const publicDir = path.join(__dirname,'public');
 const staticFiles = new Map([
   ['/',['index.html','text/html; charset=utf-8']],
@@ -29,6 +32,8 @@ const staticFiles = new Map([
   ['/data-map-ui.js',['data-map-ui.js','text/javascript; charset=utf-8']],
   ['/incident-ui.js',['incident-ui.js','text/javascript; charset=utf-8']],
   ['/rights-ui.js',['rights-ui.js','text/javascript; charset=utf-8']],
+  ['/reporting-ui.js',['reporting-ui.js','text/javascript; charset=utf-8']],
+  ['/reporting.css',['reporting.css','text/css; charset=utf-8']],
   ['/modules-ui.js',['modules-ui.js','text/javascript; charset=utf-8']],
   ['/mvw-horizon.svg',['mvw-horizon.svg','image/svg+xml']],
   ['/styles.css',['styles.css','text/css; charset=utf-8']],
@@ -49,7 +54,7 @@ async function readBody(req) {
   try { return bytes?JSON.parse(Buffer.concat(chunks).toString('utf8')):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
-function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),isolated}={}) {
+function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated}={}) {
   const access=isolated===undefined?null:createAccess(isolated);
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
     grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,now:isolated.now
@@ -59,16 +64,28 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     grants:isolated.employeeGrants,key:isolated.employeeSigningKey,workspaces:isolated.workspaces,
     accounts:isolated.accounts,requesters:isolated.requesterGrants,now:isolated.now
   }):null;
-  const demo=access?null:{store:openStore(dataFile),workflow:openWorkflowHttp(dataFile+'.workflows')};
+  const database=sqliteFile===undefined?null:openSqlite(sqliteFile);
+  function openRuntime(stateFile,workflowFile,scope,empty){
+    const storage=database?.scope(scope);
+    const workflow=openWorkflowHttp(workflowFile,{storage});
+    return {store:openStore(stateFile,{empty,storage}),workflow};
+  }
+  let demo;
+  try {
+    database?.requireMode(access?'isolated':'demo');
+    demo=access?null:openRuntime(dataFile,dataFile+'.workflows','demo',false);
+  } catch(error) {
+    database?.close();
+    throw error;
+  }
   const runtimes=new Map();
   function runtime(space){
     if(!space)return demo;
-    if(!runtimes.has(space.id))runtimes.set(space.id,{
-      store:openStore(space.file,{empty:true}),workflow:openWorkflowHttp(space.workflowFile)
-    });
+    if(!runtimes.has(space.id))runtimes.set(space.id,
+      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true));
     return runtimes.get(space.id);
   }
-  return http.createServer(async (req,res)=>{
+  const server=http.createServer(async (req,res)=>{
     try {
       if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)||!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i.test(req.headers.host||'')) return send(res,403,{error:'Only loopback access is allowed.'});
       const {pathname,searchParams}=new URL(req.url,'http://localhost');
@@ -131,9 +148,13 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if(!pathname.startsWith('/api/'))return send(res,404,{error:'Not found.'});
       const expected=searchParams.getAll('workspace');
       const selection=access?.context(req,expected);
-      const {store,workflow}=runtime(selection?.space);
       const actor=access?selection.actor:req.headers['x-demo-actor'];
-      if(access)searchParams.delete('workspace');
+      if(access){
+        policy.requirePermission(req.method,pathname,actor);
+        searchParams.delete('workspace');
+      }
+      const caseOperator=!!access&&actor==='case-operator';
+      const {store,workflow}=runtime(selection?.space);
       const mode=access?'local-isolated':'synthetic-demo';
       const workflowParts=pathname.startsWith('/api/workflows/')?pathname.slice(15).split('/'):null;
       const employeeEnabled=staff?.enabled(selection?.space.id);
@@ -143,16 +164,30 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       const centerPath=centers?.path(selection?.space.id);
       if(req.method==='GET'&&pathname==='/api/trust-center')
         return send(res,200,centerPath&&['analyst','reviewer'].includes(actor)?store.trustCenterView(centerPath):{enabled:false});
-      if (req.method==='GET'&&workflowParts) { const r=workflow.get(workflowParts,mode,actor,selection?.account); return send(res,r.status,r.value); }
+      if (req.method==='GET'&&workflowParts) {
+        const r=workflow.get(workflowParts,mode,actor,selection?.account);
+        const value=access&&actor==='publisher'&&workflowParts[0]==='studio'&&r.status===200?policy.publisherStudio(r.value):r.value;
+        return send(res,r.status,value);
+      }
+      if(req.method==='GET'&&['/api/reporting','/api/reporting/export'].includes(pathname)){
+        if(access&&!reporting.canReport(actor))return send(res,403,{error:'An analyst or reviewer is required for reporting.'});
+        const exporting=pathname.endsWith('/export');
+        const {model,format}=reporting.report(store.getState(),store.visibleAudit(),searchParams,{mode,exporting});
+        if(!exporting)return send(res,200,model);
+        const headers={'Content-Disposition':'attachment; filename="mvw-trust-report.'+format+'"'};
+        return format==='csv'?send(res,200,reporting.csv(model),'text/csv; charset=utf-8',headers):send(res,200,model,undefined,headers);
+      }
       if (req.method==='GET'&&['/api/work-queue','/api/work-queue/export'].includes(pathname)){
         const queue=workQueue(store.getState(),searchParams);
         return pathname.endsWith('/export')?send(res,200,{schemaVersion:1,...queue},undefined,
           {'Content-Disposition':'attachment; filename="privacy-workbench-queue.json"'}):send(res,200,queue);
       }
-      if (req.method==='GET'&&pathname==='/api/governance-documents') return send(res,200,store.getDocuments(actor));
+      if (req.method==='GET'&&pathname==='/api/governance-documents'){
+        const docs=store.getDocuments(actor);
+        return send(res,200,caseOperator?policy.caseDocumentView(docs):docs);
+      }
       if (req.method==='GET'&&pathname==='/api/vendor-monitoring') return send(res,200,store.getVendorMonitoring());
       if(pathname==='/api/audit-management'||pathname.startsWith('/api/audit-management/')){
-        if(access&&!['analyst','reviewer'].includes(actor))return send(res,403,{error:'An audit analyst or reviewer is required.'});
         if(req.method==='GET'&&pathname==='/api/audit-management') return send(res,200,store.getAuditManagement());
         const report=pathname.match(/^\/api\/audit-management\/plans\/([a-f0-9-]{36})\/report$/);
         if(req.method==='GET'&&report)return send(res,200,store.getAuditReport(report[1]),undefined,
@@ -176,9 +211,15 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       const lineagePath=pathname.match(/^\/api\/data-map\/nodes\/([0-9a-f-]{36})\/lineage$/);
       if (req.method==='GET'&&lineagePath) return send(res,200,store.getLineage(lineagePath[1]));
       if (req.method==='GET'&&pathname==='/api/incidents/cases') return send(res,200,store.getIncidents());
-      if (req.method==='GET'&&pathname==='/api/rights/cases') return send(res,200,store.getRights());
+      if (req.method==='GET'&&pathname==='/api/rights/cases'){
+        const rights=store.getRights();
+        return send(res,200,caseOperator?policy.caseOperatorView(rights):rights);
+      }
       if (req.method==='GET'&&pathname==='/api/modules') return send(res,200,store.getModules());
-      if (req.method==='GET'&&pathname==='/api/state') return send(res,200,store.publicState());
+      if (req.method==='GET'&&pathname==='/api/state'){
+        const state=store.publicState();
+        return send(res,200,access?policy.operatorState(state,actor):state);
+      }
       if (req.method==='GET'&&pathname==='/api/audit/export') {
         const audit=store.visibleAudit();
         return send(res,200,{schemaVersion:1,mode,exportedAt:new Date().toISOString(),audit},undefined,{'Content-Disposition':'attachment; filename="privacy-workbench-audit.json"'});
@@ -187,9 +228,22 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         const body=await readBody(req);
         // The session may have expired, been switched, or logged out while the body was arriving.
         access?.context(req,expected);
-        if (workflowParts) { const r=workflow.post(workflowParts,actor,body,selection?.account); return send(res,r.status,r.value); }
+        if (workflowParts) {
+          if(access&&workflowParts[0]==='definitions'&&Array.isArray(body?.definition?.transitions)&&
+            body.definition.transitions.some(t=>Array.isArray(t?.roles)&&t.roles.includes('publisher')))
+            return send(res,422,{error:'The isolated publisher does not participate in workflow execution.',code:'WORKFLOW_ROLE_UNAVAILABLE'});
+          const r=workflow.post(workflowParts,actor,body,selection?.account);
+          return send(res,r.status,r.value);
+        }
         if(pathname==='/api/data-map/discovery/preview')return send(res,200,store.previewDiscovery(actor,body,selection?.account));
         const parts=pathname.slice(5).split('/');
+        if(caseOperator){
+          if(parts[0]==='rights'&&!store.getState().rightsCases?.some(row=>row.id===parts[2]&&row.owner===actor))
+            return send(res,404,{error:'Rights case not found.'});
+          if(parts[0]==='governance-documents'&&!store.getDocuments(actor).documents
+            .some(doc=>doc.id===parts[2]&&doc.revisions.some(version=>version.id===parts[4])))
+            return send(res,404,{error:'That document revision was not found.'});
+        }
         if(pathname==='/api/employee-attestations'){
           if(!employeeEnabled)return send(res,404,{error:'Employee attestations are not provisioned for this workspace.'});
           return send(res,200,store.employeeAssign(assignedStaff,actor,selection.account,body));
@@ -199,7 +253,16 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           store.change(parts,actor,body,selection?.account);
           return send(res,200,store.trustCenterView(centerPath));
         }
-        return send(res,200,store.change(parts,actor,body,selection?.account));
+        if(parts.length===8&&parts[0]==='governance-documents'&&parts[1]==='records'&&parts[3]==='revisions'&&parts[5]==='attachments'&&parts[7]==='download'){
+          const {bytes,filename}=store.change(parts,actor,body,selection?.account);
+          return send(res,200,bytes,'application/octet-stream',{
+            'Content-Disposition':'attachment; filename="'+filename+'"','Content-Security-Policy':"sandbox; default-src 'none'"
+          });
+        }
+        const result=store.change(parts,actor,body,selection?.account);
+        if(caseOperator&&parts[0]==='rights')return send(res,200,policy.caseOperatorView(result));
+        if(caseOperator&&parts[0]==='governance-documents')return send(res,200,policy.caseDocumentView(result));
+        return send(res,200,access&&['projects','vendors','assessments','handoff'].includes(parts[0])?policy.operatorState(result,actor):result);
       }
       return send(res,404,{error:'Not found.'});
     } catch (error) {
@@ -207,10 +270,12 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if (!res.headersSent) send(res,error.status||(error.code==='ENOENT'?404:500),{error:error.status?error.message:error.code==='ENOENT'?'Not found.':'Server error.',...(error.status&&error.code?{code:error.code}:{})});
     }
   });
+  if(database)server.once('close',()=>database.close());
+  return server;
 }
 if (require.main===module) {
   const port=Number(process.env.PORT??4173);
-  const server=createServer();
+  const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE});
   server.listen(port,'127.0.0.1',()=>console.log('Privacy Workbench: http://127.0.0.1:'+server.address().port));
 }
 module.exports={createServer};

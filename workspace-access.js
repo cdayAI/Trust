@@ -2,6 +2,7 @@
 const {createHash,randomBytes,timingSafeEqual}=require('node:crypto');
 const {resolve,join}=require('node:path');
 const fs=require('node:fs');
+const {capabilities}=require('./access-policy');
 const ident=/^[a-z][a-z0-9-]{0,47}$/;
 const codePattern=/^[A-Za-z0-9_-]{43}$/;
 const roles=new Set(['analyst','reviewer','case-operator','publisher']);
@@ -31,9 +32,9 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,now=Date.now
     if(!fs.lstatSync(folder).isDirectory()||fs.realpathSync(folder)!==folder)throw new Error('Invalid workspace store directory.');
     spaces.set(id,{id,label,file:safeFile(folder,'state.json'),workflowFile:safeFile(folder,'workflows.json')});
   }
-  for(const {id,codeHash,memberships} of accounts){
+  for(const {id,codeHash,memberships,disabled=false,validUntil=null} of accounts){
     if(typeof id!=='string'||!ident.test(id)||users.has(id)||typeof codeHash!=='string'||!/^([0-9a-f]{64})$/.test(codeHash)||
-      keys.has(codeHash)||!memberships||typeof memberships!=='object'||Array.isArray(memberships)||!Object.keys(memberships).length)
+      keys.has(codeHash)||typeof disabled!=='boolean'||(validUntil!==null&&(!Number.isSafeInteger(validUntil)||validUntil<1))||!memberships||typeof memberships!=='object'||Array.isArray(memberships)||!Object.keys(memberships).length)
       throw new Error('Invalid local synthetic account.');
     keys.add(codeHash);
     const grants=new Map();
@@ -42,9 +43,10 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,now=Date.now
       if(!spaces.has(space)||!roles.has(role)||seats.has(seat))throw new Error('Invalid or duplicated workspace role assignment.');
       seats.add(seat);grants.set(space,role);
     }
-    users.set(id,{id,hash:Buffer.from(codeHash,'hex'),grants});
+    users.set(id,{id,hash:Buffer.from(codeHash,'hex'),grants,disabled,validUntil});
   }
   const invalidHash=randomBytes(32);
+  const live=(account,at)=>account&&!account.disabled&&(account.validUntil===null||at<account.validUntil);
   function tokenOf(req){
     const tokens=(req.headers.cookie||'').split(';').map(x=>x.trim()).filter(x=>x.startsWith(cookieName+'='));
     return tokens.length===1&&codePattern.test(tokens[0].slice(cookieName.length+1))?tokens[0].slice(cookieName.length+1):null;
@@ -52,7 +54,8 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,now=Date.now
   function lookup(req){
     const token=tokenOf(req),session=sessions.get(token);
     if(!session)return null;
-    if(now()>=session.until){sessions.delete(token);return null}
+    const at=now();
+    if(at>=session.until||!live(session.account,at)){sessions.delete(token);return null}
     return {...session,token};
   }
   function context(req,expected){
@@ -63,15 +66,21 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,now=Date.now
   }
   const describe=session=>({mode:'local-isolated',authenticated:!!session,...(session?{
     account:session.account.id,actor:session.account.grants.get(session.workspace),workspace:session.workspace,
+    capabilities:capabilities(session.account.grants.get(session.workspace)),
     workspaces:[...session.account.grants].map(([id])=>({id,label:spaces.get(id).label}))
   }:{})});
   function issue(account,workspace,previous){
-    for(const [key,session] of sessions)if(session.until<=now())sessions.delete(key);
+    const at=now();
+    const until=Math.min(at+1000*sessionSeconds,account.validUntil??Infinity);
+    if(!live(account,at))denied(401,'Invalid local sign-in.');
+    for(const [key,session] of sessions)if(session.until<=at||!live(session.account,at))sessions.delete(key);
+    const count=[...sessions].filter(([key,s])=>key!==previous&&s.account===account).length;
+    if(count>=8)denied(429,'Local account session limit reached.');
     if(sessions.size>=256&&!sessions.has(previous))denied(503,'Local session limit reached.');
-    const token=randomBytes(32).toString('base64url'),session={account,workspace,until:now()+1000*sessionSeconds};
+    const token=randomBytes(32).toString('base64url'),session={account,workspace,until};
     if(previous)sessions.delete(previous);
     sessions.set(token,session);
-    return {value:describe(session),cookie:cookie(token,sessionSeconds)};
+    return {value:describe(session),cookie:cookie(token,Math.ceil((until-at)/1000))};
   }
   return {
     describe:req=>describe(lookup(req)),
@@ -79,7 +88,7 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,now=Date.now
       const account=typeof body?.account==='string'?users.get(body.account):null;
       const candidate=typeof body?.code==='string'&&codePattern.test(body.code)?digest(body.code):invalidHash;
       const matches=timingSafeEqual(account?.hash??invalidHash,candidate);
-      if(!account||!matches||candidate===invalidHash||!account.grants.has(body.workspace))denied(401,'Invalid local sign-in.');
+      if(!account||!matches||candidate===invalidHash||!account.grants.has(body.workspace)||!live(account,now()))denied(401,'Invalid local sign-in.');
       return issue(account,body.workspace,tokenOf(req));
     },
     switch(req,body){

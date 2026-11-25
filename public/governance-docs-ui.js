@@ -51,15 +51,90 @@ function documentPayload(form){
     const [type,id]=value.split(':');return {type,id};
   })};
 }
-function downloadDocument(data){
+function saveDocumentFile(blob,filename){
   const link=el('a');
-  const url=URL.createObjectURL(new Blob([data.text],{type:'text/plain;charset=utf-8'}));
-  link.href=url;link.download=data.filename;document.body.append(link);link.click();link.remove();
+  const url=URL.createObjectURL(blob);
+  link.href=url;link.download=filename;document.body.append(link);link.click();link.remove();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+function downloadDocument(data){
+  saveDocumentFile(new Blob([data.text],{type:'text/plain;charset=utf-8'}),data.filename);
+}
+async function downloadAttachment(path,row){
+  if(busy)return;
+  busy=true;
+  const identity=actor,seq=docsSeq;
+  try{
+    const headers=docsHeaders();
+    if(localSession)delete headers['X-Demo-Actor'];
+    const response=await fetch(scopeUrl(docsPath+path),{method:'POST',headers,body:'{}'});
+    if(!response.ok){
+      const data=await response.json();
+      if(localSession?.authenticated&&[401,403].includes(response.status))await checkContext();
+      throw new Error(data.error||'Attachment could not be downloaded.');
+    }
+    if(response.headers.get('Content-Type')!=='application/octet-stream')throw new Error('Attachment response type is invalid.');
+    const blob=await response.blob();
+    if(!docsPane.hidden&&actor===identity&&seq===docsSeq){
+      saveDocumentFile(blob,row.name);notice('Attachment download recorded.');
+    }
+  }catch(error){if(!docsPane.hidden&&actor===identity&&seq===docsSeq)notice(error.message,true);}
+  finally{busy=false;}
+}
+function attachmentControls(card,path,version,revision,rules){
+  const group=add(el('div',undefined,'document-attachments'),el('h4','Attachments'));
+  if(!version.attachments.length)group.append(el('p','No attachments.'));
+  const items=el('ul');
+  for(const row of version.attachments){
+    const item=add(el('li'),el('span',row.name+' · '+row.size+' bytes'));
+    const download=button('Download attachment '+row.name,'button','secondary');
+    download.onclick=()=>downloadAttachment(path+'/attachments/'+row.id+'/download',row);
+    item.append(download);
+    if(actor==='analyst'&&version.status==='draft'){
+      const remove=button('Remove attachment '+row.name,'button','secondary');
+      remove.onclick=()=>docsPost(path+'/attachments/'+row.id+'/remove',{expectedRevision:revision},data=>{
+        docsData=data;renderDocs();notice('Draft attachment removed.');
+      });
+      item.append(remove);
+    }
+    items.append(item);
+  }
+  if(version.attachments.length)group.append(items);
+  if(actor==='analyst'&&version.status==='draft'){
+    if(version.attachments.length>=rules.maxFilesPerRevision){
+      group.append(el('p','This draft already has '+rules.maxFilesPerRevision+' attachments. Remove one to add another.'));
+    }else{
+      const picker=el('input');picker.type='file';picker.accept=rules.extension+','+rules.mediaType;picker.name='documentAttachment';picker.required=true;
+      const submit=button('Upload attachment','submit');
+      const form=add(el('form'),add(el('label','Fictional .txt attachment'),picker),submit);
+      const detail=el('p','Choose a fictional UTF-8 .txt file under '+(rules.maxFileBytes/1024)+' KiB. Attachments are available only as downloads.','hint');
+      form.append(detail);
+      form.onsubmit=async e=>{
+        e.preventDefault();
+        if(busy||submit.disabled)return;
+        const file=picker.files[0],identity=actor,seq=docsSeq;
+        if(!file)return;
+        if(!file.name.toLowerCase().endsWith(rules.extension)||(file.type&&file.type!==rules.mediaType))return notice('Only fictional UTF-8 .txt files are accepted.',true);
+        if(!file.size||file.size>rules.maxFileBytes)return notice('Choose a nonempty fictional .txt file no larger than '+(rules.maxFileBytes/1024)+' KiB.',true);
+        submit.disabled=true;
+        try{
+          const bytes=new Uint8Array(await file.arrayBuffer());
+          if(actor!==identity||docsSeq!==seq||docsPane.hidden)return;
+          const data=btoa(String.fromCharCode(...bytes));
+          await docsPost(path+'/attachments',{filename:file.name,mediaType:rules.mediaType,data,expectedRevision:revision},data=>{
+            docsData=data;renderDocs();notice('Attachment added to the draft.');
+          });
+        }catch{if(actor===identity&&docsSeq===seq&&!docsPane.hidden)notice('Could not read the selected file.',true);}
+        finally{submit.disabled=false;}
+      };
+      group.append(form);
+    }
+  }
+  card.append(group);
+}
 function renderDocs(){
-  const {documents,revision,targets,legacyRecords}=docsData;
-  const intro=add(el('section'),heading('Policies and evidence documents'),el('p','Use only original fictional text. Drafts and evidence are role-scoped in this local simulation. Uploads and external publication are not supported.'));
+  const {documents,revision,targets,legacyRecords,attachmentRules}=docsData;
+  const intro=add(el('section'),heading('Policies and evidence documents'),el('p','Use only original fictional text and attachments. Documents are role-scoped; nothing is published outside the local workspace.'));
   if(actor==='analyst'){
     const panel=docsPanel(intro,'Draft a document');
     docsForm(panel,'/records',[rightsSelect('Document type','kind',[{value:'policy',label:'Policy'},{value:'evidence',label:'Evidence'}]),...documentFields(targets)],
@@ -89,6 +164,7 @@ function renderDocs(){
       const download=button('Download text','button','secondary');
       download.onclick=()=>docsPost(path+'/download',{},data=>{downloadDocument(data);notice('Document download recorded.')});
       card.append(readButton,download,output);
+      attachmentControls(card,path,v,revision,attachmentRules);
       if(actor==='analyst'&&v.status==='draft'){
         const edit=docsPanel(card,'Edit draft');
         const fields=documentFields(targets);

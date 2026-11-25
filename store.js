@@ -2,6 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {randomUUID} = require('node:crypto');
+const {hasLegacySnapshot}=require('./durable-storage');
 const modules = require('./modules');
 const assessmentFlow = require('./assessment-workflow');
 const forms = require('./assessment-questionnaire');
@@ -150,8 +151,14 @@ function seed() {
   createVendor(state,'system',{projectId:p.id,name:'Northstar Assist',description:'Fictional service that drafts support replies with AI. Humans review before messages are sent.',usesAI:true},'northstar');
   return state;
 }
-function openStore(file,{empty=false}={}) {
+function openStore(file,{empty=false,storage}={}) {
+  let saveSnapshot;
   function persist(next) {
+    if(storage){
+      if(!saveSnapshot)throw Error('Write outside storage transaction.');
+      saveSnapshot(next);
+      return;
+    }
     fs.mkdirSync(path.dirname(file),{recursive:true});
     const temp=file+'.'+id()+'.tmp';
     try {
@@ -162,41 +169,56 @@ function openStore(file,{empty=false}={}) {
     }
   }
   let state;
-  try { state=JSON.parse(fs.readFileSync(file,'utf8')); }
-  catch (error) {
-    if (error.code!=='ENOENT') throw error;
-    state=empty?{version:1,actors,projects:[],vendors:[],assessments:[],handoff:[],audit:[]}:seed();
-    if(!empty)persist(state);
-  }
-  if (state.version!==1 || !['projects','vendors','assessments','audit','handoff','actors'].every(k=>Array.isArray(state[k]))) throw new Error('Unsupported or invalid state file.');
-  if(state.assessments.some(a=>!a.questionnaire&&!a.routing)) {
-    const migrated=structuredClone(state);
-    for(const a of migrated.assessments.filter(a=>!a.questionnaire&&!a.routing)) {
-      Object.assign(a,forms.legacy());
-      if(a.workflowInstanceId) {
-        event(migrated,'system','assessment.questionnaire-baseline',a.projectId,a.id,{questionnaireId:a.questionnaire.id,questionnaireVersion:a.questionnaire.version,routing:{...a.routing}});
-        continue;
-      }
-      const workflowEvent=assessmentFlow.start(migrated,a,true);
-      event(migrated,'system','assessment.workflow-baseline',a.projectId,a.id,{status:a.status,
-        assessmentRevision:a.revision,workflowInstanceId:a.workflowInstanceId,workflowDefinitionVersion:a.workflowDefinitionVersion,
-        workflowEventId:workflowEvent.id,source:'legacy-synthetic-assessment'});
+  const fresh=()=>empty?{version:1,actors,projects:[],vendors:[],assessments:[],handoff:[],audit:[]}:seed();
+  const workbench='workbench';
+  function initialize(stored){
+    state=stored;
+    if(state===undefined){
+      if(storage&&hasLegacySnapshot(file))throw Error('Legacy workbench state exists; migrate it explicitly before enabling SQLite.');
+      state=fresh();
+      if(!empty)persist(state);
     }
-    persist(migrated);
-    state=migrated;
+    if (state.version!==1 || !['projects','vendors','assessments','audit','handoff','actors'].every(k=>Array.isArray(state[k]))) throw new Error('Unsupported or invalid state file.');
+    if(state.assessments.some(a=>!a.questionnaire&&!a.routing)) {
+      const migrated=structuredClone(state);
+      for(const a of migrated.assessments.filter(a=>!a.questionnaire&&!a.routing)) {
+        Object.assign(a,forms.legacy());
+        if(a.workflowInstanceId) {
+          event(migrated,'system','assessment.questionnaire-baseline',a.projectId,a.id,{questionnaireId:a.questionnaire.id,questionnaireVersion:a.questionnaire.version,routing:{...a.routing}});
+          continue;
+        }
+        const workflowEvent=assessmentFlow.start(migrated,a,true);
+        event(migrated,'system','assessment.workflow-baseline',a.projectId,a.id,{status:a.status,
+          assessmentRevision:a.revision,workflowInstanceId:a.workflowInstanceId,workflowDefinitionVersion:a.workflowDefinitionVersion,
+          workflowEventId:workflowEvent.id,source:'legacy-synthetic-assessment'});
+      }
+      persist(migrated);
+      state=migrated;
+    }
+    if(state.privacyPreferences&&!state.privacyNotices){
+      const migrated=structuredClone(state);
+      const legacy=migrated.privacyPreferences;
+      migrated.privacyNotices={revision:legacy.revision,notices:legacy.notices.map(({purposes,...notice})=>notice)};
+      persist(migrated);state=migrated;
+    }
+    for(const a of state.assessments) {forms.verify(a);assessmentFlow.instanceFor(state,a);}
+    if(!state.actors.some(a=>a.id===rights.backupActor.id)){
+      const migrated=structuredClone(state);
+      migrated.actors.push(rights.backupActor);
+      persist(migrated);
+      state=migrated;
+    }
   }
-  if(state.privacyPreferences&&!state.privacyNotices){
-    const migrated=structuredClone(state);
-    const legacy=migrated.privacyPreferences;
-    migrated.privacyNotices={revision:legacy.revision,notices:legacy.notices.map(({purposes,...notice})=>notice)};
-    persist(migrated);state=migrated;
-  }
-  for(const a of state.assessments) {forms.verify(a);assessmentFlow.instanceFor(state,a);}
-  if(!state.actors.some(a=>a.id===rights.backupActor.id)){
-    const migrated=structuredClone(state);
-    migrated.actors.push(rights.backupActor);
-    persist(migrated);
-    state=migrated;
+  if(storage){
+    storage.write(workbench,(snapshot,save)=>{
+      saveSnapshot=save;
+      try{initialize(snapshot);}finally{saveSnapshot=undefined;}
+    });
+  }else{
+    let stored;
+    try{stored=JSON.parse(fs.readFileSync(file,'utf8'))}
+    catch(error){if(error.code!=='ENOENT')throw error;}
+    initialize(stored);
   }
   const discoveryScope=account=>[path.resolve(file),account??null];
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
@@ -207,7 +229,7 @@ function openStore(file,{empty=false}={}) {
     safe.audit=safe.audit.filter(e=>!excludedAudit(e));
     return documents.stateView(safe);
   };
-  return {
+  const operations={
     employeeOperatorView:staff=>employee.operatorView(state,staff),
     employeeAssign(staff,actor,account,body){
       const next=structuredClone(state);
@@ -290,5 +312,27 @@ function openStore(file,{empty=false}={}) {
       return result??(parts[0]==='modules'?modules.model(state):program?program.view(state,actor):publicState());
     }
   };
+  if(!storage)return operations;
+  const mutations=new Set(['employeeAssign','employeeConfirm','portalIntake','change']);
+  return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
+    if(!mutations.has(name)){
+      state=storage.read(workbench)??fresh();
+      return fn(...args);
+    }
+    let refusal;
+    const result=storage.write(workbench,(snapshot,save)=>{
+      state=snapshot??fresh();
+      saveSnapshot=save;
+      try{return fn(...args);}
+      catch(error){
+        // Domain refusals whose audit entries were explicitly saved still
+        // commit. Other exceptions roll back the whole storage transaction.
+        if(!error.persistRefusal)throw error;
+        refusal=error;
+      }finally{saveSnapshot=undefined;}
+    });
+    if(refusal)throw refusal;
+    return result;
+  }]));
 }
 module.exports={openStore};

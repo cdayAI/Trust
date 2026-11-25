@@ -166,3 +166,10 @@ pre{background:var(--surface);border-radius:10px}
 }
 .work-tabs button.secondary:not([aria-current=true]){background:transparent;border-color:transparent;color:var(--ink)}
 .work-tabs button.secondary:not([aria-current=true]):hover{background:#e4edf7;border-color:#d6e3f1}
+
+.document-attachments{margin-block:1rem;padding-block:.6rem;border-top:1px solid var(--line)}
+.document-attachments h4{margin:.25rem 0 .35rem}
+.document-attachments ul{list-style:none;padding:0;margin:.45rem 0}
+.document-attachments li{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-block:.45rem}
+.document-attachments li>span{min-width:0;overflow-wrap:anywhere}
+.document-attachments input[type=file]{padding:.45rem;cursor:pointer}
