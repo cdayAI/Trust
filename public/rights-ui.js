@@ -59,15 +59,15 @@ function renderRights(){
   const ownerOptions=owners.map(o=>({value:o.id,label:o.name}));
   const intro=add(el('section'),heading('Privacy rights cases'),
     el('p','Use fictional notes only. Identity review is simulated and no information is delivered.'),
-    el('p','The due date uses UTC calendar days after intake. The deadline is a demo setting, not a legal determination.','hint'));
+    el('p','Due dates follow the applicable synthetic rule at intake. These simulations provide no legal guidance.','hint'));
   if(actor==='analyst'){
     const days=labelled('Days to respond','days',String(policy.defaultDays),'input');
     const field=days.querySelector('input');
     field.type='number';field.min=policy.min;field.max=policy.max;field.step='1';
     rightsForm(intro,rightsPath,[
       rightsSelect('Request type','kind',kinds.map(value=>({value,label:kindLabel(value)}))),
-      rightsSelect('Assigned owner','owner',ownerOptions),days,rightsNote('Fictional intake note')
-    ],v=>({...v,days:Number(v.days)}),'Open rights case');
+      rightsSelect('Assigned owner','owner',ownerOptions),...(policy.activeVersion===1?[days]:[]),rightsNote('Fictional intake note')
+    ],v=>Object.hasOwn(v,'days')?({...v,days:Number(v.days)}):v,'Open rights case');
   }
   const list=add(el('section'),heading('Case queue'));
   if(!cases.length)list.append(el('p','No rights cases yet.'));
@@ -77,6 +77,7 @@ function renderRights(){
       el('p','Due: '+row.dueDate+' (UTC)'+(row.overdue?' · overdue':''),row.overdue?'error':'hint'),
       el('p','Identity: '+row.identity.status.replaceAll('-',' ')),el('p',row.summary));
     card.id='work-record-'+row.id;
+    renderRightsDeadlineCase(card,row);
     if(row.identity.reviewedBy)card.append(el('p','Identity reviewed by: '+ownerName(row.identity.reviewedBy),'hint'));
     if(row.completion)card.append(el('p','Mock fulfillment only. No data released. '+row.completion.note,'success'));
     if(row.status==='closed-unverified')card.append(el('p','Closed without disclosure.'));
@@ -108,7 +109,7 @@ function renderRights(){
     card.append(add(el('details'),el('summary','Case history ('+row.history.length+')'),history));
     list.append(card);
   }
-  const parts=[intro,list];
+  const parts=[intro,...(localSession?.authenticated&&['analyst','reviewer'].includes(actor)?[rightsDeadlinePanel()]:[]),list];
   if(legacyRecords.length){
     const archive=add(el('section'),heading('Legacy register entries'),
       el('p','These entries did not use the independent identity workflow and do not establish a verification or fulfillment outcome.'));

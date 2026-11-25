@@ -5,10 +5,14 @@ const rules=Object.freeze({
   formats:catalog,
   maxFileBytes:Math.max(...catalog.map(format=>format.maxFileBytes)),
   maxFilesPerRevision:4,
+  maxFilesPerBatch:4,
+  maxBatchBytes:4*1024*1024,
   maxWorkspaceBytes:8*1024*1024,
   maxFilesPerWorkspace:256
 });
 const uploadRequestBytes=Math.ceil(rules.maxFileBytes/3)*4+1024;
+// Each file is padded separately. Reserve bounded JSON and metadata overhead.
+const batchUploadRequestBytes=Math.ceil(rules.maxBatchBytes/3)*4+rules.maxFilesPerBatch*8+4096;
 const idPattern=/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/u;
 const shaPattern=/^[a-f\d]{64}$/u;
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -39,21 +43,54 @@ function namedFormat(name){
   if(!format)fail(415,'ATTACHMENT_TYPE_UNSUPPORTED','Choose a supported PDF, modern Office, text, CSV, TSV, or raster image file.');
   return format;
 }
-function attachment(body,book,version){
+function prepare(body){
   const name=cleanName(body.filename), format=namedFormat(name);
   if(typeof body.mediaType!=='string'||(body.mediaType&&body.mediaType!==format.mediaType&&!format.aliases.includes(body.mediaType)))
     fail(415,'ATTACHMENT_TYPE_MISMATCH','The selected file type does not match the filename.');
   const bytes=rawBytes(body.data,format);
-  if((version.attachments??[]).length>=rules.maxFilesPerRevision)
+  format.check(bytes);
+  return {id:randomUUID(),name,mediaType:format.mediaType,size:bytes.length,sha256:digest(bytes),data:body.data};
+}
+function capacity(addedCount,addedBytes,book,version){
+  if((version.attachments??[]).length+addedCount>rules.maxFilesPerRevision)
     fail(409,'ATTACHMENT_REVISION_LIMIT','A revision can contain at most four attachments.');
   let count=0,total=0;
   for(const document of book.documents)for(const revision of document.revisions)for(const row of revision.attachments??[]){
     count++;total+=row.size;
   }
-  if(count>=rules.maxFilesPerWorkspace||total+bytes.length>rules.maxWorkspaceBytes)
-    fail(409,'ATTACHMENT_WORKSPACE_LIMIT','This workspace has reached its attachment storage limit.');
-  format.check(bytes);
-  return {id:randomUUID(),name,mediaType:format.mediaType,size:bytes.length,sha256:digest(bytes),data:bytes.toString('base64')};
+  if(count+addedCount>rules.maxFilesPerWorkspace||total+addedBytes>rules.maxWorkspaceBytes)
+    fail(409,'ATTACHMENT_WORKSPACE_LIMIT','The selected files exceed the workspace attachment storage limit.');
+}
+function attachment(body,book,version){
+  const row=prepare(body);
+  capacity(1,row.size,book,version);
+  return row;
+}
+function batch(files,book,version){
+  if(!Array.isArray(files)||files.length===0||files.length>rules.maxFilesPerBatch)
+    fail(422,'ATTACHMENT_BATCH_COUNT','Select between one and '+rules.maxFilesPerBatch+' attachments.');
+  capacity(files.length,0,book,version);
+  const rows=[], fileErrors=[];
+  let status=0,total=0;
+  for(const [index,file] of files.entries()){
+    try{
+      if(!file||typeof file!=='object'||Array.isArray(file)||Object.keys(file).length!==3||
+        !['filename','mediaType','data'].every(key=>Object.hasOwn(file,key)))
+        fail(422,'INVALID_ATTACHMENT_FIELDS','Send exactly a filename, media type, and file bytes.');
+      const row=prepare(file);
+      rows.push(row);total+=row.size;
+    }catch(error){
+      if(!error.status)throw error;
+      if(!status||error.status===413)status=error.status;
+      fileErrors.push({index,code:error.code,message:error.message});
+    }
+  }
+  if(fileErrors.length)
+    throw Object.assign(new Error('No attachments were uploaded. Fix the files listed below and retry.'),
+      {status,code:'ATTACHMENT_BATCH_INVALID',fileErrors});
+  if(total>rules.maxBatchBytes)fail(413,'ATTACHMENT_BATCH_TOO_LARGE','The batch cannot exceed 4 MiB total.');
+  capacity(rows.length,total,book,version);
+  return rows;
 }
 function metadata(row){
   const {id,name,mediaType,size,sha256}=row;
@@ -74,4 +111,4 @@ function download(row){
     fail(409,'ATTACHMENT_UNAVAILABLE','The stored attachment failed its integrity check.');
   }
 }
-module.exports={rules,uploadRequestBytes,attachment,metadata,download};
+module.exports={rules,uploadRequestBytes,batchUploadRequestBytes,attachment,batch,metadata,download};

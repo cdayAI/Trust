@@ -173,6 +173,9 @@ pre{background:var(--surface);border-radius:10px}
 .document-attachments li{display:flex;align-items:center;gap:.5rem;flex-wrap:wrap;margin-block:.45rem}
 .document-attachments li>span{min-width:0;overflow-wrap:anywhere}
 .document-attachments input[type=file]{padding:.45rem;cursor:pointer}
+.attachment-drop-zone{border:1px dashed var(--line);border-radius:.7rem;padding:.7rem}
+.attachment-drop-zone:focus-within,.attachment-drop-zone.is-dragover{border-style:solid;outline:1px solid currentColor;outline-offset:2px}
+.attachment-drop-zone p{margin:.35rem 0 0}
 @media (min-width:761px){
   .workspace-nav{max-height:calc(100dvh - 118px);overflow-y:auto;scrollbar-width:thin;scroll-padding-block:8px}
 }

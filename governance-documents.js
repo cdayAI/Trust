@@ -58,7 +58,7 @@ function versionFields(s,kind,body){
 const actionKeys={
   create:['kind','title','content','links'],revise:['title','content','links'],edit:['title','content','links'],
   submit:[],publish:['note'],return:['note'],read:[],download:[],
-  'attachment-upload':['filename','mediaType','data'],'attachment-remove':[],'attachment-download':[]
+  'attachment-upload':['filename','mediaType','data'],'attachment-upload-batch':['files'],'attachment-remove':[],'attachment-download':[]
 };
 function change(s,parts,actor,body,event){
   const book=s.governanceDocuments??=docsOf(s);
@@ -67,6 +67,7 @@ function change(s,parts,actor,body,event){
   if(part==='revisions'){
     if(parts.length===6&&['edit','submit','publish','return','read','download'].includes(operation))action=operation;
     if(operation==='attachments'&&parts.length===6)action='attachment-upload';
+    if(operation==='attachments'&&parts.length===7&&attachmentId==='batch')action='attachment-upload-batch';
     if(operation==='attachments'&&parts.length===8&&['download','remove'].includes(attachmentOperation))action='attachment-'+attachmentOperation;
   }
   if(collection!=='records'||!action)issue(404,'NOT_FOUND','Governance document action not found.');
@@ -113,11 +114,11 @@ function change(s,parts,actor,body,event){
       if(v.status==='published')issue(409,'IMMUTABLE_REVISION','Published revisions cannot be changed.');
       if(v.status!==(review?'review':'draft'))issue(409,'OUT_OF_ORDER','This action is unavailable for the current revision stage.');
       if(action==='edit')Object.assign(v,versionFields(s,doc.kind,body));
-      if(action==='attachment-upload'){
-        const row=attachments.attachment(body,book,v);
-        (v.attachments??=[]).push(row);
+      if(action==='attachment-upload'||action==='attachment-upload-batch'){
+        const rows=action==='attachment-upload'?[attachments.attachment(body,book,v)]:attachments.batch(body.files,book,v);
+        (v.attachments??=[]).push(...rows);
         book.revision++;v.updatedAt=now;
-        audit(action,doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
+        for(const row of rows)audit('attachment-upload',doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
         return;
       }
       if(action==='attachment-remove'){

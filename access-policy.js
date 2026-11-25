@@ -46,9 +46,16 @@ route('GET','workflows/(?:studio|instances)/'+key,operators);
 route('GET','workflows/audit',['reviewer']);
 
 route('POST','(?:projects|vendors|assessments/'+key+'/(?:save|submit|approve|reject)|handoff/'+key+'/(?:send|retry))',operators);
+route('GET','rights/deadline-policy',operators);
+route('POST','rights/deadline-policy/(?:draft|submit)',['analyst']);
+route('POST','rights/deadline-policy/(?:return|publish)',['reviewer']);
+route('POST','rights/cases/'+uuid+'/request-extension',['analyst','case-operator']);
+route('POST','rights/cases/'+uuid+'/(?:approve-extension|reject-extension)',['reviewer']);
 route('POST','rights/cases',operators);
 route('POST','rights/cases/'+uuid+'/(?:assign|verify|deny-verification)',operators);
 route('POST','rights/cases/'+uuid+'/(?:begin|fulfill|close-unverified)',rights);
+route('POST','incidents/policy/(?:create|edit|submit)',['analyst']);
+route('POST','incidents/policy/(?:return|publish)',['reviewer']);
 route('POST','incidents/cases(?:/'+uuid+'/(?:triage|containment|evidence|findings|request-review|decide|plan-notice|close))?',operators);
 route('POST','vendor-monitoring/cases(?:/'+uuid+'/(?:score|evidence|submit|approve|return|change|renew))?',operators);
 route('POST','maturity-planning/plans(?:/'+uuid+'/(?:assess|submit|decide|return|approve|revise))?',operators);
@@ -62,7 +69,7 @@ route('POST','modules/'+moduleId+'/records(?:/'+uuid+'/(?:update|advance))?',ope
 route('POST','governance-documents/records(?:/'+uuid+'/revise)?',operators);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:edit|submit|publish|return)',operators);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:read|download)',rights);
-route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments(?:/'+uuid+'/remove)?',operators);
+route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments(?:/batch|/'+uuid+'/remove)?',operators);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments/'+uuid+'/download',rights);
 route('POST','trust-center/(?:privacy|rights|controls)/(?:draft|submit|approve|return|publish|withdraw)',operators);
 route('POST','employee-attestations',operators);

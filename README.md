@@ -130,7 +130,9 @@ independent reviewer can decide the simulated need for notice. A request for
 more information returns the incident for additional work. A simulated required
 notice needs a recorded mock plan before closure; nothing is sent. The current
 record and exported audit retain past decisions and refused actions, while
-generic historical register entries remain separate.
+generic historical register entries remain separate. An analyst and a separate
+reviewer can publish a versioned [incident workflow policy](INCIDENT-POLICY.md)
+for new cases, with severity/scope routing and configurable simulation targets.
 
 ### Data mapping
 

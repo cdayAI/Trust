@@ -15,6 +15,7 @@
     "verify:startup": "node scripts/smoke-local.js",
     "test:browser": "node scripts/run-browser-verification.js",
     "release:local": "node scripts/package-release.js",
-    "release:verify": "node scripts/package-release.js --verify-extracted"
+    "release:verify": "node scripts/package-release.js --verify-extracted",
+    "benchmark:local": "node scripts/benchmark-local.js"
   }
 }

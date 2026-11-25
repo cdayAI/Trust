@@ -1,8 +1,11 @@
 # Governance document attachments
 
-In **Policies and documents**, create a fictional draft as an analyst, choose a
-local file in **Fictional attachment**, then select **Upload attachment**. Use
-only synthetic files. The app cannot tell whether a file contains real data.
+In **Policies and documents**, open a draft as an analyst and choose one or
+more local files in **Fictional attachments**, or drag and drop them on the
+same picker. Check the selection, then select **Upload attachments**.
+If a file fails, nothing in that selection is uploaded. Fix or remove the
+listed files and retry. Use only synthetic files. The app cannot tell whether
+a file contains real data.
 
 | Format | Supported extensions |
 | --- | --- |
@@ -11,11 +14,13 @@ only synthetic files. The app cannot tell whether a file contains real data.
 | Printable UTF-8 text and delimited data | `.txt`, `.csv`, `.tsv` |
 | Raster images | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff` |
 
-Limits are 16 KiB per TXT, 1 MiB per other file, four attachments per revision,
-and 256 files and 8 MiB of raw attachment data per workspace. Old published
-revisions count against workspace limits. Only the exact versioned upload
-endpoint has a larger JSON request cap for base64 overhead; other commands
-remain capped at 32 KiB.
+Limits are 16 KiB per TXT, 1 MiB per other file, and up to four files and
+4 MiB combined per upload. Each revision can hold four attachments. Each
+workspace can hold up to 256 files and 8 MiB of raw attachment data; old
+published revisions count toward these limits. Only the exact versioned
+single-file and batch upload endpoints have larger JSON request caps for
+base64 overhead; other commands remain capped at 32 KiB. The server accepts
+at most two simultaneous batch uploads.
 
 The server checks safe filenames, supported extensions, and the declared MIME
 type where the browser provides one. It validates the bytes independently.
@@ -33,7 +38,11 @@ HTML, SVG, executables, scripts and arbitrary archives are not supported.
 PDF checks are structural and reject some visible active actions, but are not
 a sanitizer. **Format checks do not establish that a file is safe to open.**
 
-Uploads require the current document workspace revision. An analyst may remove
+Uploads require the current document workspace revision. The batch endpoint
+validates every otherwise eligible file and commits the entire selection once
+using the currently selected JSON or SQLite store. A successful batch advances
+the document revision once. A refused batch changes no attachment bytes or
+document revision; the refusal can still be audited. An analyst may remove
 attachments while the revision is draft; submission locks them for review; a
 reviewer may return the revision or publish it locally. Published revisions
 keep an immutable attachment list and a new revision starts empty. Reviewers

@@ -9,7 +9,7 @@ async function refreshDocs(){
     if(seq===docsSeq&&!docsPane.hidden){docsData=data;renderDocs()}
   }catch(e){if(seq===docsSeq&&!docsPane.hidden){docsPane.replaceChildren(el('p','Could not load documents.'));notice(e.message,true)}}
 }
-async function docsPost(path,body,success){
+async function docsPost(path,body,success,failure){
   if(busy)return;
   busy=true;
   const identity=actor,seq=docsSeq;
@@ -18,6 +18,7 @@ async function docsPost(path,body,success){
     if(!docsPane.hidden&&actor===identity&&seq===docsSeq)success(data);
   }catch(e){
     if(!docsPane.hidden&&actor===identity){
+      if(seq===docsSeq)failure?.(e);
       notice(e.message,true);
       if(e.status===409&&e.message.includes('Reload')){
         const b=button('Reload documents','button','secondary');b.onclick=async()=>{notice('');await refreshDocs()};
@@ -81,6 +82,98 @@ async function downloadAttachment(path,row){
   }catch(error){if(!docsPane.hidden&&actor===identity&&seq===docsSeq)notice(error.message,true);}
   finally{busy=false;}
 }
+const attachmentSize=limit=>limit>=1024*1024?limit/(1024*1024)+' MiB':limit/1024+' KiB';
+function attachmentForm(path,revision,rules,remaining){
+  const picker=el('input');
+  picker.type='file';picker.accept=rules.formats.map(format=>format.extension).join(',');picker.name='documentAttachment';
+  picker.multiple=true;
+  const submit=button('Upload attachments','submit');
+  const selection=el('ul');
+  const status=el('p','','hint');
+  status.setAttribute('role','status');
+  const drop=add(el('div',undefined,'attachment-drop-zone'),
+    add(el('label','Fictional attachments'),picker),
+    el('p','Choose files or drop them here. A new selection replaces the previous one.','hint'));
+  const form=add(el('form'),drop,el('p','PDF, Word, Excel, PowerPoint, TXT, CSV, TSV, PNG, JPEG, GIF, WebP, BMP and TIFF. Up to '+
+    attachmentSize(rules.maxFileBytes)+' per file (16 KiB for TXT), '+attachmentSize(rules.maxBatchBytes)+' per upload. '+
+    'Four attachments per revision, 8 MiB and 256 files per workspace. Download only.','hint'),status,selection,submit);
+  let files=[],preparing=false;
+  const max=Math.min(remaining,rules.maxFilesPerBatch);
+  function show(fileErrors=[],message){
+    const errors=new Map(fileErrors.map(({index,message})=>[index,message]));
+    status.textContent=message??(files.length?files.length+' selected. '+remaining+' draft attachment spot'+(remaining===1?'':'s')+' available.':
+      'Select up to '+max+' fictional file'+(max===1?'':'s')+'.');
+    selection.replaceChildren();
+    files.forEach((file,index)=>{
+      const line=add(el('li'),el('span',file.name+' · '+file.size+' bytes'+(errors.has(index)?' · '+errors.get(index):'')));
+      const remove=button('Remove selected file '+file.name,'button','secondary');
+      remove.disabled=preparing;
+      remove.onclick=()=>{files.splice(index,1);show();picker.focus()};
+      selection.append(add(line,remove));
+    });
+    picker.disabled=preparing;
+    submit.disabled=preparing||!files.length;
+  }
+  function select(list){
+    if(preparing)return;
+    if(list.length>max){
+      files=[];
+      show([],'No files selected. Choose no more than '+max+' file'+(max===1?'':'s')+' for this draft.');
+    }else{
+      files=[...list];
+      show();
+    }
+  }
+  picker.onchange=()=>{select(picker.files);picker.value='';};
+  drop.ondragover=e=>{if(e.dataTransfer?.types.includes('Files')){e.preventDefault();drop.classList.add('is-dragover')}};
+  drop.ondragleave=()=>drop.classList.remove('is-dragover');
+  drop.ondrop=e=>{
+    e.preventDefault();drop.classList.remove('is-dragover');
+    if(e.dataTransfer?.files.length)select(e.dataTransfer.files);
+  };
+  form.onsubmit=async e=>{
+    e.preventDefault();
+    if(busy||preparing||!files.length)return;
+    const identity=actor,seq=docsSeq,selected=files.slice(),fileErrors=[];
+    const current=()=>actor===identity&&docsSeq===seq&&!docsPane.hidden&&form.isConnected;
+    const invalid=(index,message)=>fileErrors.push({index,message});
+    let total=0;
+    for(const [index,file] of selected.entries()){
+      total+=file.size;
+      const format=rules.formats.find(format=>file.name.toLowerCase().endsWith(format.extension));
+      if(!format)invalid(index,'Choose a supported file format.');
+      else if(file.type&&file.type!==format.mediaType&&!format.aliases.includes(file.type))invalid(index,'The file type does not match the filename.');
+      else if(!file.size||file.size>format.maxFileBytes)invalid(index,'Choose a nonempty file up to '+attachmentSize(format.maxFileBytes)+'.');
+    }
+    if(fileErrors.length)return show(fileErrors,'No attachments were uploaded. Fix the files listed below and retry.');
+    if(total>rules.maxBatchBytes)return show([],'No attachments were uploaded. Choose no more than '+attachmentSize(rules.maxBatchBytes)+' total.');
+    preparing=true;
+    show([],'Preparing '+selected.length+' attachment'+(selected.length===1?'':'s')+'…');
+    try{
+      const payload=[];
+      for(const [index,file] of selected.entries()){
+        try{
+          const bytes=new Uint8Array(await file.arrayBuffer());
+          if(!current())return;
+          const chunks=[];
+          for(let offset=0;offset<bytes.length;offset+=24*1024)chunks.push(btoa(String.fromCharCode(...bytes.subarray(offset,offset+24*1024))));
+          payload.push({filename:file.name,mediaType:file.type,data:chunks.join('')});
+        }catch{invalid(index,'Could not read this file.');}
+      }
+      if(!current())return;
+      if(!fileErrors.length){
+        await docsPost(path+'/attachments/batch',{files:payload,expectedRevision:revision},data=>{
+          docsData=data;renderDocs();notice(selected.length===1?'Attachment added to the draft.':selected.length+' attachments added to the draft.');
+        },error=>fileErrors.push(...(error.fileErrors??[])));
+      }
+    }finally{
+      preparing=false;
+      if(current())show(fileErrors,fileErrors.length?'No attachments were uploaded. Fix the files listed below and retry.':undefined);
+    }
+  };
+  show();
+  return form;
+}
 function attachmentControls(card,path,version,revision,rules){
   const group=add(el('div',undefined,'document-attachments'),el('h4','Attachments'));
   if(!version.attachments.length)group.append(el('p','No attachments.'));
@@ -104,35 +197,7 @@ function attachmentControls(card,path,version,revision,rules){
     if(version.attachments.length>=rules.maxFilesPerRevision){
       group.append(el('p','This draft already has '+rules.maxFilesPerRevision+' attachments. Remove one to add another.'));
     }else{
-      const picker=el('input');picker.type='file';picker.accept=rules.formats.map(format=>format.extension).join(',');picker.name='documentAttachment';picker.required=true;
-      const submit=button('Upload attachment','submit');
-      const form=add(el('form'),add(el('label','Fictional attachment'),picker),submit);
-      const detail=el('p','PDF, Word, Excel, PowerPoint, TXT, CSV, TSV, PNG, JPEG, GIF, WebP, BMP and TIFF. Up to 1 MiB (16 KiB for TXT). Files are download only.','hint');
-      form.append(detail);
-      form.onsubmit=async e=>{
-        e.preventDefault();
-        if(busy||submit.disabled)return;
-        const file=picker.files[0],identity=actor,seq=docsSeq;
-        if(!file)return;
-        const format=rules.formats.find(format=>file.name.toLowerCase().endsWith(format.extension));
-        if(!format)return notice('Choose a supported PDF, modern Office, text, CSV, TSV, or raster image file.',true);
-        if(file.type&&file.type!==format.mediaType&&!format.aliases.includes(file.type))return notice('The selected file type does not match the filename.',true);
-        const limit=format.maxFileBytes;
-        if(!file.size||file.size>limit)return notice('Choose a nonempty fictional file no larger than '+(limit>=1024*1024?limit/(1024*1024)+' MiB':limit/1024+' KiB')+'.',true);
-        submit.disabled=true;
-        try{
-          const bytes=new Uint8Array(await file.arrayBuffer());
-          if(actor!==identity||docsSeq!==seq||docsPane.hidden)return;
-          const chunks=[];
-          for(let offset=0;offset<bytes.length;offset+=24*1024)chunks.push(btoa(String.fromCharCode(...bytes.subarray(offset,offset+24*1024))));
-          const data=chunks.join('');
-          await docsPost(path+'/attachments',{filename:file.name,mediaType:file.type,data,expectedRevision:revision},data=>{
-            docsData=data;renderDocs();notice('Attachment added to the draft.');
-          });
-        }catch{if(actor===identity&&docsSeq===seq&&!docsPane.hidden)notice('Could not read the selected file.',true);}
-        finally{submit.disabled=false;}
-      };
-      group.append(form);
+      group.append(attachmentForm(path,revision,rules,rules.maxFilesPerRevision-version.attachments.length));
     }
   }
   card.append(group);

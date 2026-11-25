@@ -27,7 +27,7 @@ async function read(url,options){
     // Ordinary permission refusals keep the page; an expired or changed context does not.
     await checkContext();
   }
-  if(!r.ok)throw Object.assign(Error(data.error||data.message||'Request failed.'),{status:r.status});
+  if(!r.ok)throw Object.assign(Error(data.error||data.message||'Request failed.'),{status:r.status,fileErrors:Array.isArray(data.fileErrors)?data.fileErrors:undefined});
   return data;
 }
 async function write(url,body,message,after){

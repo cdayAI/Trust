@@ -1,7 +1,8 @@
 'use strict';
 
 const {randomUUID}=require('node:crypto');
-const kinds=['access','deletion','correction','portability','opt-out'];
+const deadlines=require('./rights-deadline-policy');
+const {kinds}=deadlines;
 const ownerIds=['analyst','case-operator'];
 const backupActor={id:'case-operator',name:'Case Operator (demo)',role:'rights-operator'};
 const policy={version:1,unit:'UTC calendar days',min:1,max:365,defaultDays:30};
@@ -21,11 +22,6 @@ function assertKeys(body, allowed) {
   if(Object.keys(body).some(k=>!allowed.includes(k)))fail(422,'UNKNOWN_FIELDS','The request contains unsupported fields.');
 }
 
-function dueDate(receivedAt,days){
-  const d=new Date(receivedAt);
-  d.setUTCDate(d.getUTCDate()+days);
-  return d.toISOString().slice(0,10);
-}
 function view(state) {
   const cases=state.rightsCases??[];
   const today=new Date().toISOString().slice(0,10);
@@ -35,8 +31,8 @@ function view(state) {
   const owners=ownerIds.map(id=>state.actors.find(x=>x.id===id))
     .map((actor,i)=>({id:ownerIds[i],name:actor?.name??ownerIds[i]}));
   return {
-    policy,kinds,owners,statuses,
-    cases:cases.map(c=>({...c,overdue:active(c)&&c.dueDate<today,
+    policy:{...policy,activeVersion:deadlines.active(state).version},kinds,owners,statuses,
+    cases:cases.map(({extensionRequester,...c})=>({...c,overdue:active(c)&&c.dueDate<today,
       history:historyByCase.get(c.id)})),
     legacyRecords:(state.moduleRecords??[]).filter(r=>r.moduleId==='rights')
   };
@@ -44,7 +40,7 @@ function view(state) {
 function openCase(state,actor,{kind,owner,days,summary,source},event){
   const now=new Date().toISOString();
   const row={id:randomUUID(),kind,owner,summary,createdBy:actor,
-    receivedAt:now,dueDate:dueDate(now,days),clockPolicy:{version:policy.version,days,unit:policy.unit},
+    receivedAt:now,...deadlines.pin(state,kind,now,days),
     identity:{status:'pending',reviewedBy:null,reviewedAt:null},
     completion:null,closedAt:null,status:'received',updatedAt:now,revision:1};
   if(source)row.source=source;
@@ -63,7 +59,7 @@ function portalModel(state,grant,event,kind){
     choice(kind,kinds,'request type');
     if(row&&row.kind!==kind)fail(409,'PORTAL_ALREADY_SUBMITTED','This synthetic code already has a request. Each code can submit only one.');
     if(!row){
-      row=openCase(state,'synthetic-requester',{kind,owner:'analyst',days:policy.defaultDays,
+      row=openCase(state,'synthetic-requester',{kind,owner:'analyst',
         summary:'Synthetic portal intake for '+grant.alias+'. No contact details or documents.',source:'synthetic-portal'},event);
       entry={grantId:grant.id,caseId:row.id,receipt:randomUUID()};
       (state.requesterReceipts??=[]).push(entry);
@@ -76,14 +72,15 @@ function portalModel(state,grant,event,kind){
   return {created,value:{mode:'synthetic-requester',status:publicStatus[row.status],requestType:row.kind,
     receivedDate:row.receivedAt.slice(0,10),receipt:entry.receipt}};
 }
-function change(state,parts,actor,body,event) {
+function change(state,parts,actor,body,event,_assessments,account) {
+  if(parts.length===3&&parts[1]==='deadline-policy')return deadlines.mutate(state,actor,account,parts[2],body,event);
   const now=new Date().toISOString();
   const cases=state.rightsCases??[];
   if(parts.length===2&&parts[1]==='cases') {
     if(actor!=='analyst')fail(403,'INTAKE_REQUIRED','Only the intake analyst can open a case.');
     assertKeys(body,['kind','owner','days','note']);
     const kind=choice(body.kind,kinds,'request type'),owner=choice(body.owner,ownerIds,'case owner');
-    if(!Number.isSafeInteger(body.days)||body.days<policy.min||body.days>policy.max)fail(422,'INVALID_DEADLINE','Set a synthetic deadline of 1–365 calendar days.');
+    if(body.days!==undefined&&(!Number.isSafeInteger(body.days)||body.days<policy.min||body.days>policy.max))fail(422,'INVALID_DEADLINE','Set a synthetic deadline of 1–365 calendar days.');
     openCase(state,actor,{kind,owner,days:body.days,summary:note(body.note)},event);
     return;
   }
@@ -91,7 +88,7 @@ function change(state,parts,actor,body,event) {
   const row=cases.find(c=>c.id===parts[2]);
   if(!row)fail(404,'NOT_FOUND','Rights case not found.');
   const action=parts[3];
-  if(!['assign','verify','deny-verification','begin','fulfill','close-unverified'].includes(action))fail(404,'NOT_FOUND','Rights action not found.');
+  if(!['assign','verify','deny-verification','begin','fulfill','close-unverified','request-extension','approve-extension','reject-extension'].includes(action))fail(404,'NOT_FOUND','Rights action not found.');
   function refuse(status,code,message) {
     event(state,actor,'rights.case.refused',null,row.id,{requestedAction:action,code,
       expectedRevision:Number.isSafeInteger(body.expectedRevision)?body.expectedRevision:null,actualRevision:row.revision});
@@ -102,6 +99,44 @@ function change(state,parts,actor,body,event) {
   if(row.closedAt)refuse(409,'CASE_CLOSED','This case is closed.');
   const from=row.status;
   let details;
+  if(['request-extension','approve-extension','reject-extension'].includes(action)){
+    if(!account)return refuse(404,'EXTENSION_UNAVAILABLE','Extension review requires an isolated staff session.');
+    const pending=row.extensionRequests?.find(request=>request.status==='pending');
+    if(action==='request-extension'){
+      if(actor!==row.owner)return refuse(403,'OWNER_REQUIRED','Only the assigned case owner can request an extension.');
+      if(Object.keys(body).some(key=>!['expectedRevision','reason'].includes(key))||!deadlines.extensionReasons.includes(body.reason))
+        return refuse(422,'INVALID_EXTENSION_REASON','Select a fictional extension reason.');
+      if(!row.clockPolicy.extensionDays||pending||row.extensionRequests?.some(request=>request.status==='approved')||(row.extensionRequests?.length??0)>=3)
+        return refuse(409,'EXTENSION_UNAVAILABLE','No further extension request is available under the pinned rule.');
+      if(row.dueDate<now.slice(0,10))return refuse(409,'EXTENSION_EXPIRED','The pinned deadline has already passed.');
+      const proposedDueDate=deadlines.addDays(row.originalDueDate,row.clockPolicy.extensionDays,
+        row.clockPolicy.basis,row.clockPolicy.closedDates);
+      (row.extensionRequests??=[]).push({status:'pending',reason:body.reason,proposedDueDate,requestedAt:now,requestedBy:actor});
+      row.extensionRequester=account;
+      details={reason:body.reason,proposedDueDate,dueDate:row.dueDate};
+    }else{
+      if(actor!=='reviewer'||actor===row.owner||row.extensionRequester===account)
+        return refuse(403,'INDEPENDENT_REVIEW_REQUIRED','A different reviewer account must decide the extension.');
+      if(Object.keys(body).some(key=>key!=='expectedRevision'))
+        return refuse(422,'UNKNOWN_FIELDS','The request contains unsupported fields.');
+      if(!pending)return refuse(409,'EXTENSION_NOT_PENDING','There is no pending extension request.');
+      if(action==='approve-extension'&&row.dueDate<now.slice(0,10))
+        return refuse(409,'EXTENSION_EXPIRED','The deadline passed while pending. Reject the extension to resolve review.');
+      pending.status=action==='approve-extension'?'approved':'rejected';
+      pending.reviewedAt=now;
+      pending.reviewedBy=actor;
+      delete row.extensionRequester;
+      const previousDueDate=row.dueDate;
+      if(pending.status==='approved')row.dueDate=pending.proposedDueDate;
+      details={previousDueDate,dueDate:row.dueDate,decision:pending.status};
+    }
+    row.revision++;
+    row.updatedAt=now;
+    event(state,actor,'rights.case.'+action,null,row.id,{...details,from,to:row.status,revision:row.revision});
+    return;
+  }
+  if(['fulfill','close-unverified'].includes(action)&&row.extensionRequests?.some(request=>request.status==='pending'))
+    return refuse(409,'EXTENSION_PENDING','Resolve the pending extension before closing this case.');
   try {
     assertKeys(body,['expectedRevision','note',...(action==='assign'?['owner']:[])]);
     if(action==='assign'){

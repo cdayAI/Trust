@@ -17,8 +17,8 @@ const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
 const employee=require('./employee-attestations');
 const training=require('./training');
-const {uploadRequestBytes}=require('./governance-document-attachments');
-const attachmentUploadPath=/^\/api\/governance-documents\/records\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/revisions\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/attachments$/u;
+const {uploadRequestBytes,batchUploadRequestBytes}=require('./governance-document-attachments');
+const attachmentUploadPath=/^\/api\/governance-documents\/records\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/revisions\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/attachments(?:\/batch)?$/u;
 const reporting=require('./reporting');
 const publicDir = path.join(__dirname,'public');
 const staticFiles = new Map([
@@ -44,6 +44,7 @@ const staticFiles = new Map([
   ['/data-map-ui.js',['data-map-ui.js','text/javascript; charset=utf-8']],
   ['/incident-ui.js',['incident-ui.js','text/javascript; charset=utf-8']],
   ['/rights-ui.js',['rights-ui.js','text/javascript; charset=utf-8']],
+  ['/rights-deadline-ui.js',['rights-deadline-ui.js','text/javascript; charset=utf-8']],
   ['/assessment-config-ui.js',['assessment-config-ui.js','text/javascript; charset=utf-8']],
   ['/assessment-config.css',['assessment-config.css','text/css; charset=utf-8']],
   ['/maturity-planning-ui.js',['maturity-planning-ui.js','text/javascript; charset=utf-8']],
@@ -119,7 +120,9 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     operations=createOperations({files,assets:['index.html','app.js','styles.css'].map(file=>path.join(publicDir,file)),
       logEvents:operationalEvents,checkBackend:database?()=>database.checkMode(access?'isolated':'demo'):undefined});
   }catch(error){database?.close();throw error;}
+  let activeBatchUploads=0;
   const server=http.createServer(async (req,res)=>{
+    let countedBatch=false;
     try {
       if (!loopbackAddresses.has(req.socket.remoteAddress)||!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i.test(req.headers.host||'')) return send(res,403,{error:'Only loopback access is allowed.'});
       const {pathname,searchParams}=new URL(req.url,'http://localhost');
@@ -285,7 +288,8 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if(req.method==='GET'&&['/api/reporting','/api/reporting/export'].includes(pathname)){
         if(access&&!reporting.canReport(actor))return send(res,403,{error:'An analyst or reviewer is required for reporting.'});
         const exporting=pathname.endsWith('/export');
-        const {model,format}=reporting.report(store.getState(),store.visibleAudit(),searchParams,{mode,exporting});
+        const {state,audit}=store.reportSnapshot();
+        const {model,format}=reporting.report(state,audit,searchParams,{mode,exporting});
         if(!exporting)return send(res,200,model);
         const headers={'Content-Disposition':'attachment; filename="mvw-trust-report.'+format+'"'};
         return format==='csv'?send(res,200,reporting.csv(model),'text/csv; charset=utf-8',headers):send(res,200,model,undefined,headers);
@@ -333,7 +337,13 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         {'Content-Disposition':'attachment; filename="privacy-workbench-data-map.json"'});
       const lineagePath=pathname.match(/^\/api\/data-map\/nodes\/([0-9a-f-]{36})\/lineage$/);
       if (req.method==='GET'&&lineagePath) return send(res,200,store.getLineage(lineagePath[1]));
-      if (req.method==='GET'&&pathname==='/api/incidents/cases') return send(res,200,store.getIncidents());
+      if (req.method==='GET'&&pathname==='/api/incidents/cases') return send(res,200,store.getIncidents(actor,selection?.account));
+      if(pathname==='/api/rights/deadline-policy'||pathname.startsWith('/api/rights/deadline-policy/')){
+        if(!access||searchParams.size)return send(res,404,{error:'Not found.'});
+        if(req.method==='GET'&&pathname==='/api/rights/deadline-policy')return send(res,200,store.getRightsDeadlinePolicy(selection.account));
+      }
+      if(!access&&/^\/api\/rights\/cases\/[^/]+\/(?:request|approve|reject)-extension$/.test(pathname))
+        return send(res,404,{error:'Not found.'});
       if (req.method==='GET'&&pathname==='/api/rights/cases'){
         const rights=store.getRights();
         return send(res,200,caseOperator?policy.caseOperatorView(rights):rights);
@@ -349,7 +359,14 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       if (req.method==='POST'&&pathname.startsWith('/api/')) {
         const isAttachmentUpload=attachmentUploadPath.test(pathname);
-        const body=await readBody(req,isAttachmentUpload?uploadRequestBytes:undefined);
+        const batchUpload=isAttachmentUpload&&pathname.endsWith('/batch');
+        if(batchUpload){
+          // Enforce authority and a small concurrency budget before buffering a large upload.
+          if(actor!=='analyst')return send(res,403,{error:'Only the author can upload draft attachments.',code:'AUTHOR_REQUIRED'},undefined,{'Connection':'close'});
+          if(activeBatchUploads>=2)return send(res,429,{error:'Two uploads are already in progress. Retry when one finishes.',code:'ATTACHMENT_UPLOAD_BUSY'},undefined,{'Connection':'close','Retry-After':'1'});
+          activeBatchUploads++;countedBatch=true;
+        }
+        const body=await readBody(req,batchUpload?batchUploadRequestBytes:isAttachmentUpload?uploadRequestBytes:undefined);
         // The session may have expired, been switched, or logged out while the body was arriving.
         const current=access?.context(req,expected);
         if(isAttachmentUpload&&current&&current.actor!==actor)return send(res,403,{error:'The upload role changed.'});
@@ -396,7 +413,9 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       return send(res,404,{error:'Not found.'});
     } catch (error) {
       if((!error.status&&error.code!=='ENOENT')||error.status>=500)operations.requestError();
-      if (!res.headersSent) send(res,error.status||(error.code==='ENOENT'?404:500),{error:error.status?error.message:error.code==='ENOENT'?'Not found.':'Server error.',...(error.status&&error.code?{code:error.code}:{})},undefined,error.closeConnection?{'Connection':'close'}:undefined);
+      if (!res.headersSent) send(res,error.status||(error.code==='ENOENT'?404:500),{error:error.status?error.message:error.code==='ENOENT'?'Not found.':'Server error.',...(error.status&&error.code?{code:error.code}:{}),...(Array.isArray(error.fileErrors)?{fileErrors:error.fileErrors}:{})},undefined,error.closeConnection?{'Connection':'close'}:undefined);
+    } finally {
+      if(countedBatch)activeBatchUploads--;
     }
   });
   if(database)server.once('close',()=>database.close());

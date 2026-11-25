@@ -19,14 +19,14 @@ const roles=[
   ['fictional-author',primary,'analyst'],['fictional-reviewer',primary,'reviewer'],
   ['fictional-operator',primary,'case-operator'],['fictional-other',secondary,'analyst']
 ];
-async function fixture(t){
+async function fixture(t,backend){
   const root=await mkdtemp(join(tmpdir(),'mvw-attachment-'));
   const passwords=Object.fromEntries(roles.map(([id])=>[id,randomBytes(32).toString('base64url')]));
   const options={root,workspaces:[{id:primary,label:'Synthetic Alpha'},{id:secondary,label:'Synthetic Beta'}],
     accounts:roles.map(([id,workspace,role])=>({id,codeHash:codeHash(passwords[id]),memberships:{[workspace]:role}}))};
   let server,url;
   async function start(){
-    server=createServer({isolated:options}).listen(0,'127.0.0.1');
+    server=createServer({isolated:options,...(backend==='sqlite'?{sqliteFile:join(root,'fictional.sqlite')}:{})}).listen(0,'127.0.0.1');
     await once(server,'listening');
     url='http://127.0.0.1:'+server.address().port;
   }
@@ -202,14 +202,14 @@ test('browser: governance file picker enforces limits and uploads, downloads, re
     await analyst.getByLabel('Fictional title',{exact:true}).fill(doc.title);
     await analyst.getByLabel('Original fictional text',{exact:true}).fill(doc.content);
     await analyst.getByRole('button',{name:'Create document draft',exact:true}).click();
-    const picker=analyst.getByLabel('Fictional attachment',{exact:true});
-    const upload=analyst.getByRole('button',{name:'Upload attachment',exact:true});
+    const picker=analyst.getByLabel('Fictional attachments',{exact:true});
+    const upload=analyst.getByRole('button',{name:'Upload attachments',exact:true});
     await picker.setInputFiles({name:'sample.svg',mimeType:'image/svg+xml',buffer:Buffer.from('Fictional unsupported file')});
     await upload.click();
-    await analyst.getByRole('status').getByText('Choose a supported PDF, modern Office, text, CSV, TSV, or raster image file.',{exact:true}).waitFor();
+    await analyst.getByText(/sample\.svg.*Choose a supported file format/).waitFor();
     await picker.setInputFiles({name:'large.txt',mimeType:'text/plain',buffer:Buffer.alloc(16*1024+1,65)});
     await upload.click();
-    await analyst.getByRole('status').getByText(/no larger than 16 KiB/).waitFor();
+    await analyst.getByText(/large\.txt.*up to 16 KiB/).waitFor();
     await picker.setInputFiles({name:filename,mimeType:'text/plain',buffer:Buffer.from(original)});
     await upload.click();
     await analyst.getByRole('button',{name:'Remove attachment '+cleanFilename,exact:true}).waitFor();
@@ -229,7 +229,7 @@ test('browser: governance file picker enforces limits and uploads, downloads, re
     assert.equal(await upload.count(),0);
     await signIn(reviewer,roles[1]);
     await reviewer.getByRole('button',{name:'Download attachment '+cleanFilename,exact:true}).waitFor();
-    assert.equal(await reviewer.getByRole('button',{name:'Upload attachment',exact:true}).count(),0);
+    assert.equal(await reviewer.getByRole('button',{name:'Upload attachments',exact:true}).count(),0);
     const panel=reviewer.locator('details').filter({has:reviewer.locator('summary').getByText('Publish locally',{exact:true})});
     await panel.locator('summary').click();
     await panel.getByLabel('Fictional review rationale',{exact:true}).fill('Reviewed a fictional text attachment.');
@@ -417,12 +417,18 @@ test('browser: each allowed format uploads with the real chooser and downloads b
     await draft.getByLabel('Original fictional text',{exact:true}).fill(doc.content);
     await draft.getByRole('button',{name:'Create document draft',exact:true}).click();
     const card=page.locator('article section').filter({has:page.getByRole('heading',{name:title,exact:true})});
-    for(const [name,bytes] of samples.slice(offset,offset+groupSize)){
-      const temp=join(f.root,name),picker=card.getByLabel('Fictional attachment',{exact:true});
-      await writeFile(temp,bytes);
-      const [chooser]=await Promise.all([page.waitForEvent('filechooser'),picker.click()]);
-      await chooser.setFiles(temp);
-      await card.getByRole('button',{name:'Upload attachment',exact:true}).click();
+    const selected=samples.slice(offset,offset+groupSize),paths=[];
+    for(const [name,bytes] of selected){
+      const temp=join(f.root,name);
+      await writeFile(temp,bytes);paths.push(temp);
+    }
+    const picker=card.getByLabel('Fictional attachments',{exact:true});
+    const [chooser]=await Promise.all([page.waitForEvent('filechooser'),picker.click()]);
+    assert.equal(chooser.isMultiple(),true);
+    await chooser.setFiles(paths);
+    await card.getByText(new RegExp('^'+selected.length+' selected')).waitFor();
+    await card.getByRole('button',{name:'Upload attachments',exact:true}).click();
+    for(const [name,bytes] of selected){
       const action=card.getByRole('button',{name:'Download attachment '+name,exact:true});
       const [download]=await Promise.all([page.waitForEvent('download'),action.click()]);
       assert.equal(download.suggestedFilename(),name);
@@ -433,4 +439,126 @@ test('browser: each allowed format uploads with the real chooser and downloads b
     assert.equal(await card.locator('.document-attachments img, .document-attachments iframe, .document-attachments embed').count(),0);
   }
   assert.deepEqual(pageErrors,[]);assert.deepEqual(external,[]);
+});
+
+for(const backend of ['json','sqlite'])test('batch upload is atomic, role-scoped, audited and durable with '+backend,async t=>{
+  const f=await fixture(t,backend);
+  let author=await f.login(roles[0]),reviewer=await f.login(roles[1]);
+  const operator=await f.login(roles[2]),other=await f.login(roles[3]);
+  const scoped=(path,scope=primary)=>collection+path+'?workspace='+scope;
+  const create=()=>f.request(scoped('/records'),200,{cookie:author,body:{...doc,expectedRevision:0}});
+  const {data:draft}=await create();
+  const d=draft.documents[0],v=d.revisions[0],base='/records/'+d.id+'/revisions/'+v.id+'/attachments';
+  const route=scoped(base+'/batch');
+  const samples=['fictional.docx','fictional.pdf','fictional.png','fictional.csv'].map(name=>formatPayload(name,formatSamples.get(name)));
+  const batch=(files,expectedRevision=draft.revision)=>({files,expectedRevision});
+  const view=async(c=author)=>(await f.request(scoped(''),200,{cookie:c})).data;
+  assert.equal(draft.attachmentRules.maxFilesPerBatch,4);
+  assert.equal(draft.attachmentRules.maxBatchBytes,4*1024*1024);
+  for(const [cookie,status] of [[null,401],[reviewer,403],[operator,403],[other,403]])
+    await f.request(route,status,{cookie,body:batch(samples)});
+  await f.request(scoped(base+'/batch',secondary),404,{cookie:other,body:batch(samples,0)});
+  await f.request(route,409,{cookie:author,body:batch(samples,0)});
+  for(const files of [[],{not:'an array'},Array.from({length:5},()=>samples[0])]){
+    const bad=await f.request(route,422,{cookie:author,body:batch(files)});
+    assert.equal(bad.data.code,'ATTACHMENT_BATCH_COUNT');
+  }
+  const bad=await f.request(route,415,{cookie:author,body:batch([samples[0],
+    formatPayload('fictional-invalid.pdf',Buffer.from('synthetic non-PDF')),
+    samples[1],formatPayload('fictional-invalid.svg',Buffer.from('synthetic unsupported'))])});
+  assert.equal(bad.data.code,'ATTACHMENT_BATCH_INVALID');
+  assert.deepEqual(bad.data.fileErrors.map(({index,code})=>[index,code]),[
+    [1,'ATTACHMENT_CONTENT_INVALID'],[3,'ATTACHMENT_TYPE_UNSUPPORTED']
+  ]);
+  assert.equal((await view()).revision,draft.revision);
+  assert.deepEqual((await view()).documents[0].revisions[0].attachments,[]);
+  assert.doesNotMatch(JSON.stringify(bad.data),/fictional-invalid|synthetic non-PDF/);
+  const before=(await f.request('audit/export?workspace=alpha',200,{cookie:reviewer})).data.audit;
+  assert.equal(before.filter(x=>x.action===collection+'.attachment-upload').length,0);
+  const {data:success}=await f.request(route,200,{cookie:author,body:batch(samples)});
+  assert.equal(success.revision,draft.revision+1);
+  assert.deepEqual(success.documents[0].revisions[0].attachments.map(x=>x.name),samples.map(x=>x.filename));
+  assert.equal((await f.request(route,409,{cookie:author,body:batch(samples,success.revision)})).data.code,'ATTACHMENT_REVISION_LIMIT');
+  const after=(await f.request('audit/export?workspace=alpha',200,{cookie:reviewer})).data.audit;
+  const writes=after.filter(x=>x.action===collection+'.attachment-upload');
+  assert.equal(writes.length,4);
+  assert.ok(writes.every(x=>x.details.revision===success.revision&&x.account===roles[0][0]));
+  assert.ok(samples.every(x=>!JSON.stringify(writes).includes(x.filename)));
+  await f.stop();await f.start();
+  author=await f.login(roles[0]);reviewer=await f.login(roles[1]);
+  const persisted=(await view()).documents[0].revisions[0].attachments;
+  for(const row of persisted){
+    const {data,response}=await f.request(scoped(base+'/'+row.id+'/download'),200,{cookie:reviewer,body:{}});
+    assert.deepEqual(data,formatSamples.get(row.name));
+    assert.equal(response.headers.get('content-disposition'),'attachment; filename="'+row.name+'"');
+    assert.equal(response.headers.get('x-content-type-options'),'nosniff');
+  }
+});
+
+test('batch body and workspace budgets accept four exact 1 MiB files but never partially save a rejected batch',async t=>{
+  const f=await fixture(t);
+  const author=await f.login(roles[0]);
+  const files=Array.from({length:4},(_,i)=>formatPayload('synthetic-'+i+'.csv',Buffer.alloc(1024*1024,65)));
+  let revision=0;
+  async function draft(i){
+    const {data}=await f.request(collection+'/records?workspace=alpha',200,{cookie:author,body:{...doc,title:'Fictional limit '+i,expectedRevision:revision}});
+    revision=data.revision;
+    const d=data.documents.find(row=>row.revisions[0].title==='Fictional limit '+i);
+    return collection+'/records/'+d.id+'/revisions/'+d.revisions[0].id+'/attachments/batch?workspace=alpha';
+  }
+  const first=await draft(1);
+  const tooBig=attachmentPolicy.batchUploadRequestBytes+1;
+  const body={files:[{...files[0],data:'A'.repeat(tooBig)}],expectedRevision:revision};
+  assert.equal((await f.request(first,413,{cookie:author,body})).response.headers.get('connection'),'close');
+  for(let i=1;i<=2;i++){
+    const dest=i===1?first:await draft(2);
+    const {data}=await f.request(dest,200,{cookie:author,body:{files,expectedRevision:revision}});
+    revision=data.revision;
+  }
+  const third=await draft(3);
+  const refusal=(await f.request(third,409,{cookie:author,body:{files:[files[0]],expectedRevision:revision}})).data;
+  assert.equal(refusal.code,'ATTACHMENT_WORKSPACE_LIMIT');
+  const {data}=await f.request(collection+'?workspace=alpha',200,{cookie:author});
+  assert.equal(data.revision,revision);
+  assert.equal(data.documents.reduce((n,d)=>n+d.revisions[0].attachments.length,0),8);
+  assert.deepEqual(data.documents.find(d=>d.revisions[0].title==='Fictional limit 3').revisions[0].attachments,[]);
+});
+
+test('Chromium drops multiple files and shows content refusals individually without saving any',{
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright installed',timeout:30000
+},async t=>{
+  const {chromium}=require('playwright'),f=await fixture(t);
+  const cookie=await f.login(roles[0]);
+  await f.request(collection+'/records?workspace=alpha',200,{cookie,body:{...doc,expectedRevision:0}});
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  t.after(()=>browser.close());
+  const page=await browser.newPage();page.setDefaultTimeout(7500);
+  await page.goto(f.url);
+  await page.getByLabel('Test account',{exact:true}).fill(roles[0][0]);
+  await page.getByLabel('Workspace ID',{exact:true}).fill(primary);
+  await page.getByLabel('Local access code',{exact:true}).fill(f.passwords[roles[0][0]]);
+  await page.getByRole('button',{name:'Sign in',exact:true}).click();
+  await page.getByRole('button',{name:'Policies and documents',exact:true}).click();
+  const drop=page.locator('.attachment-drop-zone');
+  async function dropFiles(files){
+    const handle=await page.evaluateHandle(input=>{
+      const transfer=new DataTransfer();
+      for(const file of input)transfer.items.add(new File([Uint8Array.from(file.bytes)],file.name,{type:file.type}));
+      return transfer;
+    },files);
+    await drop.dispatchEvent('dragover',{dataTransfer:handle});
+    await drop.dispatchEvent('drop',{dataTransfer:handle});
+    await handle.dispose();
+  }
+  const good={name:'Fictional drop.txt',type:'text/plain',bytes:[...Buffer.from(original)]};
+  await dropFiles([good,{name:'Fictional bad.pdf',type:'application/pdf',bytes:[...Buffer.from('Fictional bad PDF')]}]);
+  await page.getByText(/^2 selected/).waitFor();
+  const button=page.getByRole('button',{name:'Upload attachments',exact:true});
+  await button.click();
+  await page.getByText(/Fictional bad\.pdf.*file bytes do not match/).waitFor();
+  await page.getByText('No attachments.',{exact:true}).waitFor();
+  assert.equal(await page.getByRole('button',{name:'Download attachment Fictional drop.txt',exact:true}).count(),0);
+  await page.getByRole('button',{name:'Remove selected file Fictional bad.pdf',exact:true}).click();
+  await button.click();
+  await page.getByRole('button',{name:'Download attachment Fictional drop.txt',exact:true}).waitFor();
 });

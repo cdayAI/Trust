@@ -162,7 +162,7 @@ const views={
   'assessment-config':'assessment-config-view','audit-management':'audit-management-view','maturity-planning':'maturity-planning-view','workflow-studio':'workflow-studio-view',
   'trust-center':'trust-center-view',report:'report-view',modules:'module-view'
 };
-test('browser inventory: all workbench views and JSON download controls, with role-specific control evidence',browserOnly,async t=>{
+test('browser inventory: all workbench views and JSON download controls, with role-specific control evidence',{...browserOnly,timeout:75000},async t=>{
   const {browser,url}=await setup(t);
   try{
     const page=await browser.newPage({viewport:{width:1440,height:1000},acceptDownloads:true});

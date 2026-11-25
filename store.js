@@ -9,6 +9,7 @@ const assessmentFlow = require('./assessment-workflow');
 const forms = require('./assessment-questionnaire');
 const assessmentConfig=require('./assessment-config');
 const rights = require('./rights-workflow');
+const deadlines = require('./rights-deadline-policy');
 const incidents = require('./incident-workflow');
 const dataMap = require('./data-map');
 const dictionary=require('./data-dictionary');
@@ -236,8 +237,10 @@ function openStore(file,{empty=false,storage}={}) {
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,ethicsCases,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,...safe}=state;
+    const {requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,ethicsCases,rightsDeadlinePolicy,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,incidentPolicyBook:privateIncidentPolicy,...safe}=state;
+    if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
+    if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
     delete safe.operatorJobs;
     safe.audit=safe.audit.filter(e=>!excludedAudit(e));
     return documents.stateView(safe);
@@ -246,6 +249,7 @@ function openStore(file,{empty=false,storage}={}) {
     const membership = identityAdmin.record(state, caller.account);
     if (membership.disabled || membership.revision !== caller.generation) fail(401, 'Sign in to a local workspace.');
   }
+  let membershipGeneration=-1, membershipState={};
   const operations={
     groupGovernanceView:context=>groupGovernance.operatorView(state,context),
     scopedApplications:context=>groupGovernance.list(state,context),
@@ -269,7 +273,16 @@ function openStore(file,{empty=false,storage}={}) {
       if (outcome.changed) { persist(next); state = next; }
       return outcome;
     },
-    identityMembership:id=>identityAdmin.record(state,id),
+    identityMembership(id){
+      if(!storage)return identityAdmin.record(state,id);
+      const {generation,payload}=storage.readSince(workbench,membershipGeneration);
+      if(generation!==membershipGeneration){
+        // Keep only the identity projection, not a second workbench snapshot.
+        membershipState={identityAdministration:payload?.identityAdministration};
+        membershipGeneration=generation;
+      }
+      return identityAdmin.record(membershipState,id);
+    },
     identityAdminView:(seats,at)=>identityAdmin.view(state,seats,at),
     identityAdminChange(seats,at,admin,body){
       const next=structuredClone(state);
@@ -331,7 +344,8 @@ function openStore(file,{empty=false,storage}={}) {
     getDocuments:actor=>documents.view(state,actor),
     getModules:()=>modules.model(state),
     getRights:()=>rights.view(state),
-    getIncidents:()=>incidents.view(state),
+    getRightsDeadlinePolicy:account=>deadlines.view(state,account),
+    getIncidents:(actor,account)=>incidents.view(state,actor,account),
     getDictionary:()=>dictionary.view(state),
     getDataMap:()=>dataMap.view(state),
     getLineage:id=>dataMap.lineage(state,id),
@@ -346,6 +360,7 @@ function openStore(file,{empty=false,storage}={}) {
     getVendorMonitoring:()=>vendorMonitoring.view(state),
     getProgramAudit:prefix=>state.audit.filter(e=>e.action.startsWith(prefix+'.')),
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
+    reportSnapshot:()=>({state,audit:state.audit.filter(e=>!excludedAudit(e))}),
     change(parts,actor,body,account) {
       if (!actors.some(a=>a.id===actor)) fail(403,'Select a valid demo identity.');
       if (actor===rights.backupActor.id&&!['rights','governance-documents'].includes(parts[0])) fail(403,'This identity is assigned to rights cases only.');
@@ -384,14 +399,14 @@ function openStore(file,{empty=false,storage}={}) {
         actionHandoff(next,actor,find(next,'handoff',parts[1]),parts[2]);
       } else fail(404,'Endpoint not found.');
       commit();
-      return result??(parts[0]==='modules'?modules.model(state):program?program.view(state,actor):publicState());
+      return result??(parts[0]==='modules'?modules.model(state):program?program.view(state,actor,account):publicState());
     }
   };
   if(!storage)return operations;
   const mutations=new Set(['changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
-      state=storage.read(workbench)??fresh();
+      if(name!=='identityMembership')state=storage.read(workbench)??fresh();
       return fn(...args);
     }
     let refusal;

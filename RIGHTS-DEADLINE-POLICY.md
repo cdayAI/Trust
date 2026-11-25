@@ -1,0 +1,9 @@
+# Fictional privacy rights deadline policy
+
+The privacy-rights workspace supports exercise rules, not actual legal deadlines or advice. Do not use real case material or try to map the sample rules to applicable law.
+
+An isolated-workspace analyst saves and submits a draft. A separate reviewer account must publish it (or return it to the author). Set one base duration and optional extension duration for each supported request type. Choose calendar days or Monday–Friday business days, all in UTC. Business days skip the workspace's dated fictional closures. Day one is the day after recorded intake; for example, two business days after Friday when the following Monday is a closure ends Wednesday. The due date remains current through the end of that UTC day. Closed dates are not annually recurring.
+
+Publication creates a new version for all future staff and requester-portal intake in that workspace. Saved cases retain the original due date and exact day-count inputs, including exclusions relevant to a business policy. Previously opened cases keep their existing clocks. The old manual day-count field remains available on version 1 for existing demo exercises and API clients; an active published version rejects overrides.
+
+Only the assigned owner can request an extension and only an independent reviewer can approve or reject it. The pinned rule determines the fixed proposed extension measured after the original due date. A pending request does not change the deadline and must be resolved before closing the case. An overdue pending request can only be rejected. Three rejected-or-pending requests at most and one approval are allowed per case; only the approval updates the current due date. Policies and case extension decisions appear in workspace audit records; no notices are sent and no information is released.

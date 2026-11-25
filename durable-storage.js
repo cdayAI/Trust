@@ -149,6 +149,10 @@ function openSqlite(file, { readOnly = false } = {}) {
       }
     };
     const read = db.prepare('SELECT payload, generation FROM snapshots WHERE scope = ? AND kind = ?');
+    const readChanged = db.prepare(`
+      SELECT generation, CASE WHEN generation <> ? THEN payload ELSE NULL END AS payload
+      FROM snapshots WHERE scope = ? AND kind = ?
+    `);
     const decode = (kind, row) => row ? validatePayload(kind, JSON.parse(row.payload)) : undefined;
     const save = !readOnly && db.prepare(`
       INSERT INTO snapshots (scope, kind, generation, payload) VALUES (?, ?, 1, ?)
@@ -172,6 +176,20 @@ function openSqlite(file, { readOnly = false } = {}) {
             if (!kinds.has(kind)) throw new Error('Invalid storage document kind.');
             try { return decode(kind, read.get(scope, kind)); }
             catch (error) { throw rollbackBusy(error); }
+          },
+          // Read generation and changed payload in a single statement. A reader
+          // in another process must always see the last committed generation;
+          // never rely on local writes, file timestamps, or a time-to-live.
+          readSince(kind, knownGeneration) {
+            if (!kinds.has(kind) || !Number.isSafeInteger(knownGeneration) || knownGeneration < -1) {
+              throw new Error('Invalid storage document generation.');
+            }
+            try {
+              const row = readChanged.get(knownGeneration, scope, kind);
+              if (!row) return { generation: 0 };
+              return row.generation === knownGeneration ? { generation: row.generation } :
+                { generation: row.generation, payload: decode(kind, row) };
+            } catch (error) { throw rollbackBusy(error); }
           },
           write(kind, callback) {
             if (readOnly || !kinds.has(kind)) throw new Error('Storage document is not writable.');
