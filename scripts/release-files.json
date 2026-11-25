@@ -143,6 +143,7 @@
   "public/workflow-studio-ui.js",
   "public/workspace-home-ui.js",
   "public/workspace-home.css",
+  "report-schedule-worker.js",
   "report-schedules.js",
   "reporting-runs.js",
   "reporting.js",

@@ -219,6 +219,87 @@ function renderRequesterResult(card,row){
   }
   card.append(panel);
 }
+function renderRightsRetrieval(card,row){
+  if(row.retrievalOffered!==true||!localSession?.authenticated||!['analyst','reviewer'].includes(actor))return;
+  const summary=el('summary','Internal fictional retrieval');
+  const contents=el('div');
+  contents.setAttribute('aria-live','polite');
+  const panel=add(el('details'),summary,contents);
+  const route=rightsPath+'/'+encodeURIComponent(row.id)+'/retrieval';
+  const knownStages={'not-retrieved':'Not retrieved',draft:'Redacted draft',review:'Awaiting independent review',
+    returned:'Returned for rework',approved:'Approved for internal rehearsal only',stale:'Stale case revision'};
+  const labels={retrieve:'Retrieve fictional category counts',submit:'Submit exact retrieval for review',
+    return:'Return retrieval for rework',approve:'Approve this exact retrieval'};
+  const categories={preference:'Fictional preference examples',service:'Fictional service examples'};
+  let epoch=0,pending=false;
+  const active=ticket=>epoch===ticket&&panel.isConnected&&panel.open&&!rightsPane.hidden;
+  function recovering(error,focus){
+    const message=error.status===409?'The case or retrieval changed. Reload before retrying.':
+      error.status===404?'No fictional retrieval is available for this case or review stage.':
+      'The retrieval could not be confirmed. Reload before retrying.';
+    const retry=button('Reload retrieval','button','secondary');
+    retry.onclick=()=>load(true);
+    contents.replaceChildren(el('p',message,'error'),retry);
+    if(focus)retry.focus();
+  }
+  function render(model){
+    if(model?.mode!=='synthetic-rights-retrieval'||!Object.hasOwn(knownStages,model.stage)||
+      !Number.isSafeInteger(model.revision)||model.revision<0||
+      (model.caseId!==undefined&&model.caseId!==row.id))throw Error('Unexpected retrieval model.');
+    contents.replaceChildren(el('p',knownStages[model.stage]),
+      el('p','Retrieval revision '+model.revision+(Number.isSafeInteger(model.caseRevision)?' · Case revision '+model.caseRevision:''),'hint'),
+      el('p','Fixed category counts only. This internal exercise does not release anything to the requester.','hint'));
+    if(model.projection){
+      const output=model.projection,items=output.categories;
+      if(output.schemaVersion!==1||!Array.isArray(items)||!items.length||items.length>2||
+        !items.every(item=>item&&Object.hasOwn(categories,item.category)&&Number.isSafeInteger(item.count)&&item.count>0&&item.count<=4)||
+        new Set(items.map(item=>item.category)).size!==items.length||
+        items.reduce((sum,item)=>sum+item.count,0)!==output.rowsReviewed)
+        throw Error('Unexpected retrieval projection.');
+      contents.append(el('h4','Redacted category counts'),
+        add(el('ul'),...items.map(item=>el('li',categories[item.category]+': '+item.count))));
+    }
+    for(const action of model.actions??[]){
+      if(!Object.hasOwn(labels,action)||
+        (actor==='analyst'&&!['retrieve','submit'].includes(action))||
+        (actor==='reviewer'&&!['return','approve'].includes(action)))continue;
+      const control=button(labels[action]);
+      control.onclick=()=>mutate(action,model);
+      contents.append(control);
+    }
+  }
+  async function load(restoreFocus=false){
+    const ticket=++epoch;
+    contents.replaceChildren(el('p','Loading fictional retrieval…','hint'));
+    contents.setAttribute('aria-busy','true');
+    try{
+      const model=await read(route);
+      if(active(ticket)){render(model);if(restoreFocus)summary.focus();}
+    }catch(error){if(active(ticket))recovering(error,restoreFocus);}
+    finally{if(active(ticket))contents.removeAttribute('aria-busy');}
+  }
+  async function mutate(action,model){
+    if(pending||busy||!panel.open)return;
+    const ticket=++epoch;
+    pending=true;busy=true;
+    contents.replaceChildren(el('p','Checking the exact fictional retrieval revision…','hint'));
+    contents.setAttribute('aria-busy','true');
+    try{
+      const data={expectedCaseRevision:model.caseRevision,expectedRevision:model.revision,
+        ...(action==='retrieve'?{source:model.source}:{digest:model.digest})};
+      const next=await read(route+'/'+action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});
+      if(active(ticket)){render(next);summary.focus();}
+    }catch(error){if(active(ticket))recovering(error,true);}
+    finally{pending=false;busy=false;if(active(ticket))contents.removeAttribute('aria-busy');}
+  }
+  panel.ontoggle=()=>{
+    if(panel.open){void load();return;}
+    epoch++;
+    contents.replaceChildren();
+    contents.removeAttribute('aria-busy');
+  };
+  card.append(panel);
+}
 function renderRightsCase(row){
   const {owners,delegation,intakeSettings}=rightsData;
   const ownerName=id=>state?.actors.find(o=>o.id===id)?.name??owners.find(o=>o.id===id)?.name??id;
@@ -230,6 +311,7 @@ function renderRightsCase(row){
   card.id='work-record-'+row.id;
   renderRightsDeadlineCase(card,row);
   renderRequesterResult(card,row);
+  renderRightsRetrieval(card,row);
   if(row.requesterIntake){
     const pin=add(el('details'),el('summary','Requester form version '+row.requesterIntake.version));
     const answers=el('dl');

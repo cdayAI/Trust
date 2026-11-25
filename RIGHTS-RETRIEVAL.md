@@ -1,6 +1,6 @@
 # Internal fictional retrieval rehearsal
 
-This is a manual, operator-only API exercise in a local workspace that already
+This is a manual, operator-only exercise in a local workspace that already
 opts in to synthetic requester results. It does not retrieve or discover actual
 records. It has no source URLs, uploads, free text, email, external identity
 checks, connectors, job runner, or automatic operation. It does not change or
@@ -12,7 +12,14 @@ fulfillment, the case must still be open and assigned to the analyst role.
 A case-operator, a different workspace, a manual case, and a legacy request
 without an original code binding cannot use this exercise.
 
-Use the ordinary local staff session, matching `workspace` query parameter,
+In **Privacy rights**, open **Internal fictional retrieval** on the eligible
+case. The panel loads only when opened. Use **Retrieve fictional category
+counts**, then **Submit exact retrieval for review**. The independent reviewer
+reopens **Privacy rights** to see submitted work, opens its panel, and returns
+or approves the exact redacted revision. If the case or result changed, choose
+**Reload retrieval** before acting; a reload never repeats the decision.
+
+To use the API directly, use the ordinary local staff session, matching `workspace` query parameter,
 and same-origin JSON writes:
 
 | Route under `/api/rights/cases/{caseId}/retrieval` | Role | Body |

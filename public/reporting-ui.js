@@ -106,15 +106,21 @@ function localReportSchedule(){
     target.append(form);
   }
   function render(model,{focus=false}={}){
-    const title=heading('Simulated UTC schedule');title.tabIndex=-1;
+    const title=heading(model.workerEnabled?'Local UTC report schedule':'Simulated UTC schedule');title.tabIndex=-1;
     const panel=add(el('section'),title,
-      el('p','One local plan at a time. Nothing starts in the background or goes to a recipient. Choose Run simulated slot to capture the current workspace once for the selected UTC slot.'));
+      el('p',model.workerEnabled?
+        'One local plan at a time. Only a separately approved worker plan can run automatically here. Outputs stay in this workspace; nothing is sent.':
+        'One local plan at a time. The local worker is off here. Choose Run simulated slot for a manual plan; nothing goes to a recipient.'));
     const problem=el('p',undefined,'error');
     problem.hidden=true;problem.tabIndex=-1;problem.setAttribute('role','alert');panel.append(problem);
     const reload=button('Reload local schedule','button','secondary');reload.onclick=()=>load(true);panel.append(reload);
-    const outcomes={proposed:'Draft schedule saved. A separate reviewer must approve it.',approved:'Schedule approved for explicit simulated runs.',
+    const automatic=model.plans[0]?.execution==='local-worker';
+    const outcomes={proposed:'Draft schedule saved. A separate reviewer must approve it.',
+      approved:automatic?'Schedule approved for the local worker.':'Schedule approved for explicit simulated runs.',
       stopped:'Schedule stopped. Its history remains available.',ran:'One scheduled report was saved.',
-      'already-run':'That UTC slot was already processed.', 'not-due':'No report was saved. The slot is not due at the simulated time.'};
+      'already-run':'That UTC slot was already processed.', 'already-processed':'That UTC slot is no longer pending.',
+      skipped:'That UTC slot was skipped by the bounded catch-up policy.',
+      'not-due':automatic?'No report was saved. The slot is not due at the actual UTC time.':'No report was saved. The slot is not due at the simulated time.'};
     if(outcomes[model.outcome]){
       const result=el('p',outcomes[model.outcome]);result.setAttribute('role','status');panel.append(result);
     }
@@ -125,6 +131,7 @@ function localReportSchedule(){
         form(panel,'create',[
           reportSelect('Pinned report template','sourceRunId',options,model.templates[0].id),
           reportSelect('UTC cadence','cadence',{daily:'Daily',weekly:'Weekly'},'daily'),
+          ...(model.workerEnabled?[reportSelect('Schedule execution','execution',{manual:'Manual simulation only','local-worker':'Approved local worker'},'manual')]:[]),
           timeField('First due time (UTC)','firstDueAt',new Date(Date.now()+3600000).toISOString())
         ],'Propose local schedule',raw=>({...raw,firstDueAt:asUtc(raw.firstDueAt),expectedRevision:model.revision}),problem);
       }else panel.append(el('p','Pin a report first. Its exact applied filters become the schedule template.'));
@@ -135,19 +142,29 @@ function localReportSchedule(){
         el('p','First due: '+pretty(plan.firstDueAt)),
         el('p',(plan.status==='stopped'?'Last unprocessed slot: ':'Next due: ')+pretty(plan.nextDueAt)),
         el('p','Saved filters: '+Object.entries(plan.filters).filter(([,value])=>value!==null).map(([key,value])=>key+' '+value).join(' · '),'hint'));
+      const workerPlan=plan.execution==='local-worker';
+      if(workerPlan){
+        row.append(el('p','Execution: approved local worker · '+plan.workerRuns+(plan.workerRuns===1?' automatic run':' automatic runs')+' · '+
+          plan.skippedSlots+(plan.skippedSlots===1?' older slot skipped':' older slots skipped'),'hint'));
+        if(!model.workerEnabled)row.append(el('p','The worker is disabled for this workspace. Due approved slots can still be run manually.','hint'));
+        if(plan.workerFailure)row.append(el('p','Worker held after an export exceeded the saved-report size limit. Retry an actual due slot or stop and replace the plan.','hint'));
+      }
       const action=()=>({planId:plan.id,expectedRevision:model.revision});
       if(plan.canApprove)form(row,'approve',[],'Approve local schedule',action,problem);
       if(plan.canStop)form(row,'stop',[],'Stop local schedule',action,problem);
       if(plan.status==='active'){
         if(plan.dueNow)row.append(el('p','The next slot is due at the current UTC time.','hint'));
-        form(row,'tick',[timeField('Simulated time (UTC)','simulatedAt',plan.nextDueAt)],'Run simulated slot',
+        if(workerPlan)
+          form(row,'tick',[],'Run one due slot',()=>({planId:plan.id,slotAt:plan.nextDueAt,simulatedAt:plan.nextDueAt}),problem);
+        else form(row,'tick',[timeField('Simulated time (UTC)','simulatedAt',plan.nextDueAt)],'Run simulated slot',
           raw=>({planId:plan.id,slotAt:plan.nextDueAt,simulatedAt:asUtc(raw.simulatedAt)}),problem);
       }
       if(plan.receipts.length){
         const entries=el('ul');
         for(const receipt of plan.receipts){
           const entry=add(el('li'),el('p','Slot '+pretty(receipt.slotAt)+' · '+receipt.total+' matched'),
-            el('p','Captured '+pretty(receipt.capturedAt)+' · Simulated '+pretty(receipt.simulatedAt),'hint'));
+            el('p','Captured '+pretty(receipt.capturedAt)+(receipt.executor==='local-worker'?' · Local worker':
+              receipt.executor==='staff'?' · Manual due run':' · Simulated '+pretty(receipt.simulatedAt)),'hint'));
           if(receipt.available){
             for(const format of ['json','csv']){
               const link=el('a','Download scheduled '+format.toUpperCase(),'button quiet');

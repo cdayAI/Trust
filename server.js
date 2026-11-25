@@ -35,6 +35,7 @@ const attachmentUploadPath=/^\/api\/governance-documents\/records\/[a-f0-9]{8}(?
 const reporting=require('./reporting');
 const reportRuns=require('./reporting-runs');
 const {route:reportScheduleRoute}=require('./report-schedules');
+const reportScheduler=require('./report-schedule-worker');
 const publicDir = path.join(__dirname,'public');
 const staticFiles = new Map([
   ['/',['index.html','text/html; charset=utf-8']],
@@ -102,7 +103,8 @@ async function readBody(req,limit=32768) {
   try { return bytes.length?JSON.parse(bytes.toString('utf8')):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
-function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false}={}) {
+function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false,reportWorkerWorkspace}={}) {
+  const workerSpace=reportScheduler.provision(reportWorkerWorkspace,{isolated,corporate,sqliteFile});
   const pageWorkQueue=queuePager();
   const reviewerSeats=documentReviewSeats.provision(isolated,corporate===undefined);
   const authorityConfig=documentReviewSeats.primaryConfig(isolated,reviewerSeats);
@@ -133,10 +135,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     requesters:isolated.requesterGrants,employees:isolated.employeeGrants,now:isolated.now
   }):null;
   const database=sqliteFile===undefined?null:openSqlite(sqliteFile);
-  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false,largePdf=false){
+  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false,largePdf=false,reportWorkerEnabled=false){
     const storage=database?.scope(scope);
     const workflow=openWorkflowHttp(workflowFile,{storage});
-    return {store:openStore(stateFile,{empty,storage,scopeDocuments,manualAttachmentReview,scopeRights,largePdf}),workflow};
+    return {store:openStore(stateFile,{empty,storage,scopeDocuments,manualAttachmentReview,scopeRights,largePdf,reportWorkerEnabled}),workflow};
   }
   let demo;
   try {
@@ -150,7 +152,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   function runtime(space){
     if(!space)return demo;
     if(!runtimes.has(space.id))runtimes.set(space.id,
-      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id),manualReview.has(space.id),scopedRights.has(space.id),largePdfScopes.has(space.id)));
+      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id),manualReview.has(space.id),scopedRights.has(space.id),largePdfScopes.has(space.id),workerSpace===space.id));
     return runtimes.get(space.id);
   }
   try{
@@ -666,6 +668,18 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     }
   };
   const server=tls?https.createServer(tls,handler):http.createServer(handler);
+  if(workerSpace){
+    const worker=reportScheduler.createWorker({
+      wake:now=>runtime(access.spaceForProvisionedGrant(workerSpace)).store.runReportScheduleWorker(now),
+      onError:()=>{
+        if(operationalEvents)process.stderr.write(JSON.stringify({
+          schemaVersion:1,at:new Date().toISOString(),event:'report_schedule_worker_failed'
+        })+'\n');
+      }
+    });
+    server.on('listening',()=>{if(loopbackAddresses.has(server.address()?.address))worker.start();});
+    server.on('close',()=>worker.stop());
+  }
   if(database)server.once('close',()=>database.close());
   server.on('listening',operations.listening);
   server.on('close',operations.stopped);

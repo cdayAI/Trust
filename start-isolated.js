@@ -6,6 +6,7 @@ const {randomBytes}=require('node:crypto');
 const {createServer}=require('./server');
 const {launchLocalServer}=require('./operational-health');
 const {codeHash}=require('./workspace-access');
+const {provision:reportWorkerProvision}=require('./report-schedule-worker');
 function localFlag(name){
   const value=process.env[name];
   if(value===undefined||value==='0')return false;
@@ -31,6 +32,9 @@ const enableRecordScope=localFlag('TRUST_ENABLE_LOCAL_RECORD_SCOPE');
 if(enableRecordScope&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first to opt into local document access scope.');
 if(enableGroupGovernance&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first to opt into local group governance.');
 const enableRightsScope=localFlag('TRUST_ENABLE_LOCAL_RIGHTS_CASE_SCOPE');
+const reportWorkerWorkspace=process.env.TRUST_LOCAL_REPORT_WORKER_WORKSPACE;
+const workspaces=[{id:'harbor',label:'Fictional Harbor'},{id:'orchard',label:'Fictional Orchard'}];
+reportWorkerProvision(reportWorkerWorkspace,{isolated:{workspaces},sqliteFile:process.env.TRUST_SQLITE_FILE});
 const root=mkdtempSync(join(tmpdir(),'trust-synthetic-'));
 const codes=join(root,'local-access.json');
 const requesterCodes=join(root,'requester-access.json');
@@ -62,9 +66,9 @@ const learners=['harbor','orchard'].map(workspace=>({
   alias:'sample-learner-'+workspace,workspace,code:randomBytes(32).toString('base64url'),expiresAt:Date.now()+8*3600000
 }));
 writeFileSync(trainingCodes,JSON.stringify(learners,null,2)+'\n',{flag:'wx',mode:0o600});
-const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,operationalEvents:true,isolated:{
+const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,operationalEvents:true,reportWorkerWorkspace,isolated:{
   root:join(root,'workspaces'),enableIdentityAdmin,
-  workspaces:[{id:'harbor',label:'Fictional Harbor'},{id:'orchard',label:'Fictional Orchard'}],
+  workspaces,
   ...(discoveryRunSetting?{discoveryRunWorkspaces:['harbor','orchard']}:{}),
   ...(largePdfSetting?{largePdfAttachmentWorkspaces:['harbor','orchard']}:{}),
   ...(attachmentReviewSetting?{attachmentReviewWorkspaces:['harbor','orchard']}:{}),

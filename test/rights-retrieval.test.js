@@ -64,7 +64,7 @@ async function instance(t,enabled=true){
     if(begin)await ask(key+'/begin',200,a,{expectedRevision:2,note:'Fictional STAFF-ONLY fulfillment note'});
     return {id:row.id,key,retrieve:key+'/retrieval'};
   }
-  return {file,req,ask,login,visitor,process,codes,advance:ms=>{now+=ms;},
+  return {file,req,ask,login,visitor,process,codes,get base(){return live.url;},advance:ms=>{now+=ms;},
     restart:async alter=>{await stop();alter?.(isolated);await start();}};
 }
 function projectionShape(output){
@@ -219,4 +219,146 @@ test('re-sealing refuses a private projection field even with a forged matching 
   assert.throws(()=>inspect(state,row.id,r),{code:'RETRIEVAL_NOT_FOUND'});
   assert.throws(()=>change(state,row.id,'approve',r,{...exact(draft),digest:record.digest},event),{code:'STALE_RETRIEVAL'});
   assert.doesNotMatch(JSON.stringify(inspect(state,row.id,a)),notes);
+});
+
+test('Chromium staff retrieval: lazy disclosure, independent exact review, stale retry, internal only',{
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright and Chromium',timeout:45000,
+},async t=>{
+  const f=await instance(t);
+  const author=await f.login('author'),reviewer=await f.login('reviewer');
+  const ready=await f.process('access','request',author,reviewer);
+  const pending=await f.process('access','peer',author,reviewer,{begin:false});
+  const correction=await f.process('correction','correction',author,reviewer);
+  const {chromium}=require('playwright');
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  try{
+    const a=await browser.newPage(),r=await browser.newPage(),stalePage=await browser.newPage(),operator=await browser.newPage();
+    const errors=[],requests=new Map();
+    for(const page of [a,r,stalePage,operator]){
+      page.setDefaultTimeout(7000);
+      requests.set(page,[]);
+      page.on('pageerror',error=>errors.push(error.message));
+      page.on('request',request=>{
+        const url=new URL(request.url());
+        if(url.pathname.includes('/retrieval'))requests.get(page).push([request.method(),url.pathname,url.searchParams.get('workspace')]);
+      });
+    }
+    const exactText=(scope,text)=>scope.getByText(text,{exact:true});
+    const exactButton=(scope,name)=>scope.getByRole('button',{name,exact:true});
+    const card=(page,id=ready.id)=>page.locator('#work-record-'+id);
+    const disclosure=scope=>scope.locator('details').filter({hasText:/Internal fictional retrieval/});
+    const summary=scope=>disclosure(scope).locator('summary');
+    function operatorNames(page){
+      return page===a?'author':page===operator?'operator':'reviewer';
+    }
+    async function signIn(page){
+      const role=operatorNames(page);
+      await page.goto(f.base);
+      await page.getByLabel('Test account').fill('fictional-'+role);
+      await page.getByLabel('Workspace ID').fill('alpha');
+      await page.getByLabel('Local access code').fill(f.codes[role]);
+      await exactButton(page,'Sign in').click();
+      await exactButton(page,'Privacy rights').waitFor();
+    }
+    async function rights(page){
+      await exactButton(page,'Privacy rights').click();
+      await page.getByRole('heading',{name:'Privacy rights cases',exact:true}).waitFor();
+    }
+    async function focus(locator){
+      await locator.waitFor({state:'visible'});
+      assert.equal(await locator.evaluate(node=>document.activeElement===node),true);
+    }
+    async function act(page,label,action,status=200){
+      const [wire]=await Promise.all([
+        page.waitForResponse(response=>new URL(response.url()).pathname===ready.retrieve+'/'+action),
+        exactButton(disclosure(card(page)),label).press('Enter'),
+      ]);
+      assert.equal(wire.status(),status);
+      assert.equal(new URL(wire.url()).searchParams.get('workspace'),'alpha');
+      return {body:wire.request().postDataJSON(),model:await wire.json()};
+    }
+
+    await signIn(a);
+    assert.deepEqual(requests.get(a),[]);
+    await rights(a);
+    const ac=card(a);
+    await summary(ac).waitFor();
+    assert.equal(await summary(card(a,pending.id)).count(),0);
+    assert.equal(await summary(card(a,correction.id)).count(),0);
+    assert.deepEqual(requests.get(a),[]);
+    const path='**'+ready.retrieve+'?workspace=alpha';
+    const failOnce=route=>route.abort('failed');
+    await a.route(path,failOnce,{times:1});
+    await summary(ac).press('Enter');
+    await exactText(disclosure(ac),'The retrieval could not be confirmed. Reload before retrying.').waitFor();
+    await focus(summary(ac)); // An opening error does not steal focus.
+    await exactButton(disclosure(ac),'Reload retrieval').press('Enter');
+    await exactText(disclosure(ac),'Not retrieved').waitFor();
+    await focus(summary(ac));
+    assert.deepEqual(requests.get(a),[['GET',ready.retrieve,'alpha'],['GET',ready.retrieve,'alpha']]);
+    const firstDraft=await act(a,'Retrieve fictional category counts','retrieve');
+    assert.deepEqual(firstDraft.body,{source,expectedCaseRevision:3,expectedRevision:0});
+    await exactText(disclosure(ac),'Redacted draft').waitFor();
+    await focus(summary(ac));
+    await disclosure(ac).getByRole('heading',{name:'Redacted category counts'}).waitFor();
+    assert.doesNotMatch(await disclosure(ac).innerText(),notes);
+
+    await signIn(r);
+    await rights(r);
+    assert.equal(await summary(card(r)).count(),0); // Analyst draft is not discoverable.
+    const first=await act(a,'Submit exact retrieval for review','submit');
+    assert.deepEqual(first.body,exact(firstDraft.model));
+    await exactText(disclosure(ac),'Awaiting independent review').waitFor();
+    await r.reload();
+    await rights(r);
+    const rc=card(r);
+    await summary(rc).waitFor();
+    assert.deepEqual(requests.get(r),[]);
+    await signIn(stalePage);
+    await rights(stalePage);
+    const sc=card(stalePage);
+    await summary(rc).press('Enter');
+    await summary(sc).press('Enter');
+    await exactText(disclosure(rc),'Awaiting independent review').waitFor();
+    await exactText(disclosure(sc),'Awaiting independent review').waitFor();
+    const returned=await act(r,'Return retrieval for rework','return');
+    assert.deepEqual(returned.body,first.body);
+    await exactText(disclosure(rc),'Returned for rework').waitFor();
+    await focus(summary(rc));
+    assert.equal(await disclosure(rc).getByRole('heading',{name:'Redacted category counts'}).count(),0);
+
+    await summary(ac).press('Enter'); // Closing immediately discards the old projection.
+    await disclosure(ac).getByRole('heading',{name:'Redacted category counts',includeHidden:true}).waitFor({state:'detached'});
+    await summary(ac).press('Enter');
+    await exactText(disclosure(ac),'Returned for rework').waitFor();
+    const revised=await act(a,'Retrieve fictional category counts','retrieve');
+    assert.equal(revised.model.revision,firstDraft.model.revision+1);
+    assert.notEqual(revised.model.digest,firstDraft.model.digest);
+    const second=await act(a,'Submit exact retrieval for review','submit');
+    assert.deepEqual(second.body,exact(revised.model));
+    const refused=await act(stalePage,'Approve this exact retrieval','approve',409);
+    assert.deepEqual(refused.body,first.body);
+    assert.equal(refused.model.code,'STALE_RETRIEVAL');
+    const retry=exactButton(disclosure(sc),'Reload retrieval');
+    await focus(retry);
+    assert.equal(await disclosure(sc).getByRole('heading',{name:'Redacted category counts'}).count(),0);
+    await retry.press('Enter');
+    await exactText(disclosure(sc),'Retrieval revision 2 · Case revision 3').waitFor();
+    await focus(summary(sc));
+    const exactReview=await act(stalePage,'Approve this exact retrieval','approve');
+    assert.deepEqual(exactReview.body,second.body);
+    await exactText(disclosure(sc),'Approved for internal rehearsal only').waitFor();
+    await focus(summary(sc));
+    assert.equal(await exactButton(disclosure(sc),'Release approved result locally').count(),0);
+    assert.doesNotMatch(await disclosure(sc).innerText(),notes);
+    assert.deepEqual(await f.visitor('result','request'),{mode:'synthetic-requester-result',status:'not-available'});
+
+    await f.ask(ready.key+'/assign',200,author,{owner:'case-operator',expectedRevision:3,note:'Fictional assignment for limited role'});
+    await signIn(operator);
+    await rights(operator);
+    await card(operator).getByRole('heading',{name:'Access case'}).waitFor();
+    assert.equal(await summary(card(operator)).count(),0);
+    assert.deepEqual(requests.get(operator),[]);
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close();}
 });

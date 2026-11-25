@@ -22,11 +22,37 @@ const missing=()=>fail(404,'RETRIEVAL_NOT_FOUND','Eligible fictional retrieval c
 const stale=()=>fail(409,'STALE_RETRIEVAL','The case or retrieval revision changed. Reload before retrying.');
 const exact=(body,keys)=>!!body&&typeof body==='object'&&!Array.isArray(body)&&
   Object.keys(body).length===keys.length&&keys.every(k=>Object.hasOwn(body,k));
+function usable(ctx){
+  return !!ctx?.activeReleaseBinding&&typeof ctx.workspace==='string'&&['analyst','reviewer'].includes(ctx.role);
+}
+function eligible(row){
+  return row?.owner==='analyst'&&row.kind==='access'&&row.source==='synthetic-portal'&&row.status==='in-progress'&&
+    !row.closedAt&&row.identity?.status==='verified';
+}
+function offerCaseIds(state,ctx){
+  const offered=new Set();
+  if(!usable(ctx))return offered;
+  const cases=new Map();
+  for(const entry of state.requesterReceipts??[])cases.set(entry.caseId,cases.has(entry.caseId)?null:entry);
+  for(const row of state.rightsCases??[]){
+    const receipt=cases.get(row.id);
+    if(!eligible(row)||!receipt?.resultBinding||receipt.resultBinding!==ctx.activeReleaseBinding(receipt.grantId))continue;
+    if(ctx.role==='reviewer'){
+      const latest=state.rightsRetrievals?.[row.id]?.at(-1);
+      if(!latest||!['review','approved'].includes(latest.status)||latest.authoredBy===ctx.account||
+        latest.caseId!==row.id||latest.workspace!==ctx.workspace||latest.caseRevision!==row.revision||latest.binding!==receipt.resultBinding)
+        continue;
+    }
+    // This is not a review or source read: no stored projection, digest or
+    // fixture record is touched until the panel requests the scoped route.
+    offered.add(row.id);
+  }
+  return offered;
+}
 function context(state,caseId,ctx){
-  if(!ctx?.activeReleaseBinding||typeof ctx.workspace!=='string'||!['analyst','reviewer'].includes(ctx.role))return missing();
+  if(!usable(ctx))return missing();
   const row=(state.rightsCases??[]).find(item=>item.id===caseId);
-  if(row?.owner!=='analyst'||row.kind!=='access'||row.source!=='synthetic-portal'||row.status!=='in-progress'||
-    row.closedAt||row.identity?.status!=='verified')return missing();
+  if(!eligible(row))return missing();
   const receipts=(state.requesterReceipts??[]).filter(entry=>entry.caseId===caseId);
   if(receipts.length!==1||!receipts[0].resultBinding||receipts[0].resultBinding!==ctx.activeReleaseBinding(receipts[0].grantId))
     return missing();
@@ -98,4 +124,4 @@ function change(state,caseId,action,ctx,body,event){
   if(action==='return')return {mode:format,stage:'returned',revision:record.revision};
   return inspect(state,caseId,ctx);
 }
-module.exports={inspect,change};
+module.exports={inspect,change,offerCaseIds};

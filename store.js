@@ -180,7 +180,7 @@ function seed() {
   createVendor(state,'system',{projectId:p.id,name:'Northstar Assist',description:'Fictional service that drafts support replies with AI. Humans review before messages are sent.',usesAI:true},'northstar');
   return state;
 }
-function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false,largePdf=false}={}) {
+function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false,largePdf=false,reportWorkerEnabled=false}={}) {
   let saveSnapshot,localSnapshotGeneration=0;
   const intakeViewInstance=randomUUID();
   function persist(next) {
@@ -292,10 +292,14 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     const delegation=rightsCaseScope.settings(snapshot,context);
     const intakeSettings=requesterIntakeForm.settings(snapshot,context);
     if(!['analyst','reviewer'].includes(context?.role))model.cases=model.cases.map(({requesterIntake,...row})=>row);
-    else if(context.activeReleaseBinding)model.cases=model.cases.map(row=>{
-      const resultDelivery=requesterRelease.presentation(snapshot,row,context);
-      return resultDelivery?{...row,resultDelivery}:row;
-    });
+    else if(context.activeReleaseBinding&&snapshot.requesterReceipts?.length){
+      const retrievalOffered=rightsRetrieval.offerCaseIds(snapshot,context);
+      model.cases=model.cases.map(row=>{
+        const resultDelivery=requesterRelease.presentation(snapshot,row,context);
+        if(resultDelivery)row={...row,resultDelivery};
+        return retrievalOffered.has(row.id)?{...row,retrievalOffered:true}:row;
+      });
+    }
     return {...model,...(delegation?{delegation}:{}),...(intakeSettings?{intakeSettings}:{})};
   }
   function intakeViewBasis(snapshot,ctx){
@@ -601,14 +605,21 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
     listReportSchedules(caller){
       requireCurrentOperatorSession(caller);
-      return reportSchedules.list(state,caller.actor,caller.account);
+      return reportSchedules.list(state,caller.actor,caller.account,Date.now(),reportWorkerEnabled);
     },
     changeReportSchedule(caller,action,body){
       requireCurrentOperatorSession(caller);
       const next={...state,audit:state.audit.slice(),reportScheduleBook:structuredClone(state.reportScheduleBook)};
-      const result=reportSchedules.change(next,state.audit.filter(e=>!excludedAudit(e)),caller,action,body,event);
+      const result=reportSchedules.change(next,state.audit.filter(e=>!excludedAudit(e)),caller,action,body,event,{workerEnabled:reportWorkerEnabled});
       if(result.changed){persist(next);state=next;}
       return result.value;
+    },
+    runReportScheduleWorker(now){
+      if(!storage||!reportWorkerEnabled)throw Error('Report worker is disabled for this workspace.');
+      const next={...state,audit:state.audit.slice(),reportScheduleBook:structuredClone(state.reportScheduleBook)};
+      const result=reportSchedules.runWorker(next,state.audit.filter(e=>!excludedAudit(e)),now,event);
+      if(result.changed){persist(next);state=next;}
+      return result;
     },
     listReportRuns:()=>reportRuns.list(state),
     readReportRun:(id,format)=>reportRuns.read(state,id,format),
@@ -674,7 +685,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['assignDocumentReviewer','directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRightsRetrieval','changeRequesterIntakeForm','pinReportRun','createRightsIntake','changeReportSchedule','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['assignDocumentReviewer','directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRightsRetrieval','changeRequesterIntakeForm','pinReportRun','createRightsIntake','changeReportSchedule','runReportScheduleWorker','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name==='getRightsIntake'){

@@ -34,7 +34,8 @@ form answers, requester notes, evidence contents, or audit payloads.
   expire after 30 days. New runs can remove the oldest sooner to keep no more
   than 30 runs or 1 MiB of stored export bytes; a single run is limited to 256
   KiB. Expired runs immediately stop opening, and their stored bytes are pruned
-  on the next successful pin. There are no background checks or sends.
+  on the next successful pin. Nothing is sent. The optional local schedule
+  worker can create pins only when explicitly enabled and approved.
 
 ## Local schedule simulation
 
@@ -59,10 +60,45 @@ day or seven UTC days. It never sweeps missed slots automatically.
 The most recent 24 receipts per plan remain after restart. Receipt metadata
 may outlive report bytes governed by the ordinary pinned-report limits.
 An older processed slot cannot run again after its receipt or bytes expire.
-No recipients, real sending, outbound network actions, background timers, rolling
-filters, or corporate sign-in integration are supported. The panel and
-routes require an authenticated analyst or reviewer in a local isolated
-synthetic workspace.
+No recipients, real sending, outbound network actions, rolling filters, or
+corporate sign-in integration are supported. The panel and routes require an
+authenticated analyst or reviewer in a local isolated synthetic workspace.
+
+## Opt-in local report worker
+
+The worker is **off by default**. Enable it only in an isolated synthetic
+workspace on a disposable local SQLite database, for example:
+
+```sh
+TRUST_SQLITE_FILE=/path/to/local-fixture.sqlite \
+TRUST_LOCAL_REPORT_WORKER_WORKSPACE=harbor npm run start:isolated
+```
+
+Choose one exact workspace ID (`harbor` or `orchard` with the bundled
+launcher). JSON storage, demo, and corporate sign-in cannot run this worker.
+It only runs while the named workspace's loopback server is up. Use an
+unset flag to disable it on restart without changing existing history.
+
+In Reporting, the analyst must explicitly choose **Approved local worker**
+before proposing the plan. A separate reviewer approves that execution
+mode. Previously approved manual plans remain manual; enabling the worker
+does not change their approval. A reviewer may stop the worker plan from
+the same panel. Approving or running one workspace does not affect another.
+
+About once a minute, the worker checks the actual UTC clock and saves at most
+one due slot through the normal immutable report store. Manual retries use
+the same slot and cannot run a worker plan ahead of actual UTC time. Changing
+the host clock backwards or restarting does not rewind the saved cursor or
+duplicate a report. After long downtime the worker keeps at most the latest
+seven due slots, records the omitted range and cumulative count, and captures
+one slot per wake in ascending order. Skipped slots cannot be replayed.
+
+Automatic receipts and audit entries identify the system as executor and
+show the slot, capture time and matching-record count. If the export exceeds
+the pin limit the worker records one held outcome without advancing. Staff
+can retry a due slot manually once the result fits, or stop and replace the
+plan. There are no delivery addresses, external requests, messages, or
+production-daemon guarantees.
 
 ## Local HTTP
 
@@ -72,7 +108,7 @@ synthetic workspace.
 - `GET /api/reporting/runs` lists active pins. `GET /api/reporting/runs/:id` views one.
 - `GET /api/reporting/runs/:id/export?format=json` downloads the same bytes, or use `format=csv`.
 - `GET /api/reporting/schedules` lists local plans, draft revision, and retained receipts.
-- `POST /api/reporting/schedules/create` takes `expectedRevision`, `sourceRunId`, `cadence` (`daily` or `weekly`), and `firstDueAt` (canonical UTC at a whole minute, for example `2027-03-01T09:00:00.000Z`).
+- `POST /api/reporting/schedules/create` takes `expectedRevision`, `sourceRunId`, `cadence` (`daily` or `weekly`), and `firstDueAt` (canonical UTC at a whole minute, for example `2027-03-01T09:00:00.000Z`). Optionally send `execution: "local-worker"` only in the named, enabled workspace; omitting it remains manual.
 - `POST /api/reporting/schedules/approve` and `/stop` take `expectedRevision` and `planId`.
 - `POST /api/reporting/schedules/tick` takes `planId`, the exact `slotAt`, and canonical UTC `simulatedAt`.
 

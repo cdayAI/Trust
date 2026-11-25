@@ -6,6 +6,8 @@ const id=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
 const day=86400000, minute=60000;
 const intervals=Object.freeze({daily:day,weekly:7*day});
 const limits=Object.freeze({maxPlans:8,maxReceiptsPerPlan:24,maxAheadDays:366});
+const workerLimits=Object.freeze({recentDueSlots:7,retainedSkipRanges:24});
+const workerMode='local-worker';
 const iso=at=>new Date(at).toISOString();
 const fail=(status,code,message)=>{throw Object.assign(Error(message),{status,code});};
 const invalid=message=>fail(422,'INVALID_REPORT_SCHEDULE',message);
@@ -27,23 +29,23 @@ function lookup(book,planId){
   if(!plan)fail(404,'REPORT_SCHEDULE_NOT_FOUND','That schedule is not in this workspace.');
   return plan;
 }
-function list(state,role,account,now=Date.now()){
+function list(state,role,account,now=Date.now(),workerEnabled=false){
   const stored=bookOf(state),pins=reportRuns.list(state,now).runs,current=stored.plans.at(-1);
   const active=new Set(pins.map(x=>x.id)),canCreate=role==='analyst'&&(!current||current.status==='stopped')&&stored.plans.length<limits.maxPlans;
-  return {mode:'explicit-synthetic-tick',limits,cadences:Object.keys(intervals),revision:stored.revision,canCreate,
+  return {mode:'explicit-synthetic-tick',limits,cadences:Object.keys(intervals),revision:stored.revision,canCreate,workerEnabled,
     templates:canCreate?pins.map(({id,generatedAt,filters})=>({id,generatedAt,filters})):[],
     plans:stored.plans.slice().reverse().map(({authorAccount,approvedAccount,receipts,...row})=>({...row,
-      canApprove:role==='reviewer'&&row.status==='draft'&&!!account&&account!==authorAccount,
+      canApprove:role==='reviewer'&&row.status==='draft'&&!!account&&account!==authorAccount&&(row.execution!==workerMode||workerEnabled),
       canStop:role==='reviewer'&&row.status!=='stopped',
       dueNow:row.status==='active'&&Date.parse(row.nextDueAt)<=now,
       receipts:receipts.slice().reverse().map(receipt=>({...receipt,available:active.has(receipt.reportId)}))
     }))};
 }
-function change(state,audit,caller,action,body,event,{now=Date.now()}={}){
+function change(state,audit,caller,action,body,event,{now=Date.now(),workerEnabled=false}={}){
   const {actor,account}=caller;
   if(!account||!['analyst','reviewer'].includes(actor))fail(403,'REPORT_SCHEDULE_ROLE','Sign in as an analyst or reviewer.');
   const book=bookOf(state),at=iso(now);
-  const model=(changed,outcome,receipt=null)=>({changed,value:{...list(state,actor,account,now),outcome,receipt}});
+  const model=(changed,outcome,receipt=null)=>({changed,value:{...list(state,actor,account,now,workerEnabled),outcome,receipt}});
   function commit(plan,outcome,details={},receipt){
     book.revision++;
     state.reportScheduleBook=book;
@@ -57,7 +59,11 @@ function change(state,audit,caller,action,body,event,{now=Date.now()}={}){
   }
   if(action==='create'){
     if(actor!=='analyst')fail(403,'REPORT_SCHEDULE_AUTHOR','Only an analyst can propose a report schedule.');
-    shape(body,['expectedRevision','sourceRunId','cadence','firstDueAt']);revision();
+    const namedExecution=body!==null&&typeof body==='object'&&Object.hasOwn(body,'execution');
+    shape(body,['expectedRevision','sourceRunId','cadence','firstDueAt',...(namedExecution?['execution']:[])]);revision();
+    const execution=namedExecution?body.execution:'manual';
+    if(!['manual',workerMode].includes(execution))invalid('Choose a supported schedule execution mode.');
+    if(execution===workerMode&&!workerEnabled)fail(409,'REPORT_WORKER_DISABLED','The local report worker is not enabled in this workspace.');
     if(book.plans.some(row=>row.status!=='stopped'))fail(409,'ACTIVE_REPORT_SCHEDULE','Finish or stop the current report schedule before proposing another.');
     if(book.plans.length>=limits.maxPlans)fail(409,'REPORT_SCHEDULE_LIMIT','This workspace reached its local report schedule limit.');
     if(typeof body.sourceRunId!=='string'||!id.test(body.sourceRunId))invalid('Choose an available pinned report.');
@@ -67,9 +73,11 @@ function change(state,audit,caller,action,body,event,{now=Date.now()}={}){
     const first=utc(body.firstDueAt,'First due time',true);
     if(first<Math.floor(now/minute)*minute||first>now+limits.maxAheadDays*day)invalid('First due time must be within the next 366 days (UTC).');
     const plan={id:randomUUID(),status:'draft',sourceRunId:source.id,filters:{...source.filters},cadence:body.cadence,
-      firstDueAt:iso(first),nextDueAt:iso(first),createdAt:at,approvedAt:null,stoppedAt:null,authorAccount:account,approvedAccount:null,receipts:[]};
+      firstDueAt:iso(first),nextDueAt:iso(first),createdAt:at,approvedAt:null,stoppedAt:null,authorAccount:account,approvedAccount:null,receipts:[],
+      ...(execution===workerMode?{execution,workerRuns:0,skippedSlots:0,skippedRanges:[],workerFailure:null}:{})};
     book.plans.push(plan);
-    return commit(plan,'proposed',{sourceRunId:source.id,cadence:plan.cadence,firstDueAt:plan.firstDueAt});
+    return commit(plan,'proposed',{sourceRunId:source.id,cadence:plan.cadence,firstDueAt:plan.firstDueAt,
+      ...(execution===workerMode?{execution}:{})});
   }
   if(action==='approve'||action==='stop'){
     if(actor!=='reviewer')fail(403,'REPORT_SCHEDULE_REVIEWER','Only a reviewer can approve or stop a schedule.');
@@ -78,8 +86,10 @@ function change(state,audit,caller,action,body,event,{now=Date.now()}={}){
     if(action==='approve'){
       if(plan.authorAccount===account)fail(403,'REPORT_SCHEDULE_INDEPENDENT_REVIEW','The schedule author cannot independently approve it.');
       if(plan.status!=='draft')fail(409,'REPORT_SCHEDULE_WRONG_STATUS','Only a draft schedule can be approved.');
+      if(plan.execution===workerMode&&!workerEnabled)fail(409,'REPORT_WORKER_DISABLED','Enable the local worker before approving this plan.');
       plan.status='active';plan.approvedAccount=account;plan.approvedAt=at;
-      return commit(plan,'approved',{firstDueAt:plan.firstDueAt,nextDueAt:plan.nextDueAt});
+      return commit(plan,'approved',{firstDueAt:plan.firstDueAt,nextDueAt:plan.nextDueAt,
+        ...(plan.execution===workerMode?{execution:workerMode}:{})});
     }
     if(plan.status==='stopped')fail(409,'REPORT_SCHEDULE_WRONG_STATUS','This schedule is already stopped.');
     plan.status='stopped';plan.stoppedAt=at;
@@ -88,25 +98,85 @@ function change(state,audit,caller,action,body,event,{now=Date.now()}={}){
   if(action!=='tick')fail(404,'REPORT_SCHEDULE_NOT_FOUND','That schedule action is not available.');
   shape(body,['planId','slotAt','simulatedAt']);
   const plan=lookup(book,body.planId),slot=utc(body.slotAt,'Slot time',true),simulated=utc(body.simulatedAt,'Simulated time');
-  const first=Date.parse(plan.firstDueAt),nextDue=Date.parse(plan.nextDueAt),interval=intervals[plan.cadence];
-  if(!Number.isSafeInteger(interval)||!Number.isSafeInteger(first)||!Number.isSafeInteger(nextDue)||nextDue<first||(nextDue-first)%interval!==0)
-    fail(409,'REPORT_SCHEDULE_INCONSISTENT','The saved schedule cursor is not consistent.');
+  const {first,nextDue,interval}=cursor(plan);
   if(slot<first||(slot-first)%interval!==0)invalid('Use a slot on the approved UTC cadence.');
   if(simulated>now+limits.maxAheadDays*day)invalid('Simulated time cannot be more than 366 days ahead.');
   // An exact repeated slot stays idempotent even after recent receipts or pins
   // expire, and after stopping the plan. No retry can run another slot.
-  if(slot<nextDue)return model(false,'already-run',plan.receipts.find(row=>row.slotAt===body.slotAt)??null);
-  if(plan.status!=='active'||!plan.approvedAccount||plan.approvedAccount===plan.authorAccount)
-    fail(409,'REPORT_SCHEDULE_NOT_APPROVED','Only an independently approved active schedule may run.');
+  if(slot<nextDue){
+    const retained=plan.receipts.find(row=>row.slotAt===body.slotAt)??null;
+    const skip=plan.skippedRanges?.some(range=>range.from<=body.slotAt&&body.slotAt<=range.through);
+    return model(false,skip?'skipped':plan.execution===workerMode&&!retained?'already-processed':'already-run',retained);
+  }
+  if(!independentlyApproved(plan))fail(409,'REPORT_SCHEDULE_NOT_APPROVED','Only an independently approved active schedule may run.');
   if(slot>nextDue)fail(409,'REPORT_SCHEDULE_SLOT_OUT_OF_ORDER','Only the next unprocessed slot may run.');
-  if(simulated<slot)return model(false,'not-due');
-  // Capture now, with existing immutable saved-report rules. Simulated time is
-  // only a due check; importing or replaying old workspace states is not possible.
+  if(simulated<slot||(plan.execution===workerMode&&now<slot))return model(false,'not-due');
+  // The simulation determines due status only for manual plans. An automatic
+  // plan can be explicitly retried by staff, but never ahead of the real clock.
+  const receipt=captureSlot(state,audit,plan,{now,slot,interval,simulatedAt:body.simulatedAt,executor:'staff'});
+  return commit(plan,'ran',{slotAt:receipt.slotAt,reportId:receipt.reportId,nextDueAt:plan.nextDueAt,
+    ...(plan.execution===workerMode?{execution:'staff',total:receipt.total}:{})},receipt);
+}
+function cursor(plan){
+  const first=Date.parse(plan.firstDueAt),nextDue=Date.parse(plan.nextDueAt),interval=intervals[plan.cadence];
+  if(!Number.isSafeInteger(interval)||!Number.isSafeInteger(first)||!Number.isSafeInteger(nextDue)||nextDue<first||(nextDue-first)%interval!==0)
+    fail(409,'REPORT_SCHEDULE_INCONSISTENT','The saved schedule cursor is not consistent.');
+  return {first,nextDue,interval};
+}
+const independentlyApproved=plan=>plan.status==='active'&&typeof plan.authorAccount==='string'&&!!plan.authorAccount&&
+  typeof plan.approvedAccount==='string'&&!!plan.approvedAccount&&plan.approvedAccount!==plan.authorAccount&&
+  typeof plan.approvedAt==='string'&&Number.isFinite(Date.parse(plan.approvedAt));
+function captureSlot(state,audit,plan,{now,slot,interval,simulatedAt,executor}){
   const captured=JSON.parse(reportRuns.create(state,audit,{filters:plan.filters},'local-isolated',{now}).toString('utf8'));
-  const receipt={slotAt:body.slotAt,simulatedAt:body.simulatedAt,capturedAt:captured.generatedAt,reportId:captured.run.id,total:captured.counts.total};
+  const receipt={slotAt:iso(slot),simulatedAt,capturedAt:captured.generatedAt,reportId:captured.run.id,total:captured.counts.total,
+    ...(plan.execution===workerMode?{executor}:{})};
   plan.receipts.push(receipt);
   if(plan.receipts.length>limits.maxReceiptsPerPlan)plan.receipts.shift();
   plan.nextDueAt=iso(slot+interval);
-  return commit(plan,'ran',{slotAt:receipt.slotAt,reportId:receipt.reportId,nextDueAt:plan.nextDueAt},receipt);
+  if(plan.execution===workerMode)plan.workerFailure=null;
+  return receipt;
 }
-module.exports={route,list,change};
+
+function runWorker(state,audit,now,event){
+  if(!Number.isSafeInteger(now)||now<Date.UTC(2020,0,1)||now>=Date.UTC(2200,0,1))
+    throw Error('The report worker requires a valid UTC clock.');
+  const book=bookOf(state);
+  const eligible=book.plans.filter(plan=>plan.execution===workerMode&&independentlyApproved(plan));
+  if(eligible.length>1)throw Error('The local report worker found multiple active plans.');
+  const plan=eligible[0];
+  if(!plan)return {changed:false,outcome:'idle'};
+  if(!Number.isSafeInteger(plan.workerRuns)||plan.workerRuns<0||!Number.isSafeInteger(plan.skippedSlots)||plan.skippedSlots<0||
+    !Array.isArray(plan.skippedRanges)||plan.skippedRanges.length>workerLimits.retainedSkipRanges||!Array.isArray(plan.receipts))
+    throw Error('The local report worker found an invalid execution ledger.');
+  if(plan.workerFailure)return {changed:false,outcome:'held'};
+  const {nextDue,interval}=cursor(plan);
+  if(nextDue>now)return {changed:false,outcome:'not-due'};
+  const due=1+Math.floor((now-nextDue)/interval);
+  const skipped=Math.max(0,due-workerLimits.recentDueSlots),slot=nextDue+skipped*interval;
+  function done(outcome,details,receipt=null){
+    book.revision++;
+    state.reportScheduleBook=book;
+    event(state,'system','reporting.schedule.'+outcome,null,plan.id,details);
+    return {changed:true,outcome,receipt};
+  }
+  let receipt;
+  try{receipt=captureSlot(state,audit,plan,{now,slot,interval,simulatedAt:null,executor:workerMode});}
+  catch(error){
+    if(error.code!=='REPORT_RUN_TOO_LARGE')throw error;
+    plan.workerFailure={slotAt:iso(slot),at:iso(now),code:error.code};
+    // Keep the old cursor. Don't repeatedly recalculate the same known failure
+    // on every wake or advance past it. Staff can retry or stop the plan.
+    return done('worker-held',{execution:workerMode,...plan.workerFailure});
+  }
+  plan.workerRuns++;
+  let skippedRange=null;
+  if(skipped){
+    skippedRange={from:iso(nextDue),through:iso(slot-interval),count:skipped};
+    plan.skippedSlots+=skipped;
+    plan.skippedRanges.push(skippedRange);
+    if(plan.skippedRanges.length>workerLimits.retainedSkipRanges)plan.skippedRanges.shift();
+  }
+  return done('ran',{execution:workerMode,slotAt:receipt.slotAt,reportId:receipt.reportId,total:receipt.total,
+    nextDueAt:plan.nextDueAt,...(skippedRange?{skipped:skippedRange}:{})},receipt);
+}
+module.exports={route,list,change,runWorker};

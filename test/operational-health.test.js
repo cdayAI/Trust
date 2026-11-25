@@ -189,6 +189,40 @@ test('document-review opt-in launches a distinct seat with only assigned-policy 
   assert.deepEqual(await workbench.stop(),[0,null]);
 });
 
+test('report worker launcher rejects unscoped settings before creating codes and enables only the named workspace', async t => {
+  const dir = await scratch(t);
+  const sqlite=join(dir,'worker.sqlite');
+  for(const [workspace,file] of [['harbor',''],['unknown',sqlite]]){
+    const failed=launch(t,'start-isolated.js',dir,{
+      TEMP:dir,TMP:dir,TRUST_LOCAL_REPORT_WORKER_WORKSPACE:workspace,TRUST_SQLITE_FILE:file,
+    });
+    assert.deepEqual(await failed.closed,[1,null]);
+    assertEvents(failed.events(),['startup_failed']);
+    assert.deepEqual(await readdir(dir),[]);
+  }
+  const workbench=launch(t,'start-isolated.js',dir,{
+    TEMP:dir,TMP:dir,TRUST_LOCAL_REPORT_WORKER_WORKSPACE:'harbor',TRUST_SQLITE_FILE:sqlite,
+  });
+  const url=await workbench.started;
+  const [profile]=(await readdir(dir)).filter(name=>name.startsWith('trust-synthetic-'));
+  assert.ok(profile);
+  const accounts=JSON.parse(await readFile(join(dir,profile,'local-access.json'),'utf8'));
+  for(const [workspace,id,expected] of [['harbor','sample-intake',true],['orchard','sample-orchard',false]]){
+    const seat=accounts.find(row=>row.id===id);
+    assert.ok(seat);
+    const login=await fetch(url+'/api/session/login',{
+      method:'POST',headers:{Origin:url,'Content-Type':'application/json'},
+      body:JSON.stringify({account:id,workspace,code:seat.code}),
+    });
+    assert.equal(login.status,200);
+    const headers={Cookie:login.headers.get('set-cookie').split(';')[0]};
+    const schedules=await fetch(url+'/api/reporting/schedules?workspace='+workspace,{headers});
+    assert.equal(schedules.status,200);
+    assert.equal((await schedules.json()).workerEnabled,expected);
+  }
+  assert.deepEqual(await workbench.stop(),[0,null]);
+});
+
 test('configuration readiness checks the loopback listener and readable workbench assets', async t => {
   const dir = await scratch(t);
   const asset = join(dir, 'asset');

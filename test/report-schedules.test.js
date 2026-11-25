@@ -10,6 +10,9 @@ const {createServer}=require('../server');
 const {codeHash}=require('../workspace-access');
 const pins=require('../reporting-runs');
 const schedules=require('../report-schedules');
+const {createWorker,provision:provisionWorker}=require('../report-schedule-worker');
+const {openSqlite}=require('../durable-storage');
+const {openStore}=require('../store');
 
 const HOUR=3_600_000,day=24*HOUR,minute=60_000;
 const base='/api/reporting/schedules',runs='/api/reporting/runs';
@@ -26,8 +29,9 @@ async function fixture(t,backend='sqlite'){
   const isolated={root:join(root,'workspaces'),workspaces:[{id:'north',label:'North fixture'},{id:'south',label:'South fixture'}],
     accounts:seats.map(([id,workspace,role])=>({id,codeHash:codeHash(codes[id]),memberships:{[workspace]:role}}))};
   let server,url;
-  async function start(){
+  async function start(reportWorkerWorkspace){
     const options=backend==='demo'?{dataFile:join(root,'demo.json')}:{isolated,...(backend==='sqlite'?{sqliteFile:join(root,'program.sqlite')}:{})};
+    if(reportWorkerWorkspace!==undefined)options.reportWorkerWorkspace=reportWorkerWorkspace;
     server=createServer(options).listen(0,'127.0.0.1');
     await once(server,'listening');url='http://127.0.0.1:'+server.address().port;
   }
@@ -49,7 +53,7 @@ async function fixture(t,backend='sqlite'){
     const {response}=await request('/api/session/login',{body:{account,workspace,code:codes[account]}});
     return response.headers.get('set-cookie').split(';')[0];
   }
-  return {request,login,start,stop,get url(){return url;},codes};
+  return {request,login,start,stop,get url(){return url;},codes,sqliteFile:join(root,'program.sqlite'),isolated};
 }
 
 for(const backend of ['json','sqlite'])test('local '+backend+' schedule isolates tenants, independently approves UTC slots, captures immutable bytes once and persists',async t=>{
@@ -258,5 +262,239 @@ test('Chromium opens the schedule on demand, uses independent review, ticks once
   assert.equal(await exact(decision,'Run simulated slot').count(),0);
   assert.equal(await decision.getByRole('link',{name:'Download scheduled CSV',exact:true}).count(),1);
   assert.equal((await f.request(base,{cookie:review})).data.plans[0].status,'stopped');
+  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+});
+
+function fakeWakeClock(start){
+  let current=start,nextId=1;
+  const callbacks=new Map();
+  return {
+    move(next){current=next;},
+    clock:()=>current,
+    schedule(callback,delay){assert.equal(delay,minute);const id=nextId++;callbacks.set(id,callback);return id;},
+    cancel:id=>callbacks.delete(id),
+    waiting:()=>callbacks.size,
+    wake(){
+      assert.equal(callbacks.size,1);
+      const [id,callback]=callbacks.entries().next().value;
+      callbacks.delete(id);callback();
+    }
+  };
+}
+test('worker requires explicit local isolated SQLite scope, never corporate or demo; timer is single and cancellable',()=>{
+  const isolated={workspaces:[{id:'north'}]};
+  assert.equal(provisionWorker(undefined,{}),null);
+  assert.equal(provisionWorker('north',{isolated,sqliteFile:'reserved-fixture-path'}),'north');
+  for(const options of [
+    {reportWorkerWorkspace:'north'},
+    {reportWorkerWorkspace:'north',isolated},
+    {reportWorkerWorkspace:'unknown',isolated,sqliteFile:'reserved-fixture-path'},
+    {reportWorkerWorkspace:'north',isolated,sqliteFile:'reserved-fixture-path',corporate:{}},
+    {reportWorkerWorkspace:{workspace:'north'},isolated,sqliteFile:'reserved-fixture-path'}
+  ])assert.throws(()=>createServer(options),/requires one named local synthetic workspace and SQLite/);
+  const time=fakeWakeClock(20),seen=[],errors=[];
+  const runner=createWorker({...time,wake:now=>{seen.push(now);if(seen.length===1)throw Error('fixture failure');},
+    onError:error=>errors.push(error.message)});
+  runner.start();runner.start();
+  assert.equal(time.waiting(),1);
+  assert.deepEqual(seen,[]);
+  time.move(81);time.wake();
+  assert.deepEqual(seen,[81]);assert.deepEqual(errors,['fixture failure']);
+  assert.equal(time.waiting(),1);
+  time.move(142);time.wake();
+  assert.deepEqual(seen,[81,142]);assert.equal(time.waiting(),1);
+  runner.stop();runner.stop();
+  assert.equal(time.waiting(),0);
+});
+test('named SQLite worker shares immutable slots with staff, preserves independent approval and skips bounded backlog atomically across restart',async t=>{
+  const f=await fixture(t),first=future();
+  let analyst=await f.login(seats[0]),reviewer=await f.login(seats[1]),south=await f.login(seats[3]);
+  const plan=async(action,body,cookie=analyst,status=200,workspace='north')=>
+    (await f.request(base+'/'+action,{cookie,body,status,workspace})).data;
+  const model=async(cookie=analyst,workspace='north')=>(await f.request(base,{cookie,workspace})).data;
+  await f.request('/api/incidents/cases',{cookie:analyst,body:{title:'Fictional worker count item',scope:'Not included in report outputs.'}});
+  const pinned=(await f.request(runs,{cookie:analyst,body:{filters},status:201})).data.run.id;
+  const proposed={expectedRevision:0,sourceRunId:pinned,cadence:'daily',firstDueAt:iso(first)};
+  await plan('create',{...proposed,execution:'local-worker'},analyst,409);
+  let current=await plan('create',proposed);
+  const legacy=current.plans[0].id;
+  await plan('approve',{expectedRevision:current.revision,planId:legacy},reviewer);
+  assert.equal((await model()).workerEnabled,false);
+
+  await f.stop();await f.start('north');
+  [analyst,reviewer,south]=await Promise.all([seats[0],seats[1],seats[3]].map(f.login));
+  assert.equal((await model()).workerEnabled,true);
+  assert.equal((await model(south,'south')).workerEnabled,false);
+  const southPin=(await f.request(runs,{cookie:south,workspace:'south',body:{filters},status:201})).data.run.id;
+  await plan('create',{...proposed,sourceRunId:southPin,execution:'local-worker'},south,409,'south');
+  await f.request(base+'/worker',{cookie:analyst,body:{},status:404});
+
+  let db,runner,scope;
+  const time=fakeWakeClock(first),outcomes=[];
+  function openWorker(){
+    db=openSqlite(f.sqliteFile);scope=db.scope('workspace:north');
+    const store=openStore(join(f.isolated.root,'north','state.json'),{empty:true,storage:scope,reportWorkerEnabled:true});
+    const southStore=openStore(join(f.isolated.root,'south','state.json'),{empty:true,storage:db.scope('workspace:south')});
+    assert.throws(()=>southStore.runReportScheduleWorker(first),/disabled/);
+    runner=createWorker({...time,wake:now=>outcomes.push(store.runReportScheduleWorker(now)),onError:error=>{throw error;}});
+    runner.start();
+  }
+  function stopWorker(){runner?.stop();db?.close();db=null;}
+  t.after(()=>stopWorker());
+  function readGeneration(){return scope.readSince('workbench',-1).generation;}
+  function wake(at,expected,changed){
+    const before=readGeneration();
+    time.move(at);time.wake();
+    const outcome=outcomes.at(-1);
+    assert.equal(outcome.outcome,expected);assert.equal(outcome.changed,changed);
+    assert.equal(readGeneration(),before+(changed?1:0));
+    return outcome;
+  }
+  openWorker();
+  wake(first,'idle',false); // Existing approval explicitly meant simulation only.
+  current=await model();
+  assert.equal(current.plans[0].receipts.length,0);
+  const stoppedLegacy=await plan('stop',{expectedRevision:current.revision,planId:legacy},reviewer);
+  current=await plan('create',{...proposed,expectedRevision:stoppedLegacy.revision,execution:'local-worker'});
+  const id=current.plans[0].id;
+  wake(first,'idle',false); // A queued worker draft never runs.
+  await plan('approve',{expectedRevision:current.revision,planId:id},analyst,403);
+  const approved=await plan('approve',{expectedRevision:current.revision,planId:id},reviewer);
+  assert.equal(approved.plans[0].execution,'local-worker');
+  wake(first-1,'not-due',false);
+  const tick={planId:id,slotAt:iso(first),simulatedAt:iso(first)};
+  assert.equal((await plan('tick',tick)).outcome,'not-due'); // Real actual time is still earlier.
+  const firstRun=wake(first,'ran',true).receipt;
+  assert.equal(firstRun.slotAt,iso(first));assert.equal(firstRun.capturedAt,iso(first));
+  assert.equal(firstRun.executor,'local-worker');assert.equal(firstRun.total,1);
+  wake(first,'not-due',false);
+  const parallelConnection=openSqlite(f.sqliteFile);
+  try{
+    const contender=openStore(join(f.isolated.root,'north','state.json'),
+      {empty:true,storage:parallelConnection.scope('workspace:north'),reportWorkerEnabled:true});
+    assert.deepEqual(contender.runReportScheduleWorker(first),{changed:false,outcome:'not-due'});
+  }finally{parallelConnection.close();}
+  assert.equal((await plan('tick',tick)).receipt.reportId,firstRun.reportId);
+  const exportRun=(id,format)=>f.request(runs+'/'+id+'/export?format='+format,{cookie:analyst});
+  const json=(await exportRun(firstRun.reportId,'json')).raw,csv=(await exportRun(firstRun.reportId,'csv')).raw;
+  assert.doesNotMatch(json,/Fictional worker count item|Not included/);
+
+  stopWorker();await f.stop();await f.start('north');
+  [analyst,reviewer]=await Promise.all([seats[0],seats[1]].map(f.login));
+  openWorker();
+  wake(first,'not-due',false);
+  assert.equal((await exportRun(firstRun.reportId,'json')).raw,json);
+  assert.equal((await exportRun(firstRun.reportId,'csv')).raw,csv);
+  const later=first+20*day,second=wake(later,'ran',true).receipt;
+  const approvedAfter=(await model()).plans[0];
+  assert.equal(approvedAfter.workerRuns,2);assert.equal(approvedAfter.skippedSlots,13);
+  assert.equal(second.slotAt,iso(first+14*day));assert.equal(second.capturedAt,iso(later));
+  assert.equal(approvedAfter.nextDueAt,iso(first+15*day));assert.equal(approvedAfter.receipts.length,2);
+  assert.deepEqual(approvedAfter.skippedRanges,[{from:iso(first+day),through:iso(first+13*day),count:13}]);
+  const backfill=await plan('tick',{planId:id,slotAt:iso(first+day),simulatedAt:iso(later)});
+  assert.equal(backfill.outcome,'skipped');
+  assert.equal(backfill.receipt,null);
+  wake(first+14*day,'not-due',false); // A backward clock cannot rewind the cursor.
+  const third=wake(later,'ran',true).receipt;
+  assert.equal(third.slotAt,iso(first+15*day));
+  current=await model();
+  await plan('stop',{expectedRevision:current.revision,planId:id},reviewer);
+  wake(later,'idle',false);
+  assert.equal((await plan('tick',tick)).receipt.reportId,firstRun.reportId);
+  const audit=(await f.request('/api/audit/export',{cookie:reviewer})).data.audit.filter(row=>row.action==='reporting.schedule.ran');
+  assert.equal(audit.length,3);
+  assert.ok(audit.every(e=>e.actor==='system'&&!Object.hasOwn(e,'account')&&e.details.execution==='local-worker'&&e.details.total===1));
+});
+
+test('an oversized due export holds once without advancing; actual staff retry is persisted and never rerun',()=>{
+  const start=Date.UTC(2027,1,1,1),slot=start+minute;
+  const state={audit:[]},workerAuthor={actor:'analyst',account:'author'},review={actor:'reviewer',account:'reviewer'};
+  const source=JSON.parse(pins.create(state,[],{filters:{dataset:'records',workflow:'rights',group:'day'}},'local-isolated',{now:start}));
+  const event=(s,actor,action,projectId,entityId,details)=>s.audit.push({actor,action,projectId,entityId,details});
+  const call=(actor,action,body,now=start)=>schedules.change(state,[],actor,action,body,event,{now,workerEnabled:true});
+  const created=call(workerAuthor,'create',{expectedRevision:0,sourceRunId:source.run.id,execution:'local-worker',cadence:'weekly',firstDueAt:iso(slot)});
+  const planId=created.value.plans[0].id;
+  call(review,'approve',{expectedRevision:1,planId});
+  state.rightsCases=Array.from({length:3600},(_,i)=>({status:'received',receivedAt:iso(start-i*day)}));
+  const failed=schedules.runWorker(state,[],slot,event);
+  assert.equal(failed.outcome,'worker-held');assert.equal(failed.changed,true);
+  assert.equal(state.reportScheduleBook.plans[0].nextDueAt,iso(slot));
+  assert.equal(state.reportScheduleBook.plans[0].workerFailure.code,'REPORT_RUN_TOO_LARGE');
+  assert.equal(state.reportRuns.length,1);
+  const locked=schedules.runWorker(state,[],slot+minute,event);
+  assert.deepEqual(locked,{changed:false,outcome:'held'});
+  assert.equal(state.audit.filter(e=>e.action==='reporting.schedule.worker-held').length,1);
+  state.rightsCases=state.rightsCases.slice(0,1);
+  const retry={planId,slotAt:iso(slot),simulatedAt:iso(slot)};
+  const result=call(workerAuthor,'tick',retry,slot+minute);
+  assert.equal(result.value.receipt.executor,'staff');assert.equal(result.value.receipt.total,1);
+  assert.equal(state.reportScheduleBook.plans[0].workerFailure,null);
+  assert.equal(state.reportScheduleBook.plans[0].workerRuns,0);
+  assert.deepEqual(schedules.runWorker(state,[],slot+minute,event),{changed:false,outcome:'not-due'});
+  assert.equal(call(workerAuthor,'tick',retry,slot+minute).value.receipt.reportId,result.value.receipt.reportId);
+});
+
+test('Chromium distinguishes staff simulation from approved worker execution and shows its saved output',{
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Requires Playwright and Chromium',timeout:35_000
+},async t=>{
+  const f=await fixture(t);
+  await f.stop();await f.start('north');
+  const analyst=await f.login(seats[0]);
+  await f.request(runs,{cookie:analyst,body:{filters},status:201});
+  const {chromium}=require('playwright');
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  t.after(()=>browser.close());
+  const errors=[],external=[];
+  const exact=(target,name)=>target.getByRole('button',{name,exact:true});
+  const text=(target,value)=>target.getByText(value,{exact:true});
+  async function visit([account,workspace]){
+    const p=await browser.newPage();p.setDefaultTimeout(6500);p.on('pageerror',error=>errors.push(error.message));
+    await p.route('**/*',route=>{
+      const url=new URL(route.request().url());
+      if(url.origin!==f.url){external.push(url.origin);return route.abort();}
+      return route.continue();
+    });
+    await p.goto(f.url);
+    await p.getByLabel('Test account',{exact:true}).fill(account);
+    await p.getByLabel('Workspace ID',{exact:true}).fill(workspace);
+    await p.getByLabel('Local access code',{exact:true}).fill(f.codes[account]);
+    await exact(p,'Sign in').click();await exact(p,'Reporting').click();
+    const detail=p.locator('details').filter({has:text(p,'Local report scheduling')});
+    await detail.locator('summary').click();
+    await detail.getByRole('heading',{name:'Local UTC report schedule',exact:true}).waitFor();
+    return {p,detail};
+  }
+  const author=await visit(seats[0]);
+  await author.detail.getByLabel('Schedule execution').selectOption('local-worker');
+  const slot=future();
+  await author.detail.getByLabel('First due time (UTC)',{exact:true}).fill(iso(slot).slice(0,16));
+  await exact(author.detail,'Propose local schedule').click();
+  await text(author.detail,'Draft schedule saved. A separate reviewer must approve it.').waitFor();
+  assert.equal(await exact(author.detail,'Run one due slot').count(),0);
+  const review=await visit(seats[1]);
+  await text(review.detail,'Execution: approved local worker · 0 automatic runs · 0 older slots skipped').waitFor();
+  await exact(review.detail,'Approve local schedule').click();
+  await text(review.detail,'Schedule approved for the local worker.').waitFor();
+  assert.equal(await review.detail.getByLabel('Simulated time (UTC)',{exact:true}).count(),0);
+  await exact(review.detail,'Run one due slot').click();
+  await text(review.detail,'No report was saved. The slot is not due at the actual UTC time.').waitFor();
+  const db=openSqlite(f.sqliteFile);
+  try{
+    const store=openStore(join(f.isolated.root,'north','state.json'),{empty:true,storage:db.scope('workspace:north'),reportWorkerEnabled:true});
+    assert.equal(store.runReportScheduleWorker(slot).outcome,'ran');
+  }finally{db.close();}
+  await exact(author.detail,'Reload local schedule').click();
+  await text(author.detail,'Execution: approved local worker · 1 automatic run · 0 older slots skipped').waitFor();
+  const [download]=await Promise.all([author.p.waitForEvent('download'),
+    author.detail.getByRole('link',{name:'Download scheduled JSON',exact:true}).click()]);
+  const chunks=[];
+  for await(const chunk of await download.createReadStream())chunks.push(chunk);
+  const data=JSON.parse(Buffer.concat(chunks));
+  assert.equal(data.generatedAt,iso(slot));assert.equal(data.counts.total,0);
+  await exact(review.detail,'Reload local schedule').click();
+  await text(review.detail,'Execution: approved local worker · 1 automatic run · 0 older slots skipped').waitFor();
+  await exact(review.detail,'Stop local schedule').click();
+  await text(review.detail,'Schedule stopped. Its history remains available.').waitFor();
+  assert.equal(await exact(review.detail,'Run one due slot').count(),0);
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
 });
