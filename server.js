@@ -7,7 +7,7 @@ const path = require('node:path');
 const {openStore} = require('./store');
 const {openWorkflowHttp} = require('./workflow-http');
 const {openSqlite} = require('./durable-storage');
-const {view:workQueue}=require('./work-queue');
+const {view:workQueue,createPager:queuePager}=require('./work-queue');
 const {route:assessmentIncidentRoute}=require('./assessment-incident');
 const {dashboard:workspaceHome}=require('./workspace-home');
 const rightsViewHeader='X-MVW-Rights-View-Version';
@@ -102,6 +102,7 @@ async function readBody(req,limit=32768) {
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false}={}) {
+  const pageWorkQueue=queuePager();
   const directoryScopes=directoryLifecycle.provision(isolated,corporate===undefined);
   const oidcModule=corporate===undefined?null:require('./oidc/client');
   const oidc=oidcModule?.createOidc(corporate);
@@ -445,8 +446,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         return send(res,200,myWork(caseOperator?store.caseOperatorState(scopeContext(selection)):store.getState(),selection,policy.capabilities(actor).views,searchParams,ownWork[1]));
       }
       if (req.method==='GET'&&['/api/work-queue','/api/work-queue/export'].includes(pathname)){
-        const queue=workQueue(store.getState(),searchParams);
-        return pathname.endsWith('/export')?send(res,200,{schemaVersion:1,...queue},undefined,
+        const exporting=pathname.endsWith('/export'),snapshot=store.getState();
+        const scope=selection?['isolated',selection.space.id,selection.account,selection.actor,selection.generation]:['demo',actor??'analyst'];
+        const queue=exporting?workQueue(snapshot,searchParams):pageWorkQueue(snapshot,searchParams,scope);
+        return exporting?send(res,200,{schemaVersion:1,...queue},undefined,
           {'Content-Disposition':'attachment; filename="privacy-workbench-queue.json"'}):send(res,200,queue);
       }
       if (req.method==='GET'&&pathname==='/api/governance-documents'){

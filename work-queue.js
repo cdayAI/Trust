@@ -1,4 +1,5 @@
 'use strict';
+const {createHash,createHmac,randomBytes,timingSafeEqual}=require('node:crypto');
 const {taskDate:incidentDueDate}=require('./incident-policy');
 const workflowLabels={
   assessments:'Assessments',rights:'Privacy rights',incidents:'Incidents','vendor-monitoring':'Vendor monitoring',
@@ -87,4 +88,46 @@ function view(state,params,today=new Date().toISOString().slice(0,10)){
 }
 
 function invalid(message){throw Object.assign(new Error(message),{status:422,code:'INVALID_QUEUE_FILTER'})}
-module.exports={view};
+function createPager(){
+  const key=randomBytes(32);
+  const signature=(data,scope)=>createHmac('sha256',key).update(JSON.stringify([scope,data])).digest();
+  const conflict=()=>{throw Object.assign(new Error('The work queue changed. Start at the first page again.'),
+    {status:409,code:'QUEUE_CURSOR_STALE'});};
+  function pack(stamp,limit,start,scope){
+    const data=Buffer.from(JSON.stringify([1,stamp,limit,start])).toString('base64url');
+    return data+'.'+signature(data,scope).toString('base64url');
+  }
+  function unpack(token,scope){
+    if(typeof token!=='string'||token.length>256||!(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/u.test(token)))invalid('The queue cursor is malformed.');
+    const [data,mac]=token.split('.'),provided=Buffer.from(mac,'base64url');
+    if(provided.length!==32||provided.toString('base64url')!==mac||!timingSafeEqual(provided,signature(data,scope)))conflict();
+    let payload;
+    try{payload=JSON.parse(Buffer.from(data,'base64url').toString('utf8'));}catch{invalid('The queue cursor is malformed.');}
+    if(!Array.isArray(payload)||payload.length!==4||payload[0]!==1||
+      typeof payload[1]!=='string'||!Number.isSafeInteger(payload[2])||!Number.isSafeInteger(payload[3]))
+      invalid('The queue cursor is malformed.');
+    return payload;
+  }
+  return function page(state,params,scope,today){
+    if(!params.has('limit')&&!params.has('cursor'))return view(state,params,today);
+    if(params.getAll('limit').length!==1||params.getAll('cursor').length>1||
+      !/^(?:[1-9][0-9]?|100)$/u.test(params.get('limit')))invalid('Use one queue page limit between 1 and 100.');
+    const filters=new URLSearchParams(params),limit=Number(params.get('limit'));
+    filters.delete('limit');filters.delete('cursor');
+    const token=params.has('cursor')?unpack(params.get('cursor'),scope):null;
+    const model=view(state,filters,today),total=model.tasks.length;
+    // Fingerprint exactly this filtered, ordered projection and UTC date.
+    // Counts stay global to the filter and unrelated state changes do not
+    // invalidate a cursor if they leave its visible projection unchanged.
+    const stamp=createHash('sha256').update(JSON.stringify(model)).digest('base64url');
+    const start=token?token[3]:0;
+    if(token&&(stamp!==token[1]||limit!==token[2]||start<0||start>=total||start%limit!==0))conflict();
+    const end=Math.min(start+limit,total);
+    return {...model,tasks:model.tasks.slice(start,end),pagination:{
+      limit,first:total?start+1:0,last:end,total,
+      previousCursor:start?pack(stamp,limit,start-limit,scope):null,
+      nextCursor:end<total?pack(stamp,limit,end,scope):null
+    }};
+  };
+}
+module.exports={view,createPager};

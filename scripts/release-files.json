@@ -225,6 +225,7 @@
   "test/training.test.js",
   "test/trust-center.test.js",
   "test/vendor-engagements.test.js",
+  "test/work-queue-pagination.test.js",
   "test/workflow-engine.test.js",
   "test/workflow-http.test.js",
   "test/workflow-studio.test.js",

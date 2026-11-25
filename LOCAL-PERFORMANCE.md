@@ -71,3 +71,27 @@ time was 915.5 ms before and 178.0 ms after; p95 was 1760.2 ms and 311.2 ms,
 respectively. Payload sizes exclude HTTP framing. Click-to-card includes
 browser work and local scheduling; these are illustrative fixture timings,
 not production or vendor benchmarks.
+
+## Work queue page size
+
+The workbench shows 25 tasks per page while keeping the counts for all
+matching work. Open a record from any page or export every matching task as
+before. Reads without a page limit retain their original full response.
+
+The optional HTTP contract is `GET /api/work-queue?limit=25` plus the existing
+owner, workflow and timing filters. A limit can be 1–100. Repeat the same
+limit and filters with a returned `pagination.nextCursor` or
+`pagination.previousCursor`. The cursor applies only to the current
+authorized workspace, role, UTC date, and matching task projection. A
+changed queue or server restart returns `409 QUEUE_CURSOR_STALE`; restart
+from a request without a cursor. Export never takes a cursor or limit.
+
+With identical localhost SQLite fixtures (500 projects and 500 rights
+cases), Chromium's first queue response fell from 238,443 to 13,074 bytes
+and the DOM from 500 to 25 task cards. Actual Next and Previous returned
+13,193 and 13,074 bytes, respectively, and matched the corresponding
+slices of the full response. Over 13 interleaved measurements per version
+after four warm-ups, median click-to-queue was 127.8 ms before and 82.7 ms
+after; p95 was 157.1 and 114.9 ms. Timings are illustrative local samples,
+not production or vendor benchmarks. The server still derives and sorts
+the complete matching queue to preserve counts and cursor consistency.

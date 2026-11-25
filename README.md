@@ -187,6 +187,10 @@ screening, communications, risk exchanges, or external jobs are connected.
 
 ### Work queue
 
+The list shows 25 tasks at a time. Counts and filtered exports still cover
+every matching task. If matching work changes while paging, the first page
+reloads so rows are not skipped or repeated.
+
 Open **Work queue** to see actions derived from the current state of
 assessments, rights, incidents, vendor monitoring, notices, retention and
 control evidence. Filters use the demo owner, workflow and due-date bucket.
