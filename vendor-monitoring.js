@@ -25,30 +25,67 @@ function dueDate(now,days){
   return d.toISOString().slice(0,10);
 }
 const current=c=>c.cycles.at(-1);
-function associated(state,c,cycle){
-  return state.assessments.filter(a=>a.vendorId===c.vendorId&&(a.monitoringCycleId??null)===cycle.assessmentCycleId);
+const lineageKey=(vendorId,projectId,cycleId,engagementId)=>JSON.stringify([vendorId,projectId,cycleId??null,engagementId??null]);
+function indexAssessments(state){
+  const index=new Map();
+  for(const a of state.assessments){
+    const key=lineageKey(a.vendorId,a.projectId,a.monitoringCycleId,a.vendorEngagementId);
+    if(!index.has(key))index.set(key,[]);
+    index.get(key).push(a);
+  }
+  return index;
+}
+function associated(state,c,cycle,index){
+  if(index)return index.get(lineageKey(c.vendorId,c.projectId,cycle.assessmentCycleId,c.engagement?c.id:null))??[];
+  return state.assessments.filter(a=>a.vendorId===c.vendorId&&a.projectId===c.projectId&&
+    (a.monitoringCycleId??null)===cycle.assessmentCycleId&&(a.vendorEngagementId??null)===(c.engagement?c.id:null));
+}
+function verify(state){
+  const named=bookOf(state).cases.filter(c=>c.engagement);
+  if(!named.length&&!state.assessments.some(a=>a.vendorEngagementId))return;
+  const expected=new Set(),vendors=new Map(state.vendors.map(v=>[v.id,v])),index=indexAssessments(state);
+  for(const entry of named){
+    const vendor=vendors.get(entry.vendorId);
+    if(!vendor||vendor.projectId!==entry.projectId||!entry.ownerAccount||!Number.isSafeInteger(entry.revision)||entry.revision<1)throw Error('Invalid vendor engagement linkage.');
+    for(const cycle of entry.cycles){
+      const matching=associated(state,entry,cycle,index);
+      const types=vendor.usesAI?['privacy','ai']:['privacy'];
+      if(!cycle.assessmentCycleId||!Array.isArray(cycle.assessmentIds)||cycle.assessmentIds.length!==types.length||
+        matching.length!==types.length||!types.every(type=>matching.some(a=>a.type===type&&cycle.assessmentIds.includes(a.id)))||
+        cycle.evidence.some(e=>e.engagementId!==entry.id||e.assessmentCycleId!==cycle.assessmentCycleId))
+        throw Error('Invalid vendor engagement cycle lineage.');
+      for(const a of matching){if(expected.has(a.id))throw Error('Duplicate vendor engagement assessment linkage.');expected.add(a.id);}
+    }
+  }
+  if(state.assessments.some(a=>a.vendorEngagementId&&!expected.has(a.id)))
+    throw Error('Vendor assessment has no matching engagement cycle.');
+
 }
 function approvedAssessments(state,c,cycle){
   const vendor=state.vendors.find(v=>v.id===c.vendorId);
   const relevant=associated(state,c,cycle);
   const types=vendor.usesAI?['privacy','ai']:['privacy'];
-  if(relevant.length!==types.length||!types.every(type=>relevant.some(a=>a.type===type&&assessmentFlow.isApproved(state,a))))
+  if(relevant.length!==types.length||!types.every(type=>relevant.some(a=>a.type===type&&assessmentFlow.isApproved(state,a)))||
+     c.engagement&&(!Array.isArray(cycle.assessmentIds)||relevant.some(a=>!cycle.assessmentIds.includes(a.id))||
+       relevant.some(a=>!a.submittedByAccount||!a.decisionByAccount||a.submittedByAccount===a.decisionByAccount)))
     fail(409,'ASSESSMENTS_NOT_APPROVED','Obtain independent approvals for all assessments in this review cycle.');
   return relevant.map(a=>({id:a.id,type:a.type,revision:a.revision,workflowInstanceId:a.workflowInstanceId,
-    workflowRevision:a.workflowRevision,decisionBy:a.decisionBy}));
+    workflowRevision:a.workflowRevision,decisionBy:a.decisionBy,
+    ...(c.engagement?{engagementId:c.id,assessmentCycleId:cycle.assessmentCycleId,decisionByAccount:a.decisionByAccount,workflowDefinitionVersion:a.workflowDefinitionVersion,questionnaireId:a.questionnaire.id,questionnaireVersion:a.questionnaire.version}:{})}));
 }
 function view(state){
-  const book=bookOf(state),today=new Date().toISOString().slice(0,10);
+  const book=bookOf(state),today=new Date().toISOString().slice(0,10),index=indexAssessments(state);
   return {...book,policy,vendors:state.vendors.map(({id,name,projectId,usesAI,handlesSensitiveData})=>({id,name,projectId,usesAI,handlesSensitiveData})),
-    cases:book.cases.map(c=>({...c,assessmentStatus:associated(state,c,current(c)).map(a=>({id:a.id,type:a.type,status:a.status})),
+    cases:book.cases.map(c=>({...c,assessmentStatus:associated(state,c,current(c),index).map(a=>({id:a.id,type:a.type,status:a.status})),
       renewalState:c.status!=='monitoring'?'awaiting-review':c.renewalDueDate<=today?'due':'scheduled'})),
     legacyRecords:(state.moduleRecords??[]).filter(r=>r.moduleId==='third-party')};
 }
 const fields={
-  create:['vendorId','criticality','exposure'], score:['criticality','exposure'], evidence:['reference','note'], submit:[],
+  create:['vendorId','criticality','exposure','engagementTitle','engagementScope'], score:['criticality','exposure'], evidence:['reference','note'], submit:[],
   approve:['note'], return:['note'], change:['note','criticality','exposure'], renew:['note']
 };
-function change(state,parts,actor,body,event,startAssessments){
+function change(state,parts,actor,body,event,startAssessments,account){
+  const identity=account??actor;
   const book=state.vendorMonitoring??=bookOf(state);
   const [,collection,id,step]=parts;
   const action=parts.length===2?'create':step;
@@ -59,19 +96,33 @@ function change(state,parts,actor,body,event,startAssessments){
   try {
     if(Object.keys(body).some(k=>!['expectedRevision',...fields[action]].includes(k)))fail(422,'UNKNOWN_FIELDS','Provide only the supported fields.');
     if(!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0)fail(422,'REVISION_REQUIRED','Provide the current vendor monitoring revision.');
-    if(body.expectedRevision!==book.revision)fail(409,'STALE_REVISION','Vendor monitoring changed. Reload before retrying.');
+    if(body.expectedRevision!==(existing?.engagement?existing.revision:book.revision))fail(409,'STALE_REVISION','Vendor monitoring changed. Reload before retrying.');
     const review=['approve','return'].includes(action),now=new Date().toISOString();
     if(action!=='create'&&!existing)fail(404,'RECORD_NOT_FOUND','Vendor monitoring case not found.');
     if(actor!==(review?'reviewer':'analyst')||review&&actor===existing.owner)fail(403,review?'INDEPENDENT_REVIEW_REQUIRED':'OWNER_REQUIRED',
       review?'A separate reviewer must decide.':'Only the assigned vendor analyst can take this action.');
+    if(existing?.engagement&&(review?identity===existing.ownerAccount:identity!==existing.ownerAccount))
+      fail(403,review?'INDEPENDENT_REVIEW_REQUIRED':'OWNER_REQUIRED',review?'A separate account must decide.':'Only the engagement owner account can take this action.');
     let c=existing,details;
     if(action==='create'){
       const vendor=state.vendors.find(v=>v.id===body.vendorId);
       if(!vendor)fail(404,'VENDOR_NOT_FOUND','Choose a vendor from the project intake.');
-      if(book.cases.some(c=>c.vendorId===vendor.id))fail(409,'VENDOR_ALREADY_TRACKED','A monitoring case already exists for this vendor.');
-      const cycle={number:1,assessmentCycleId:null,reason:'initial',factors:factors(body,vendor),evidence:[],assessmentSnapshot:[],review:null,openedAt:now};
-      c={id:randomUUID(),vendorId:vendor.id,projectId:vendor.projectId,owner:actor,status:'collecting',openedAt:now,cycles:[cycle],renewalDueDate:null};
-      book.cases.push(c);details={vendorId:c.vendorId,owner:c.owner,factors:cycle.factors};
+      const named=Object.hasOwn(body,'engagementTitle')||Object.hasOwn(body,'engagementScope');
+      let engagement=null;
+      if(named){
+        engagement={title:note(body.engagementTitle,'Fictional engagement name',120),scope:note(body.engagementScope,'Fictional engagement scope')};
+        const existing=book.cases.filter(c=>c.vendorId===vendor.id&&c.engagement);
+        if(existing.some(c=>c.engagement.title.toLowerCase()===engagement.title.toLowerCase()))
+          fail(409,'ENGAGEMENT_ALREADY_TRACKED','An engagement with that name already exists for this vendor.');
+        if(existing.length>=12)fail(409,'ENGAGEMENT_LIMIT','A vendor can have up to 12 named synthetic engagements.');
+      }else if(book.cases.some(c=>c.vendorId===vendor.id&&!c.engagement))fail(409,'VENDOR_ALREADY_TRACKED','A monitoring case already exists for this vendor.');
+      const caseId=randomUUID();
+      const cycle={number:1,assessmentCycleId:engagement?randomUUID():null,reason:'initial',factors:factors(body,vendor),evidence:[],assessmentSnapshot:[],review:null,openedAt:now};
+      if(engagement)cycle.assessmentIds=startAssessments(state,vendor,cycle.assessmentCycleId,caseId);
+      c={id:caseId,vendorId:vendor.id,projectId:vendor.projectId,owner:actor,status:'collecting',openedAt:now,cycles:[cycle],renewalDueDate:null,
+        ...(engagement?{engagement,ownerAccount:identity,revision:1}:{})};
+      book.cases.push(c);details={vendorId:c.vendorId,owner:c.owner,factors:cycle.factors,
+        ...(engagement?{engagementId:caseId,ownerAccount:identity,assessmentIds:cycle.assessmentIds}:{})};
     }else{
       const cycle=current(c);
       const vendor=state.vendors.find(v=>v.id===c.vendorId);
@@ -84,7 +135,9 @@ function change(state,parts,actor,body,event,startAssessments){
         at('collecting');
         if(typeof body.reference!=='string'||!/^SYN-[A-Z0-9]{3,24}$/.test(body.reference))fail(422,'INVALID_EVIDENCE','Use a fictional evidence ID such as SYN-VENDOR01.');
         if(cycle.evidence.some(e=>e.reference===body.reference))fail(409,'EVIDENCE_EXISTS','That reference already exists in this cycle.');
-        details={reference:body.reference,note:note(body.note,'Fictional evidence note'),at:now};
+        if(c.engagement&&cycle.evidence.length>=50)fail(409,'ENGAGEMENT_LIMIT','This cycle has reached its evidence limit.');
+        details={reference:body.reference,note:note(body.note,'Fictional evidence note'),at:now,
+          ...(c.engagement?{id:randomUUID(),engagementId:c.id,assessmentCycleId:cycle.assessmentCycleId,recordedByAccount:identity}:{})};
         cycle.evidence.push(details);
       }else if(action==='submit'){
         at('collecting');
@@ -103,26 +156,29 @@ function change(state,parts,actor,body,event,startAssessments){
           c.renewalDueDate=dueDate(now,policy.renewalDays[cycle.factors.tier]);
         }else c.status='collecting';
         cycle.review={outcome:action==='approve'?'approved':'returned',reviewedBy:actor,at:now,note:rationale,evidenceCount:cycle.evidence.length,
-          renewalDueDate:c.renewalDueDate};
+          renewalDueDate:c.renewalDueDate,...(c.engagement?{reviewedByAccount:identity}:{})};
         details={...cycle.review};
       }else{
         at('monitoring');
         const rationale=note(body.note,'Fictional change or renewal rationale');
         const nextFactors=action==='change'?factors(body,vendor):{...cycle.factors};
         const cycleId=randomUUID();
-        const assessmentIds=startAssessments(state,vendor,cycleId);
+        if(c.engagement&&c.cycles.length>=50)fail(409,'ENGAGEMENT_LIMIT','This engagement has reached its cycle limit.');
+        const assessmentIds=startAssessments(state,vendor,cycleId,c.engagement?c.id:undefined);
         c.cycles.push({number:cycle.number+1,assessmentCycleId:cycleId,reason:action,note:rationale,factors:nextFactors,evidence:[],assessmentSnapshot:[],
-          review:null,openedAt:now});
+          review:null,openedAt:now,...(c.engagement?{assessmentIds}:{})});
         c.status='collecting';c.renewalDueDate=null;
         details={note:rationale,assessmentIds,previousCycle:cycle.number,factors:nextFactors};
       }
     }
+    if(c.engagement&&action!=='create')c.revision++;
     book.revision++;
-    audit(action,c,{...details,cycle:current(c).number,status:c.status});
+    audit(action,c,{...details,cycle:current(c).number,status:c.status,
+      ...(c.engagement?{engagementId:c.id,assessmentCycleId:current(c).assessmentCycleId,engagementRevision:c.revision}:{})});
   }catch(e){
     if(!e.status)throw e;
     audit('refused',existing,{action,code:e.code,expectedRevision:Number.isSafeInteger(body.expectedRevision)?body.expectedRevision:null});
     throw Object.assign(e,{persistRefusal:true});
   }
 }
-module.exports={view,change};
+module.exports={view,change,verify};

@@ -69,7 +69,7 @@ function localFixture(room,seed,validUntil){
       ]})),
       rightsCaseScopeWorkspaces:scopes,documentScopeWorkspaces:scopes,attachmentReviewWorkspaces:scopes,largePdfAttachmentWorkspaces:scopes,
       trustCenters:scopes.map(workspace=>({workspace,slug:'sample-'+workspace})),
-      requesterGrants:requesters.map(hashed),employeeGrants:employees.map(hashed),trainingGrants:learners.map(hashed),
+      requesterGrants:requesters.map(hashed),requesterReleaseWorkspaces:scopes,employeeGrants:employees.map(hashed),trainingGrants:learners.map(hashed),
       employeeSigningKey:derive(seed,'signature/employee','hex'),trainingSigningKey:derive(seed,'signature/learner','hex'),
     },
   };

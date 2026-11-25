@@ -53,7 +53,7 @@ function renderAssessment(parent,a){
   card.append(el('p',q.label+' · Form v'+q.version+' · Workflow v'+a.workflowDefinitionVersion+' · Record revision '+a.revision,'hint'));
   card.append(el('p','Routing: '+a.routing.reason,'hint'));
   if(a.routing.configurationVersion)card.append(el('p','Configuration v'+a.routing.configurationVersion+' · Rule '+a.routing.ruleId,'hint'));
-  if(a.monitoringCycleId)card.append(el('p','Vendor monitoring reassessment · '+a.id,'hint'));
+  if(a.monitoringCycleId)card.append(el('p',(a.vendorEngagementId?'Vendor engagement '+a.vendorEngagementId+' · ':'Vendor monitoring reassessment · ')+a.id,'hint'));
   if(actor==='analyst'&&['draft','rejected'].includes(a.status)){
     if(a.decisionReason)card.append(el('p','Returned by reviewer: '+a.decisionReason,'hint'));
     const f=el('form');
@@ -145,15 +145,28 @@ function prepareDemoIdentity(){
   role.replaceChildren(...state.actors.map(a=>{const o=el('option',a.name);o.value=a.id;return o}));
   role.value=actor;
 }
+let scopedEngagementAssessments=null;
 function render(){
   renderWorkspaceMetrics();
   selected=state.projects.some(p=>p.id===selected)?selected:state.projects[0]?.id;
   const projects=$('#projects');projects.replaceChildren();
-  for(const p of state.projects){const b=button(p.name,'button','secondary');if(p.id===selected)b.setAttribute('aria-current','true');b.onclick=()=>{selected=p.id;notice('');render()};projects.append(b)}
+  for(const p of state.projects){const b=button(p.name,'button','secondary');if(p.id===selected)b.setAttribute('aria-current','true');b.onclick=()=>{selected=p.id;scopedEngagementAssessments=null;notice('');render()};projects.append(b)}
   const pf=$('#project-form');for(const child of pf.elements)child.disabled=actor!=='analyst';
   pf.onsubmit=e=>{e.preventDefault();write('/api/projects',Object.fromEntries(new FormData(pf)),'Project created.',(next,old)=>{selected=next.projects.find(p=>!old.projects.some(q=>q.id===p.id))?.id;pf.reset()})};
   const ws=$('#workspace');ws.replaceChildren();
   const p=state.projects.find(x=>x.id===selected);if(!p)return;
+  if(scopedEngagementAssessments){
+    const scope=scopedEngagementAssessments;
+    const all=button('Show all project assessments','button','secondary');
+    all.onclick=()=>{scopedEngagementAssessments=null;render()};
+    const panel=add(el('section'),heading(scope.title),
+      el('p','Vendor engagement assessments · Cycle '+scope.cycle+' · '+p.name,'hint'),all);
+    const listed=state.assessments.filter(a=>a.projectId===p.id&&a.vendorEngagementId===scope.id&&scope.assessmentIds.includes(a.id));
+    if(!listed.length)panel.append(el('p','No assessments are available in this engagement cycle.','hint'));
+    for(const record of listed)renderAssessment(panel,record);
+    ws.append(panel);
+    return;
+  }
   const vendors=state.vendors.filter(v=>v.projectId===p.id);
   const handoff=state.handoff.find(o=>o.projectId===p.id);
   ws.append(add(el('section'),heading(p.name),el('p',p.description||'No description.'),el('p',vendors.length+' vendors · '+state.assessments.filter(a=>a.projectId===p.id).length+' assessments','hint')));
@@ -191,6 +204,45 @@ function render(){
     log.append(add(el('li'),details));
   }
   audit.append(log);ws.append(audit);
+}
+// A signed-in landing view only needs its own scoped endpoint. Keep this
+// larger project snapshot out of bootstrap until an assessment is opened.
+let assessmentLoad,assessmentMount=0;
+async function mountAssessments({focusRetry=false}={}){
+  const attempt=++assessmentMount;
+  if(state){render();return}
+  const pane=$('#assessment-view'),workspace=$('#workspace');
+  const current=()=>attempt===assessmentMount&&!pane.hidden&&!$('#workbench').hidden;
+  for(const child of $('#project-form').elements)child.disabled=true;
+  const waiting=el('p','Loading assessments…');
+  waiting.setAttribute('role','status');
+  workspace.replaceChildren(waiting);
+  try{
+    assessmentLoad??=read('/api/state').then(model=>{
+      if(!['projects','vendors','assessments','handoff','audit'].every(key=>Array.isArray(model?.[key])))
+        throw Error('The assessment workspace returned an invalid snapshot.');
+      return model;
+    }).finally(()=>{assessmentLoad=undefined});
+    const loaded=await assessmentLoad;
+    // A separately opened assessment or completed command may have already
+    // supplied a newer snapshot while this initial navigation was pending.
+    state??=loaded;
+    if(current()){
+      render();
+      if(focusRetry){
+        const title=$('#view-title');
+        title.tabIndex=-1;title.focus({preventScroll:true});
+      }
+    }
+  }catch{
+    if(!current())return;
+    if(state){render();return}
+    const retry=button('Retry assessments','button','secondary');
+    retry.onclick=()=>mountAssessments({focusRetry:true});
+    workspace.replaceChildren(add(el('section'),heading('Assessments unavailable'),
+      el('p','Projects could not be loaded. Try again or choose another workspace view.'),retry));
+    if(focusRetry)retry.focus({preventScroll:true});
+  }
 }
 async function checkContext(){
   if(!localSession?.authenticated)return;
@@ -253,7 +305,7 @@ async function start(){
       $('#local-context').hidden=false;
     }else if(session.mode==='synthetic-demo'){$('#demo-identity').hidden=false}
     else throw Error('Unknown workspace mode.');
-    state=await read('/api/state');
+    if(!localSession)state=await read('/api/state');
     const auditLink=$('#audit-export');
     auditLink.href=scopeUrl('/api/audit/export');
     auditLink.hidden=!!localSession&&!localSession.capabilities.workspaceAudit;

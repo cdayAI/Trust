@@ -104,10 +104,11 @@ function renderModules(){
   content.append(listing);
   mview.replaceChildren(add(el('div',undefined,'module-grid'),add(el('aside'),add(el('section'),heading('Program modules'),nav)),content));
 }
-function switchView(view,{keepMyWorkLink=false}={}){
+function switchView(view,{keepMyWorkLink=false,engagementAssessments=null}={}){
   if(['ethics','group-governance','scoped-applications','document-access','operator-jobs'].includes(view)&&!localSession)return;
   if(localSession&&!localSession.capabilities.views.includes(view))return;
   if(!keepMyWorkLink)clearMyWorkLocation();
+  if(view==='assessments')scopedEngagementAssessments=engagementAssessments;
   $('#audit-export').hidden=['home','my-work'].includes(view)||!!localSession&&!localSession.capabilities.workspaceAudit;
   const item=$('#show-'+view);
   $('.hero').classList.toggle('hero-home',view==='home');
@@ -194,7 +195,7 @@ function switchView(view,{keepMyWorkLink=false}={}){
     refreshDocumentAccess();
   }else if(view==='workflow-studio'){
     $('#workflow-studio-view').replaceChildren(el('p','Loading workflow studio…'));refreshStudio();
-  }else if(state)render();
+  }else if(view==='assessments')mountAssessments();
 }
 $('#show-assessments').onclick=()=>switchView('assessments');
 $('#show-modules').onclick=()=>switchView('modules');

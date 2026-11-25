@@ -197,6 +197,8 @@ function attachmentForm(path,revision,rules,remaining){
   return form;
 }
 function attachmentControls(card,path,version,revision,rules){
+  const authority=version.publicationAuthority;
+  const mayAct=authority===undefined||authority==='eligible';
   const group=add(el('div',undefined,'document-attachments'),el('h4','Attachments'));
   if(rules.manualReview&&['analyst','reviewer'].includes(actor))
     group.append(el('p','Uploads are quarantined until a separate reviewer confirms the exact file. No automatic malware scanning is configured.','hint'));
@@ -211,7 +213,7 @@ function attachmentControls(card,path,version,revision,rules){
       download.onclick=()=>downloadAttachment(rowPath+'/download',row);
       item.append(download);
     }
-    if(actor==='reviewer'&&version.status==='draft'&&row.reviewStatus==='pending'){
+    if(mayAct&&actor==='reviewer'&&version.status==='draft'&&row.reviewStatus==='pending'){
       const panel=docsPanel(item,'Review attachment '+row.name);
       panel.append(el('p','Use the SHA-256 of the original file you independently verified outside the app. This is a manual decision, not a malware scan. If you cannot verify it, reject it.','hint'));
       const field=labelled('Verified original SHA-256','sha256','','input');
@@ -220,7 +222,7 @@ function attachmentControls(card,path,version,revision,rules){
       docsForm(panel,rowPath+'/review',[field],'Release attachment',f=>({operation:'release',sha256:f.get('sha256')}),revision);
       docsForm(panel,rowPath+'/review',[],'Reject attachment',()=>({operation:'reject'}),revision);
     }
-    if(actor==='analyst'&&version.status==='draft'){
+    if(mayAct&&actor==='analyst'&&version.status==='draft'){
       const remove=button('Remove attachment '+row.name,'button','secondary');
       remove.onclick=()=>docsPost(path+'/attachments/'+row.id+'/remove',{expectedRevision:revision},data=>{
         docsData=data;renderDocs();notice('Draft attachment removed.');
@@ -230,7 +232,7 @@ function attachmentControls(card,path,version,revision,rules){
     items.append(item);
   }
   if(version.attachments.length)group.append(items);
-  if(actor==='analyst'&&version.status==='draft'){
+  if(mayAct&&actor==='analyst'&&version.status==='draft'){
     if(version.attachments.length>=rules.maxFilesPerRevision){
       group.append(el('p','This draft already has '+rules.maxFilesPerRevision+' attachments. Remove one to add another.'));
     }else{
@@ -238,6 +240,29 @@ function attachmentControls(card,path,version,revision,rules){
     }
   }
   card.append(group);
+}
+function evidenceHoldControls(card,path,edition,revision,reasons){
+  if(!localSession?.authenticated||!reasons||edition.status!=='published'||!['analyst','reviewer'].includes(actor))return;
+  const hold=edition.evidenceHold, outstanding=!!hold&&hold.status!=='released';
+  const region=add(el('section',undefined,'document-attachments'),el('h4','Evidence preservation hold'));
+  region.append(el('p',hold?.status==='release-requested'?'Hold active · release awaiting independent review':
+    outstanding?'Hold active':hold?.status==='released'?'Last hold released · evidence retained':'No outstanding hold.','hint'));
+  if(hold)region.append(el('p',reasons.titles[hold.reason]+' · placed '+hold.placedAt.slice(0,10)+
+    ' · '+hold.historyCount+' recorded hold'+(hold.historyCount===1?'':'s'),'hint'));
+  function form(action,caption){
+    const field=rightsSelect('Fictional hold reason','reason',reasons.actions[action].map(value=>({value,label:reasons.titles[value]})));
+    field.querySelector('select').setAttribute('aria-label','Fictional hold reason');
+    docsForm(docsPanel(region,caption),path+'/evidence-hold/'+action,[field],caption,f=>({
+      reason:f.get('reason'),...(action==='place'?{}:{holdId:hold.id})
+    }),revision);
+  }
+  if(actor==='analyst'&&!outstanding)form('place','Place evidence hold');
+  if(actor==='analyst'&&hold?.status==='active')form('request-release','Request hold release');
+  if(actor==='reviewer'&&hold?.status==='release-requested'){
+    form('approve-release','Approve hold release');
+    form('return-release','Keep evidence hold');
+  }
+  card.append(region);
 }
 function renderDocs(){
   const {documents,revision,targets,legacyRecords,attachmentRules}=docsData;
@@ -266,6 +291,11 @@ function renderDocs(){
       if(v.reviewNote)card.append(el('p','Review: '+v.reviewNote));
       for(const l of v.links)card.append(el('p',docsData.linkKinds[l.type]+': '+(byTarget.get(l.type+':'+l.id)??l.id),'hint'));
       const path=base+'/revisions/'+v.id;
+      const mayAct=v.publicationAuthority===undefined||v.publicationAuthority==='eligible';
+      if(v.publicationAuthority==='unattributed')card.append(el('p',
+        'Historical authorship could not be verified. This edition is read-only; author a replacement document.','hint'));
+      if(v.publicationAuthority==='contributor')card.append(el('p',
+        'You contributed to this edition. A different account must review it.','hint'));
       const output=el('pre');output.hidden=true;
       const readButton=button('View fictional text','button','secondary');
       readButton.onclick=()=>docsPost(path+'/read',{},data=>{output.textContent=data.text;output.hidden=false;notice('Document access recorded.')});
@@ -273,7 +303,8 @@ function renderDocs(){
       download.onclick=()=>docsPost(path+'/download',{},data=>{downloadDocument(data);notice('Document download recorded.')});
       card.append(readButton,download,output);
       attachmentControls(card,path,v,revision,attachmentRules);
-      if(actor==='analyst'&&v.status==='draft'){
+      evidenceHoldControls(card,path,v,revision,docsData.evidenceHoldReasons);
+      if(mayAct&&actor==='analyst'&&v.status==='draft'){
         const edit=docsPanel(card,'Edit draft');
         const fields=documentFields(targets);
         fields[0].querySelector('input').value=v.title;
@@ -286,7 +317,7 @@ function renderDocs(){
           card.append(el('p','Clear attachment quarantine or remove unavailable files before submitting this revision.','hint'));
         else docsForm(card,path+'/submit',[],'Submit for review',()=>({}),revision);
       }
-      if(actor==='reviewer'&&v.status==='review'){
+      if(mayAct&&actor==='reviewer'&&v.status==='review'){
         for(const [action,caption] of [['publish','Publish locally'],['return','Return to draft']])
           docsForm(docsPanel(card,caption),path+'/'+action,[rightsNote('Fictional review rationale')],caption,f=>Object.fromEntries(f),revision);
       }

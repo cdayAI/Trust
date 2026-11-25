@@ -108,7 +108,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id),
     id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id)}),oidc);
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
-    grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,now:isolated.now
+    grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,releaseWorkspaces:oidc?[]:isolated.requesterReleaseWorkspaces,now:isolated.now
   }):null;
   const centers=access&&isolated.trustCenters!==undefined?trustCenter.provision(isolated.trustCenters,isolated.workspaces):null;
   const staff=access&&isolated.employeeGrants!==undefined?employee.provision({
@@ -247,12 +247,13 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       if(pathname.startsWith('/api/requester/')){
         const operation=pathname.slice('/api/requester/'.length);
-        if(!portal||req.method!=='POST'||!['status','intake'].includes(operation))return send(res,404,{error:'Not found.'});
+        if(!portal||req.method!=='POST'||!['status','intake','result'].includes(operation)||
+          (operation==='result'&&!portal.resultsProvisioned))return send(res,404,{error:'Not found.'});
         if(searchParams.size)return send(res,422,{error:'The requester portal does not accept URL parameters.'});
         const body=await readBody(req);
         const grant=portal.allow(operation,body);
         const {store}=runtime(access.spaceForProvisionedGrant(grant.workspace));
-        const value=operation==='intake'?store.portalIntake(grant,body):store.portalStatus(grant);
+        const value=operation==='intake'?store.portalIntake(grant,body):operation==='result'?store.portalResult(grant):store.portalStatus(grant);
         return send(res,200,value);
       }
       if(pathname.startsWith('/api/employee/')){
@@ -323,7 +324,8 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       const scopeContext=checked=>({
         role:checked.actor,account:checked.account,generation:checked.generation,at:access.identityTime(),
         roster:access.identityRoster(checked.space.id),enabled:scopedDocuments.has(checked.space.id),
-        rightsEnabled:scopedRights.has(checked.space.id),intakeEnabled:!!portal?.enabled(checked.space.id)
+        rightsEnabled:scopedRights.has(checked.space.id),intakeEnabled:!!portal?.enabled(checked.space.id),
+        ...(portal?.releaseEnabled(checked.space.id)&&!oidc?{activeReleaseBinding:id=>portal.activeBinding(id,checked.space.id)}:{})
       });
       if(pathname==='/api/document-access'){
         if(!scopedDocuments.has(selection?.space.id))return send(res,404,{error:'Not found.'});
@@ -416,7 +418,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           {'Content-Disposition':'attachment; filename="privacy-workbench-queue.json"'}):send(res,200,queue);
       }
       if (req.method==='GET'&&pathname==='/api/governance-documents'){
-        const docs=caseOperator?store.getCaseDocuments(scopeContext(selection)):store.getDocuments(actor);
+        const docs=caseOperator?store.getCaseDocuments(scopeContext(selection)):store.getDocuments(actor,selection?.account);
         return send(res,200,caseOperator?policy.caseDocumentView(docs):docs);
       }
       if (req.method==='GET'&&pathname==='/api/vendor-monitoring') return send(res,200,store.getVendorMonitoring());
@@ -471,6 +473,13 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       if(!access&&/^\/api\/rights\/cases\/[^/]+\/(?:request|approve|reject)-extension$/.test(pathname))
         return send(res,404,{error:'Not found.'});
+      const releaseRoute=pathname.match(/^\/api\/rights\/cases\/([a-f0-9-]{36})\/result\/(draft|submit|return|approve|release)$/);
+      if(req.method==='POST'&&releaseRoute){
+        if(!selection||oidc||!portal?.releaseEnabled(selection.space.id)||searchParams.size)return send(res,404,{error:'Not found.'});
+        const body=await readBody(req),checked=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,checked.actor);
+        return send(res,200,store.changeRequesterRelease(scopeContext(checked),releaseRoute[1],releaseRoute[2],body));
+      }
       if (req.method==='GET'&&pathname==='/api/rights/cases'){
         const rights=store.getRights(selection?scopeContext(selection):undefined);
         return send(res,200,caseOperator?policy.caseOperatorView(rights):rights);

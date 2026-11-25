@@ -54,7 +54,8 @@ function view(state,params,today=new Date().toISOString().slice(0,10)){
     if(stage)task('incidents',i,...stage,i.stage==='review'?'reviewer':i.owner,i.title,incidentDueDate(i));
   }
   if(includes('vendor-monitoring'))for(const c of state.vendorMonitoring?.cases??[]){
-    const title=vendors.get(c.vendorId)?.name??'Vendor';
+    const vendor=vendors.get(c.vendorId)?.name??'Vendor';
+    const title=c.engagement?vendor+' · '+c.engagement.title:vendor;
     if(c.status==='collecting')task('vendor-monitoring',c,'collect','Collect cycle evidence and assessments',c.owner,title);
     else if(c.status==='review')task('vendor-monitoring',c,'review','Review vendor monitoring cycle','reviewer',title);
     else if(c.status==='monitoring')task('vendor-monitoring',c,'renew','Start renewal reassessment',c.owner,title,c.renewalDueDate);

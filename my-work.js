@@ -1,6 +1,7 @@
 'use strict';
 const {createHash}=require('node:crypto');
 const {view:queueView}=require('./work-queue');
+const authorship=require('./document-provenance');
 
 const supportedRoles=new Set(['analyst','reviewer','case-operator']);
 const taskToken='[a-f0-9]{64}';
@@ -25,8 +26,9 @@ function localTasks(state,actor,account){
   }
   for(const doc of state.governanceDocuments?.documents??[]){
     const revision=doc.revisions.at(-1);
-    if(revision?.status==='draft')add('governance-docs',revision,'submit','Submit document draft',revision.authoredBy);
-    if(revision?.status==='review'&&revision.authoredBy!=='reviewer')
+    if(!revision||authorship.reviewStatus(state,doc,revision,actor,account)!=='eligible')continue;
+    if(revision.status==='draft')add('governance-docs',revision,'submit','Submit document draft',revision.authoredBy);
+    if(revision.status==='review'&&revision.authoredBy!=='reviewer')
       add('governance-docs',revision,'review','Review document publication independently','reviewer');
   }
   return out;

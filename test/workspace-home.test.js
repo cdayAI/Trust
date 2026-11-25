@@ -234,3 +234,71 @@ test('Chromium home isolated: mobile assigned-only case view, workspace switch, 
   assert.equal(await admin.locator('#home-view').isHidden(),true);
   browser.end();
 });
+
+test('Chromium defers signed-in project state to assessments, retries in place, and resets it on a workspace switch',chrome,async t=>{
+  const f=await fixture(t);
+  for(const [workspace,name] of [['north','Fictional north project'],['south','Fictional south project']]){
+    const cookie=await f.login('analyst',workspace);
+    const {data}=await f.api('projects',{cookie,workspace,body:{name}});
+    if(workspace==='south')await f.api('vendors',{cookie,workspace,body:{name:'Fictional south vendor',
+      projectId:data.projects.find(row=>row.name===name).id,usesAI:false,handlesSensitiveData:false}});
+  }
+  const browser=await f.browser(),p=await browser.page();
+  const home=p.locator('#home-view'),assessment=p.locator('#assessment-view');
+  const stateRequests=[];
+  let release,requested;
+  const hold=new Promise(r=>{release=r;});
+  const secondRequest=new Promise(r=>{requested=r;});
+  await p.route(url=>url.pathname==='/api/state',async route=>{
+    const workspace=new URL(route.request().url()).searchParams.get('workspace');
+    stateRequests.push(workspace);
+    if(stateRequests.length===1)return route.fulfill({status:503,contentType:'application/json',body:'{"error":"Synthetic temporary state fault"}'});
+    if(stateRequests.length===2){requested();await hold;}
+    return route.continue();
+  });
+  await browser.sign(p,'analyst');
+  await h(home,'My next actions').waitFor();
+  assert.deepEqual(stateRequests,[]);
+  await b(home,'Refresh home summary').click();
+  await h(home,'My next actions').waitFor();
+  assert.deepEqual(stateRequests,[]);
+
+  await b(p,'Assessments').click();
+  await h(assessment,'Assessments unavailable').waitFor();
+  assert.deepEqual(stateRequests,['north']);
+  assert.equal(await b(assessment,'Create project').isDisabled(),true);
+  assert.equal(await p.locator('#workbench').isVisible(),true);
+  await b(assessment,'Retry assessments').click();
+  try{
+    await secondRequest;
+    await see(assessment,'Loading assessments…');
+    assert.equal(await b(assessment,'Create project').isDisabled(),true);
+    const loaded=p.waitForResponse(response=>new URL(response.url()).pathname==='/api/state'&&response.ok());
+    await b(p,'Home').click();
+    await h(home,'My next actions').waitFor();
+    release();
+    await (await loaded).finished();
+  }finally{release();}
+  assert.equal(await assessment.isHidden(),true);
+  await h(home,'My next actions').waitFor();
+  await b(p,'Assessments').click();
+  await h(assessment,'Fictional north project').waitFor();
+  assert.deepEqual(stateRequests,['north','north']);
+  await p.getByLabel('Project name',{exact:true}).fill('Fictional project added after assessment retry');
+  await b(p,'Create project').click();
+  await h(assessment,'Fictional project added after assessment retry').waitFor();
+
+  await p.getByLabel('Workspace',{exact:true}).selectOption('south');
+  await b(p,'Switch workspace').click();
+  await h(home,'My next actions').waitFor();
+  assert.deepEqual(stateRequests,['north','north']);
+  await b(home,'Open shared queue').click();
+  const queue=p.locator('#queue-view');
+  const target=queue.getByRole('button',{name:/^Open record: Fictional south vendor/});
+  await target.click();
+  await h(assessment,'Fictional south project').waitFor();
+  assert.equal(await assessment.locator('.assessment').evaluate(node=>node===document.activeElement),true);
+  assert.deepEqual(stateRequests,['north','north','south']);
+  assert.equal(await b(assessment,'Fictional north project').count(),0);
+  browser.end();
+});

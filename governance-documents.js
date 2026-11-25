@@ -2,6 +2,8 @@
 const {createHash,randomUUID}=require('node:crypto');
 const {maxBytes:largePdfMaxBytes}=require('./attachment-binary-batch');
 const attachments=require('./governance-document-attachments');
+const evidenceHolds=require('./evidence-holds');
+const authorship=require('./document-provenance');
 const docsOf=s=>s.governanceDocuments??{revision:0,documents:[]};
 const kinds=['policy','evidence'];
 const uuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
@@ -28,7 +30,7 @@ function candidates(s){
   ];
 }
 function redactVersion(version,manualReview){
-  const {content,attachments:rows,...safe}=version;
+  const {content,attachments:rows,accountProvenance,...safe}=version;
   return {...safe,attachments:(rows??[]).map(row=>attachments.metadata(row,manualReview))};
 }
 function permitted(s,doc,v,actor){
@@ -37,13 +39,18 @@ function permitted(s,doc,v,actor){
   if(v.status!=='published')return false;
   return doc.kind==='policy'||(doc.kind==='evidence'&&v.links.length>0&&v.links.every(l=>l.type==='rights-case'&&s.rightsCases?.some(r=>r.id===l.id&&r.owner===actor)));
 }
-function view(s,actor,capabilities){
+function view(s,actor,capabilities,account){
   if(!s.actors.some(x=>x.id===actor))issue(403,'ACTOR_REQUIRED','Select a known local demo identity.');
   const book=docsOf(s);
   const manualReview=attachments.queryPolicy(book);
   const administrator=actor==='analyst'||actor==='reviewer';
+  const holds=administrator?evidenceHolds.byEdition(book):undefined;
   const documents=book.documents.map(doc=>{
-    const revisions=doc.revisions.filter(v=>permitted(s,doc,v,actor)).map(v=>redactVersion(v,manualReview));
+    const revisions=doc.revisions.filter(v=>permitted(s,doc,v,actor)).map(v=>{
+      const projection=redactVersion(v,manualReview),authority=authorship.reviewStatus(s,doc,v,actor,account);
+      const hold=holds?.get(evidenceHolds.key(doc.id,v.id));
+      return {...projection,...(hold?{evidenceHold:hold}:{}),...(authority?{publicationAuthority:authority}:{})};
+    });
     if(!revisions.length)return null;
     const currentRevisionId=revisions.findLast(v=>v.status==='published')?.id??null;
     return {...doc,revisions,currentRevisionId};
@@ -51,6 +58,7 @@ function view(s,actor,capabilities){
   const attachmentRules=manualReview?{...attachments.rules,manualReview:true,
     ...(capabilities?.largePdf===true&&actor==='analyst'?{largePdfMaxBytes}:{})}:attachments.rules;
   return {revision:administrator?book.revision:null,kinds,linkKinds,attachmentRules,documents,targets:administrator?candidates(s):[],
+    ...(administrator?{evidenceHoldReasons:{titles:evidenceHolds.titles,actions:evidenceHolds.actions}}:{}),
     legacyRecords:administrator?(s.moduleRecords??[]).filter(x=>x.moduleId==='policies'):[]};
 }
 function verifyLinks(s,kind,links,allowed){
@@ -76,6 +84,7 @@ function versionFields(s,kind,body){
 const actionKeys={
   create:['kind','title','content','links'],revise:['title','content','links'],edit:['title','content','links'],
   submit:[],publish:['note'],return:['note'],read:[],download:[],
+  'evidence-hold':['reason','holdId'],
   'attachment-upload':['filename','mediaType','data'],'attachment-upload-batch':['files'],'attachment-upload-binary':['files'],'attachment-review':['operation','sha256'],'attachment-remove':[],'attachment-download':[]
 };
 function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities){
@@ -85,6 +94,7 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
   let action=parts.length===2?'create':parts.length===4&&part==='revise'?'revise':null;
   if(part==='revisions'){
     if(parts.length===6&&['edit','submit','publish','return','read','download'].includes(operation))action=operation;
+    if(operation==='evidence-hold'&&parts.length===7&&Object.hasOwn(evidenceHolds.actions,attachmentId))action='evidence-hold';
     if(operation==='attachments'&&parts.length===6)action='attachment-upload';
     if(operation==='attachments'&&parts.length===7&&attachmentId==='batch')action='attachment-upload-batch';
     if(operation==='attachments'&&parts.length===7&&attachmentId==='binary-batch')action='attachment-upload-binary';
@@ -114,11 +124,23 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
     }
     if(!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0)issue(422,'REVISION_REQUIRED','Provide the current document workspace revision.');
     if(body.expectedRevision!==book.revision)issue(409,'STALE_REVISION','The document workspace changed. Reload before retrying.');
+    if(action==='evidence-hold'){
+      if(!doc||!v)issue(404,'RECORD_NOT_FOUND','That document revision was not found.');
+      if(v.status!=='published')issue(409,'EVIDENCE_HOLD_EDITION','Holds can only be placed on an exact published edition.');
+      verifyText(v);
+      verifyLinks(s,doc.kind,v.links);
+      for(const row of v.attachments??[])attachments.verifyStored(row,manualReview);
+      const auditDetails=evidenceHolds.transition(book,doc,v,attachmentId,actor,account,body,new Date().toISOString());
+      book.revision++;
+      audit('evidence-hold.'+attachmentId,doc,v,{...auditDetails,revision:book.revision});
+      return;
+    }
     const review=['publish','return'].includes(action);
     const attachmentReview=action==='attachment-review';
     const reviewer=review||attachmentReview;
     if(actor!==(reviewer?'reviewer':'analyst'))issue(403,reviewer?'INDEPENDENT_REVIEW_REQUIRED':'AUTHOR_REQUIRED',
       reviewer?'A separate demo reviewer must decide.':'Only the demo author can take this action.');
+    if(account!==undefined&&!authorship.isAccount(account))issue(403,'DOCUMENT_ACCOUNT_REQUIRED','An authenticated local staff account is required.');
     const now=new Date().toISOString();
     let d=doc,row=v;
     if(action==='create'||action==='revise'){
@@ -130,17 +152,22 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
         if(d.revisions.at(-1).status!=='published')issue(409,'DRAFT_EXISTS','Finish the current revision before starting the next.');
       }
       row={id:randomUUID(),number:d.revisions.length+1,...versionFields(s,d.kind,body),status:'draft',authoredBy:actor,createdAt:now,
-        attachments:[],updatedAt:now,publishedAt:null,publishedBy:null,reviewNote:null};
+        attachments:[],updatedAt:now,publishedAt:null,publishedBy:null,reviewNote:null,
+        ...(account!==undefined?{accountProvenance:authorship.start(account)}:{})};
       d.revisions.push(row);
       if(action==='create')book.documents.push(d);
     }else{
       if(!doc||!v)issue(404,'RECORD_NOT_FOUND','That document revision was not found.');
       if(v.status==='published')issue(409,'IMMUTABLE_REVISION','Published revisions cannot be changed.');
       if(v.status!==(review?'review':'draft'))issue(409,'OUT_OF_ORDER','This action is unavailable for the current revision stage.');
+      const record=account!==undefined?authorship.acting(s,doc,v,actor,account,
+        attachmentReview?'ATTACHMENT_INDEPENDENT_REVIEW':undefined):null;
+      if(record&&!reviewer)authorship.contribute(record,account);
       if(attachmentReview){
         const target=v.attachments?.find(row=>row.id===attachmentId);
         if(!target)issue(404,'ATTACHMENT_NOT_FOUND','Attachment not found in this document revision.');
         const disposition=attachments.decide(target,manualReview,account,body);
+        if(record)v.accountProvenance=record;
         book.revision++;v.updatedAt=now;
         audit(action,doc,v,{attachmentId:target.id,disposition,version:v.number,revision:book.revision});
         return;
@@ -152,6 +179,7 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
           issue(404,'ATTACHMENT_PROFILE_DISABLED','The larger PDF upload profile is unavailable.');
         const rows=action==='attachment-upload'?[attachments.attachment(body,book,v)]:attachments.batch(body.files,book,v,binary);
         (v.attachments??=[]).push(...(manualReview?rows.map(row=>attachments.stage(row,account)):rows));
+        if(record)v.accountProvenance=record;
         book.revision++;v.updatedAt=now;
         for(const row of rows)audit('attachment-upload',doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
         return;
@@ -160,6 +188,7 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
         const at=v.attachments?.findIndex(x=>x.id===attachmentId)??-1;
         if(at<0)issue(404,'ATTACHMENT_NOT_FOUND','Attachment not found in this document revision.');
         const [row]=v.attachments.splice(at,1);
+        if(record)v.accountProvenance=record;
         book.revision++;v.updatedAt=now;
         audit(action,doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
         return;
@@ -169,14 +198,23 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
         verifyLinks(s,doc.kind,v.links);
         for(const target of v.attachments??[])attachments.verifyStored(target,manualReview);
       }
-      if(action==='submit'){v.status='review';v.reviewNote=null}
+      if(action==='submit'){
+        v.status='review';v.reviewNote=null;
+        if(record)record.submittedBy=account;
+      }
       if(review){
         if(v.authoredBy===actor)issue(403,'INDEPENDENT_REVIEW_REQUIRED','The author cannot review the same revision.');
         const reviewNote=required(body.note,'Fictional review rationale',1000);
         v.reviewNote=reviewNote;
-        if(action==='return')v.status='draft';
-        else Object.assign(v,{status:'published',publishedAt:now,publishedBy:actor});
+        if(action==='return'){
+          v.status='draft';
+          if(record)record.submittedBy=null;
+        }else{
+          Object.assign(v,{status:'published',publishedAt:now,publishedBy:actor});
+          if(record)record.publishedBy=account;
+        }
       }
+      if(record)v.accountProvenance=record;
       v.updatedAt=now;
     }
     book.revision++;
@@ -240,6 +278,7 @@ function verifyEvidenceSnapshot(s){
       }
     }
   }
+  evidenceHolds.verify(book);
 }
 function enableManualReview(state){
   const book=docsOf(state);

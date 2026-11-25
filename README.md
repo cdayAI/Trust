@@ -234,6 +234,9 @@ from a receipt number, browser operator session, or query parameter. Codes
 expire and are neither persisted in workbench data nor sent in URLs. Clearing
 the code removes it from the page; it is not saved in browser storage.
 
+The full local release can explicitly deliver an approved fictional access example
+to the original synthetic code. See [fictional requester result delivery](REQUESTER-RESULT.md).
+
 The intake is recorded once in the regular rights queue. An internal owner and
 separate reviewer still control the simulated case lifecycle. The requester
 receives only a receipt, date, selected request type, and coarse status.

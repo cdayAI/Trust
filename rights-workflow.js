@@ -64,7 +64,7 @@ function portalModel(state,grant,event,request){
     if(!row){
       row=openCase(state,'synthetic-requester',{kind,owner:'analyst',intake,
         summary:'Synthetic portal intake for '+grant.alias+'. No contact details or documents.',source:'synthetic-portal'},event);
-      entry={grantId:grant.id,caseId:row.id,receipt:randomUUID()};
+      entry={grantId:grant.id,caseId:row.id,receipt:randomUUID(),...(grant.releaseBinding?{resultBinding:grant.releaseBinding}:{})};
       (state.requesterReceipts??=[]).push(entry);
       event(state,'synthetic-requester','rights.case.portal-receipt-issued',null,row.id,{source:'synthetic-portal'});
       created=true;

@@ -60,6 +60,8 @@ route('POST','(?:projects|vendors|assessments/'+key+'/(?:save|submit|approve|rej
 route('GET','rights/deadline-policy',operators);
 route('POST','rights/intake-form/(?:save|submit)',['analyst']);
 route('POST','rights/intake-form/(?:return|publish)',['reviewer']);
+route('POST','rights/cases/'+uuid+'/result/(?:draft|submit)',['analyst']);
+route('POST','rights/cases/'+uuid+'/result/(?:return|approve|release)',['reviewer']);
 route('POST','rights/deadline-policy/(?:draft|submit)',['analyst']);
 route('POST','rights/deadline-policy/(?:return|publish)',['reviewer']);
 route('POST','rights/cases/'+uuid+'/request-extension',['analyst','case-operator']);
@@ -89,6 +91,8 @@ route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:read|d
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments(?:/batch|/binary-batch|/'+uuid+'/remove)?',operators);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments/'+uuid+'/download',rights);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments/'+uuid+'/review',['reviewer']);
+route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/evidence-hold/(?:place|request-release)',['analyst']);
+route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/evidence-hold/(?:approve-release|return-release)',['reviewer']);
 route('POST','trust-center/(?:privacy|rights|controls)/(?:draft|submit|approve|return|publish|withdraw)',operators);
 route('POST','employee-attestations',operators);
 route('POST','training/(?:create|edit|submit|return|publish|assign|reset)',operators);

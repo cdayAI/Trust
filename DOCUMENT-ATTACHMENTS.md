@@ -153,9 +153,30 @@ reject missing or orphan payloads, and verify retention before enabling GC.
 Do not lift request/workspace bounds before that path and snapshot-load
 tests are available. No external storage or malware scanning is configured.
 
+## Exact published evidence holds
+
+In an isolated workspace, the **Evidence preservation hold** card appears on a
+published document edition for its analyst and reviewer. The analyst can place
+a hold and request release with an approved reason. Pending release remains
+an active hold. A separate signed-in reviewer must approve release or return
+the request to keep preservation active; the placer or requester cannot decide
+after a role change. Requests name the exact document, edition, hold ID, and
+current workspace revision. A newer edition does not inherit an old hold.
+A workspace retains at most 500 hold history entries; there is no automatic
+expiry.
+
+The hold is pinned to the edition text digest, typed links, and its attachments'
+IDs and digests. Status and role-scoped audit actions survive JSON restart and
+SQLite backup/restore; recovery rejects inconsistent bindings or transitions.
+A hold neither grants access nor bypasses quarantine. Placing, returning or
+releasing it does not edit, unpublish, or delete the published edition or any
+bytes. No purge/disposition endpoint or policy enforcement is provided, and
+this local mechanism does not apply to external stores, old backups, or any
+legal preservation obligation.
+
 Run focused HTTP and browser journeys:
 
 ```sh
-node --test test/governance-document-attachments.test.js test/attachment-binary-batch.test.js
+node --test test/governance-document-attachments.test.js test/attachment-binary-batch.test.js test/evidence-holds.test.js
 RUN_BROWSER_SMOKE=1 CHROMIUM_PATH=/path/to/chromium npm test
 ```

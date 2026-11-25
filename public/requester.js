@@ -67,13 +67,31 @@ function show(data){
     result.replaceChildren(make('h2',data.status),make('p','Synthetic request type: '+data.requestType),
       make('p','Received (UTC): '+data.receivedDate),make('p','Receipt: '+data.receipt));
     if(data.intakeFormVersion)result.append(make('p','Pinned fictional form version: '+data.intakeFormVersion));
+    if(data.resultAvailable){
+      const open=make('button','View approved fictional result');open.type='button';
+      open.onclick=async()=>{
+        if(!localCode||open.disabled)return;
+        const current=++epoch;open.disabled=true;
+        try{
+          const payload=await call('result',{code:localCode});
+          if(current!==epoch)return;
+          if(payload.status!=='available'){show({...data,resultAvailable:false});return;}
+          const section=make('section'),list=make('ul');
+          section.append(make('h3',payload.result.title),make('p','Fictional examples only. No actual information was released.'),list);
+          for(const {label,count} of payload.result.sections)list.append(make('li',label+': '+count));
+          open.replaceWith(section);
+        }catch(error){if(current===epoch){result.replaceChildren(make('p',error.message));localCode=undefined;clear.hidden=true;}}
+        finally{open.disabled=false;}
+      };
+      result.append(open);
+    }
     const refresh=make('button','Refresh status');refresh.type='button';refresh.className='secondary';
     refresh.onclick=()=>check(refresh);result.append(refresh);
   }
 }
 async function check(trigger){
   if(!localCode||trigger.disabled)return;
-  const current=epoch;trigger.disabled=true;
+  const current=++epoch;trigger.disabled=true;
   try{const data=await call('status',{code:localCode});if(current===epoch)show(data)}
   catch(error){if(current===epoch){result.replaceChildren(make('p',error.message));localCode=undefined;clear.hidden=true}}
   finally{trigger.disabled=false}

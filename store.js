@@ -11,6 +11,7 @@ const forms = require('./assessment-questionnaire');
 const assessmentConfig=require('./assessment-config');
 const processingRegister=require('./processing-register');
 const rights = require('./rights-workflow');
+const requesterRelease=require('./requester-release');
 const deadlines = require('./rights-deadline-policy');
 const requesterIntakeForm=require('./requester-intake-form');
 const incidents = require('./incident-workflow');
@@ -77,18 +78,20 @@ function createVendor(state, actor, body, byId=id()) {
   createVendorAssessments(state,row);
   return row;
 }
-function createVendorAssessments(state,row,cycleId){
+function createVendorAssessments(state,row,cycleId,engagementId){
   const created=[];
   for (const type of row.usesAI?['privacy','ai']:['privacy']) {
     const a={id:id(),vendorId:row.id,projectId:row.projectId,type,status:'draft',answers:{summary:'',safeguards:''},submittedBy:null,decisionBy:null,decisionReason:null,revision:0,...(assessmentConfig.assignment(state,type,row)??forms.assignment(type,row))};
     if(cycleId)a.monitoringCycleId=cycleId;
+    if(engagementId)a.vendorEngagementId=engagementId;
     const workflowEvent=assessmentFlow.start(state,a);
     state.assessments.push(a);created.push(a.id);
-    event(state,'system','assessment.created',row.projectId,a.id,{vendorId:row.id,type,workflowInstanceId:a.workflowInstanceId,workflowDefinitionVersion:a.workflowDefinitionVersion,workflowEventId:workflowEvent.id,questionnaireId:a.questionnaire.id,questionnaireVersion:a.questionnaire.version,routing:{...a.routing},...(cycleId?{monitoringCycleId:cycleId}:{})});
+    event(state,'system','assessment.created',row.projectId,a.id,{vendorId:row.id,type,workflowInstanceId:a.workflowInstanceId,workflowDefinitionVersion:a.workflowDefinitionVersion,workflowEventId:workflowEvent.id,questionnaireId:a.questionnaire.id,questionnaireVersion:a.questionnaire.version,routing:{...a.routing},...(cycleId?{monitoringCycleId:cycleId}:{}),...(engagementId?{vendorEngagementId:engagementId}:{})});
   }
   return created;
 }
-function actionAssessment(state, actor, a, action, body) {
+function actionAssessment(state, actor, a, action, body, account) {
+  const identity=account??actor;
   if(!['save','submit','approve','reject'].includes(action)) fail(404,'Action not found.');
   function refuse(status,message,code,workflowEventId=null) {
     event(state,actor,'assessment.refused',a.projectId,a.id,{action,code,workflowEventId,workflowInstanceId:a.workflowInstanceId,
@@ -98,7 +101,8 @@ function actionAssessment(state, actor, a, action, body) {
   if(!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0) refuse(422,'Provide the current assessment revision.','INVALID_EXPECTED_REVISION');
   if(body.expectedRevision!==a.revision) refuse(409,'This assessment changed. Reload before retrying.','STALE_REVISION');
   const details=()=>({type:a.type,revision:a.revision,workflowInstanceId:a.workflowInstanceId,
-    workflowDefinitionVersion:a.workflowDefinitionVersion,workflowRevision:a.workflowRevision,questionnaireId:a.questionnaire.id,questionnaireVersion:a.questionnaire.version,routing:{...a.routing}});
+    workflowDefinitionVersion:a.workflowDefinitionVersion,workflowRevision:a.workflowRevision,questionnaireId:a.questionnaire.id,questionnaireVersion:a.questionnaire.version,routing:{...a.routing},
+    ...(a.vendorEngagementId?{vendorEngagementId:a.vendorEngagementId,monitoringCycleId:a.monitoringCycleId}:{})});
   function transition(fields) {
     const result=assessmentFlow.advance(state,a,actor,action,fields);
     if(!result.ok) {
@@ -109,6 +113,8 @@ function actionAssessment(state, actor, a, action, body) {
   }
   if(action==='save'||action==='submit') {
     if(actor!=='analyst') refuse(403,'Only the intake analyst can edit or submit an assessment.','ROLE_REQUIRED');
+    if(a.vendorEngagementId&&state.vendorMonitoring?.cases.find(x=>x.id===a.vendorEngagementId)?.ownerAccount!==identity)
+      refuse(403,'Only the engagement owner account can change this assessment.','ENGAGEMENT_OWNER_REQUIRED');
     if(!['draft','rejected'].includes(a.status)) refuse(409,'Only draft or returned assessments can be edited or submitted.','TRANSITION_NOT_AVAILABLE');
     const flat=Object.fromEntries(['summary','safeguards'].filter(k=>Object.hasOwn(body,k)).map(k=>[k,body[k]]));
     if(Object.hasOwn(body,'answers')&&(Object.keys(flat).length||body.answers===null)) refuse(422,'Provide a single answers object.','INVALID_ANSWERS');
@@ -120,19 +126,21 @@ function actionAssessment(state, actor, a, action, body) {
     a.answers=answers;
     if(action==='submit') {
       a.submittedBy=actor;
+      if(a.vendorEngagementId){a.submittedByAccount=identity;a.decisionByAccount=null;}
       a.decisionBy=null;
       a.decisionReason=null;
     }
     event(state,actor,action==='submit'?'assessment.submitted':'assessment.saved',a.projectId,a.id,{...details(),answers:{...answers},workflowEventId});
     return;
   }
-  if(actor!=='reviewer'||actor===a.submittedBy) refuse(403,'An independent reviewer must decide this assessment.','ROLE_REQUIRED');
+  if(actor!=='reviewer'||actor===a.submittedBy||a.vendorEngagementId&&identity===a.submittedByAccount) refuse(403,'An independent reviewer must decide this assessment.','ROLE_REQUIRED');
   if(a.status!=='in_review') refuse(409,'Only a submitted assessment can be decided.','TRANSITION_NOT_AVAILABLE');
   const reason=str(body.reason,'Decision reason',2000,false);
   const workflowEventId=transition(reason?{reason}:{});
   a.revision++;
   a.decisionReason=reason;
   a.decisionBy=actor;
+  if(a.vendorEngagementId)a.decisionByAccount=identity;
   event(state,actor,action==='approve'?'assessment.approved':'assessment.rejected',a.projectId,a.id,{...details(),reason,submittedBy:a.submittedBy,workflowEventId});
 }
 function actionHandoff(state, actor, row, action) {
@@ -231,6 +239,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       persist(migrated);state=migrated;
     }
     assessmentConfig.verifyBook(state);
+    vendorMonitoring.verify(state);
     for(const a of state.assessments){
       if(a.routing?.id?.startsWith('configured-'))assessmentConfig.verifyPinned(state,a);else forms.verify(a);
       assessmentFlow.instanceFor(state,a);
@@ -257,7 +266,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {fixtureMigrationReceipt,requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,auditRemediation:privateAuditRemediation,...safe}=state;
+    const {fixtureMigrationReceipt,requesterReceipts,requesterReleases,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,auditRemediation:privateAuditRemediation,...safe}=state;
     if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,requesterIntake,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
@@ -275,6 +284,10 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     const delegation=rightsCaseScope.settings(snapshot,context);
     const intakeSettings=requesterIntakeForm.settings(snapshot,context);
     if(!['analyst','reviewer'].includes(context?.role))model.cases=model.cases.map(({requesterIntake,...row})=>row);
+    else if(context.activeReleaseBinding)model.cases=model.cases.map(row=>{
+      const resultDelivery=requesterRelease.presentation(snapshot,row,context);
+      return resultDelivery?{...row,resultDelivery}:row;
+    });
     return {...model,...(delegation?{delegation}:{}),...(intakeSettings?{intakeSettings}:{})};
   }
   const documentCapabilities={largePdf:!!storage&&largePdf};
@@ -361,7 +374,21 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     },
     trustCenterView:path=>trustCenter.view(state,path),
     trustCenterVisitor:()=>trustCenter.visitor(state),
-    portalStatus:grant=>rights.portalModel(state,grant,event).value,
+    portalStatus:grant=>{
+      const status=rights.portalModel(state,grant,event).value;
+      return requesterRelease.publicResult(state,grant).status==='available'?{...status,resultAvailable:true}:status;
+    },
+    portalResult:grant=>requesterRelease.publicResult(state,grant),
+    changeRequesterRelease(ctx,id,action,body){
+      requireCurrentOperatorSession(ctx);
+      const next=structuredClone(state);
+      requesterRelease.change(next,id,action,ctx,body,(snapshot,role,eventName,project,target,details)=>{
+        event(snapshot,role,eventName,project,target,details);
+        snapshot.audit.at(-1).account=ctx.account;
+      });
+      persist(next);state=next;
+      return projectRights(state,ctx);
+    },
     portalIntake(grant,request){
       if(typeof request.kind!=='string')fail(422,'Select a synthetic request type.');
       const next=structuredClone(state);
@@ -372,7 +399,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     previewDiscovery:(actor,body,account)=>discovery.preview(state,actor,body,discoveryScope(account)),
     getState:()=>state,
     publicState,
-    getDocuments:actor=>documents.view(state,actor,documentCapabilities),
+    getDocuments:(actor,account)=>documents.view(state,actor,documentCapabilities,account),
     getCaseDocuments(ctx){
       requireCurrentOperatorSession(ctx);
       if(ctx.enabled)return documentScope.list(state,ctx);
@@ -517,7 +544,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       } else if (parts[0]==='modules') {
         modules.change(next,parts,actor,body,event);
       } else if (parts.length===3 && parts[0]==='assessments') {
-        try {actionAssessment(next,actor,find(next,'assessments',parts[1]),parts[2],body);}
+        try {actionAssessment(next,actor,find(next,'assessments',parts[1]),parts[2],body,account);}
         catch(error) {
           if(error.persistRefusal)commit();
           throw error;
@@ -527,12 +554,12 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       } else fail(404,'Endpoint not found.');
       commit();
       if(rightsContext&&!result)return projectRights(state,rightsContext);
-      return result??(parts[0]==='modules'?modules.model(state):program===documents?documents.view(state,actor,documentCapabilities):
+      return result??(parts[0]==='modules'?modules.model(state):program===documents?documents.view(state,actor,documentCapabilities,account):
         program?program.view(state,actor,account):publicState());
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['openAssessmentIncident','changeRequesterIntakeForm','pinReportRun','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['openAssessmentIncident','changeRequesterRelease','changeRequesterIntakeForm','pinReportRun','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name!=='identityMembership')state=storage.read(workbench)??fresh();

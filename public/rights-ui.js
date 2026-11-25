@@ -130,6 +130,31 @@ function requesterIntakePanel(model){
   }
   return section;
 }
+function renderRequesterResult(card,row){
+  const model=row.resultDelivery;
+  if(!model)return;
+  const panel=add(el('details'),el('summary','Fictional requester result'),
+    el('p','Stage: '+model.stage.replaceAll('-',' ')),
+    el('p','Only fixed fictional categories and counts can appear. Approval alone does not release anything.','hint'));
+  if(model.preview)panel.append(el('h4','Redacted preview · version '+model.version),
+    add(el('ul'),...model.preview.sections.map(item=>el('li',item.label+': '+item.count))));
+  const root=rightsPath+'/'+encodeURIComponent(row.id)+'/result/';
+  const revision=()=>({expectedRevision:model.version,digest:model.digest});
+  if(model.actions.includes('draft')){
+    const options=model.selections.map(({id,label})=>({value:id,label}));
+    rightsForm(panel,root+'draft',[rightsSelect('Fictional result projection','selection',options,model.selection)],
+      ({selection})=>({expectedRevision:model.version,selection}),'Save redacted result draft');
+  }
+  const labels={submit:'Submit exact result for review',approve:'Approve this exact result',return:'Return result for changes'};
+  for(const action of ['submit','approve','return'])
+    if(model.actions.includes(action))rightsForm(panel,root+action,[],revision,labels[action]);
+  if(model.actions.includes('release')){
+    const confirmation=el('input');confirmation.type='checkbox';confirmation.required=true;
+    const label=add(el('label'),confirmation,document.createTextNode(' Confirm release to the original synthetic code.'));
+    rightsForm(panel,root+'release',[label],()=>({...revision(),confirm:true}),'Release approved result locally');
+  }
+  card.append(panel);
+}
 function renderRights(){
   const {cases,kinds,owners,policy,legacyRecords,delegation,intakeSettings}=rightsData;
   const ownerName=id=>state?.actors.find(o=>o.id===id)?.name??owners.find(o=>o.id===id)?.name??id;
@@ -155,6 +180,7 @@ function renderRights(){
       el('p','Identity: '+row.identity.status.replaceAll('-',' ')),el('p',row.summary));
     card.id='work-record-'+row.id;
     renderRightsDeadlineCase(card,row);
+    renderRequesterResult(card,row);
     if(row.requesterIntake){
       const pin=add(el('details'),el('summary','Requester form version '+row.requesterIntake.version));
       const answers=el('dl');
