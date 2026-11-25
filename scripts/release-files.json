@@ -220,6 +220,7 @@
   "test/maturity-planning.test.js",
   "test/mvw-design.test.js",
   "test/my-work.test.js",
+  "test/remediation-my-work.test.js",
   "test/operational-health.test.js",
   "test/operator-api.test.js",
   "test/processing-register.test.js",

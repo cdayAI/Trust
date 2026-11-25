@@ -34,9 +34,12 @@ function newestFor(state,controlId){return (state.riskControls?.tests??[]).findL
 function independentTest(test){
   return !!(test?.reviewStatus==='accepted'&&test.reviewedAt&&test.recordedByAccount&&test.reviewedByAccount&&test.recordedByAccount!==test.reviewedByAccount);
 }
+function acceptableRetest(test,row){
+  return !!(test?.outcome==='pass'&&independentTest(test)&&test.recordedAt>=row.proofAfter);
+}
 function proof(state,row,id){
   const test=newestFor(state,row.finding.controlId);
-  if(!test||test.id!==id||test.outcome!=='pass'||!independentTest(test)||test.recordedAt<row.proofAfter)
+  if(!acceptableRetest(test,row)||test.id!==id)
     fail(422,'REMEDIATION_RETEST_REQUIRED','Select the latest independently accepted passing retest on this exact control, recorded after the action began.');
   return {id:test.id,controlId:test.controlId,outcome:test.outcome,evidenceReference:test.evidenceReference,
     recordedAt:test.recordedAt,reviewedAt:test.reviewedAt,recordedBy:test.recordedByAccount,reviewedBy:test.reviewedByAccount};
@@ -137,4 +140,31 @@ function change(state,parts,actor,body,event,_unused,account,{now=Date.now()}={}
   event(state,actor,'audit-remediation.'+op,null,row.id,{findingId:row.finding.id,auditId:row.finding.planId,revision:row.revision,
     actor:identity,status:row.status,attempt:row.attempts.at(-1)?.number??null});
 }
-module.exports={view,change,report};
+// Personal actions only. Never copy finding titles, audit prose, results, proof contents or identities into list metadata.
+function personalWork(state,{actor,account,asOf}){
+  if(!['analyst','reviewer'].includes(actor)||!records(state).length)return [];
+  const active=new Map(findings(state).map(f=>[f.id,f]));
+  const tests=new Map((state.riskControls?.tests??[]).map(test=>[test.controlId,test]));
+  const tasks=[];
+  for(const row of records(state)){
+    const finding=active.get(row.finding.id);
+    if(!finding||finding.planId!==row.finding.planId||finding.controlId!==row.finding.controlId)continue;
+    const latest=tests.get(finding.controlId),last=row.attempts.at(-1);
+    let stage,label;
+    if(actor==='analyst'&&row.owner===account&&['open','returned'].includes(row.status)){
+      const available=acceptableRetest(latest,row)&&!row.attempts.some(a=>a.proof.id===latest.id);
+      stage=available?'submit':'prepare';
+      label=available?'Submit corrective retest':'Prepare corrective retest';
+    }else if(actor==='reviewer'&&row.owner!==account&&row.status==='in_review'&&last&&!last.decision){
+      const fresh=latest?.id===last.proof.id&&acceptableRetest(latest,row);
+      stage=fresh?'review':'return';
+      label=fresh?'Review corrective closure independently':'Return superseded corrective evidence';
+    }else continue;
+    const timing=row.dueDate<asOf?'overdue':row.dueDate===asOf?'due-today':'upcoming';
+    tasks.push({id:JSON.stringify(['audit-remediation',row.id,row.revision,stage,latest?.id,latest?.reviewStatus]),
+      workflow:'audit-management',owner:actor,label,title:'Audit corrective action',dueDate:row.dueDate,timing,
+      destination:{view:'audit-management',recordId:row.id}});
+  }
+  return tasks;
+}
+module.exports={view,change,report,personalWork};

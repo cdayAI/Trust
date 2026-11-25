@@ -14,9 +14,11 @@ function renderAuditRemediation(findings){
   const identity=localSession?.account??actor;
   for(const finding of findings){
     const row=finding.action;
-    const item=add(el('div',undefined,'module-record'),el('h5',finding.control+' · '+finding.severity+' finding'),
-      el('p','Proposed in audit: '+finding.proposedAction,'hint'));
-    item.id='remediation-'+finding.id;
+    const name=el('h5',finding.control+' · '+finding.severity+' finding');
+    name.id='remediation-title-'+finding.id;
+    const item=add(el('article',undefined,'module-record'),name,el('p','Proposed in audit: '+finding.proposedAction,'hint'));
+    item.id=row?'work-record-'+row.id:'remediation-'+finding.id;
+    item.setAttribute('aria-labelledby',name.id);
     if(!row){
       item.append(el('p','No corrective action assigned.','hint'));
       if(actor==='analyst'){

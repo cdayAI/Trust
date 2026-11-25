@@ -15,7 +15,7 @@ gain access to these operator tasks. Demo-mode identity switches do not grant
 access to My work.
 
 The scoped read model derives the seven existing workflow queues, plus audit
-plans and document review, from current records. It avoids a parallel task
+plans, owned corrective actions, independent corrective closure review, and document review, from current records. It avoids a parallel task
 store. When a record advances or is transferred, use **Refresh my work** to
 see the new next action. No deadline is guessed for a workflow that doesn't
 have one. Future multi-assignee identity and standalone workflow-studio tasks
@@ -28,6 +28,16 @@ and focusing the record. A resolved link does not grant any additional record
 rights beyond the underlying workflow access policy. Old and out-of-scope
 links return the same unavailable response. There is no export or audit link
 in the personal view.
+
+Audit corrective entries use fixed generic labels instead of findings,
+audit titles, evidence or action notes. Only the recorded owner account can
+receive preparation or submission work. The broad independent reviewer seat
+can review a pending closure or return superseded evidence; restricted
+document-review seats cannot use this view. A new eligible retest, return,
+closure or reopening changes the applicable task and invalidates old links.
+The link opens and focuses the exact corrective action in Audit management,
+not merely the parent plan. None of these tasks are added to the general
+queue or sent as notifications.
 
 ## Verification
 

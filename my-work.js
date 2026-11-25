@@ -3,6 +3,7 @@ const {createHash}=require('node:crypto');
 const {view:queueView}=require('./work-queue');
 const authorship=require('./document-provenance');
 const reviewSeats=require('./document-review-seats');
+const remediation=require('./audit-remediation');
 
 const supportedRoles=new Set(['analyst','reviewer','case-operator']);
 const taskToken='[a-f0-9]{64}';
@@ -38,11 +39,12 @@ function localTasks(state,actor,account){
 
 // This general inbox retains one broad seat per role; restricted document reviewers use their assignment list instead.
 // The verified role is the assigned seat, never a request-supplied owner selector.
-function assigned(state,{space,actor,account},allowedViews,asOf){
-  if(!space?.id||typeof account!=='string'||!supportedRoles.has(actor))error('My work is unavailable.',404);
+function assigned(state,{space,actor,account,documentReviewer},allowedViews,asOf){
+  if(documentReviewer||!space?.id||typeof account!=='string'||!supportedRoles.has(actor))error('My work is unavailable.',404);
   const queue=queueView(state,new URLSearchParams({owner:actor}),asOf);
   const allowed=new Set(allowedViews);
-  const rows=[...queue.tasks,...localTasks(state,actor,account)].filter(task=>task.owner===actor&&allowed.has(task.destination.view)&&
+  const remediationTasks=allowed.has('audit-management')?remediation.personalWork(state,{actor,account,asOf:queue.asOf}):[];
+  const rows=[...queue.tasks,...localTasks(state,actor,account),...remediationTasks].filter(task=>task.owner===actor&&allowed.has(task.destination.view)&&
       task.destination.view===task.workflow&&safeRef(task.destination.recordId)&&
       (task.workflow!=='assessments'||safeRef(task.destination.projectId)))
     .map(task=>{
