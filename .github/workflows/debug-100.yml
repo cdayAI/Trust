@@ -1,0 +1,37 @@
+name: MVW Trust 100-pass debugging
+
+on:
+  push:
+    branches:
+      - 'debug/100-pass-*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: trust-debug-100-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  debug:
+    name: Targeted passes (shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238
+        with:
+          node-version: 24.22.3
+      - name: Install locked browser tools
+        run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund
+      - name: Execute 25 targeted Node and Chromium test passes
+        env:
+          TRUST_QA_SHARD: ${{ matrix.shard }}
+        run: npm run test:browser
