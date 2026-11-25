@@ -111,6 +111,9 @@ function approved(s,id,number){
   const entries=source.flatMap(row=>{
     const release=number?row.versions.find(x=>x.version===number&&x.status==='published'):row.versions.findLast(x=>x.status==='published');
     if(!release)return [];
+    if(!release.snapshot||typeof release.snapshot!=='object'||Array.isArray(release.snapshot)||
+      digest(release.snapshot)!==release.contentSha256)
+      fail(409,'PROCESSING_INTEGRITY_FAILED','The approved processing snapshot does not match its stored digest.');
     return [{entryId:row.id,version:release.version,approvedAt:release.decision.at,reviewedBy:release.decision.account,
       reviewNote:release.decision.note,contentSha256:release.contentSha256,processing:release.snapshot}];
   });

@@ -196,3 +196,20 @@ test('Chromium mobile: select typed references, record fictional transfer, revie
     assert.deepEqual(errors,[]);
   }finally{await browser.close()}
 });
+
+test('processing exports refuse corrupt approved editions without substituting a different version',()=>{
+  const make=(version,title)=>{
+    const snapshot={title};
+    return {version,status:'published',snapshot,contentSha256:createHash('sha256').update(JSON.stringify(snapshot)).digest('hex'),
+      decision:{at:'2026-01-01T00:00:00.000Z',account:'reviewer',note:'Fictional review'}};
+  };
+  const v1=make(1,'Original'),v2=make(2,'Latest');
+  const state={processingRegister:[{id:'fixture',versions:[v1,v2]}]};
+  assert.equal(feature.approved(state,'fixture',1).entries[0].processing.title,'Original');
+  v1.snapshot.title='Altered';
+  assert.throws(()=>feature.approved(state,'fixture',1),{status:409,code:'PROCESSING_INTEGRITY_FAILED'});
+  assert.equal(feature.approved(state).entries[0].processing.title,'Latest');
+  v2.snapshot=null;
+  assert.throws(()=>feature.approved(state),{status:409,code:'PROCESSING_INTEGRITY_FAILED'});
+  assert.throws(()=>feature.approved(state,'fixture',2),{status:409,code:'PROCESSING_INTEGRITY_FAILED'});
+});

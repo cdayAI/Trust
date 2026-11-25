@@ -99,3 +99,15 @@ test('local audit scopes controls, assesses synthetic evidence and freezes an in
   await stop(); await start(); r=await login(ids[1]);
   assert.deepEqual((await get(route+'/report')).data,download.data);
 });
+
+test('finalized audit exports refuse corrupt or missing report bodies',()=>{
+  const {report}=require('../audit-management');
+  const result={conclusion:'effective',counts:{effective:1}};
+  const final={result,sha256:createHash('sha256').update(JSON.stringify(result)).digest('hex')};
+  const state={auditManagement:{plans:[{id:'fixture',final}]}};
+  assert.deepEqual(report(state,'fixture').result,result);
+  final.result.counts.effective=2;
+  assert.throws(()=>report(state,'fixture'),{status:409,code:'AUDIT_INTEGRITY_FAILED'});
+  final.result=undefined;
+  assert.throws(()=>report(state,'fixture'),{status:409,code:'AUDIT_INTEGRITY_FAILED'});
+});
