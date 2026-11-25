@@ -82,18 +82,25 @@ function localReportSchedule(){
     input.value=value.slice(0,16);input.step='60';
     return field;
   }
-  function form(target,operation,fields,label,payload){
+  function form(target,operation,fields,label,payload,problem){
     const submit=button(label,'submit','secondary'),form=add(el('form'),...fields,submit);
     form.onsubmit=async event=>{
       event.preventDefault();
       if(busy||!available())return;
       busy=true;submit.disabled=true;
+      problem.hidden=true;problem.textContent='';
       const request=++sequence;
       try{
         const body=payload(Object.fromEntries(new FormData(form)));
         const model=await read(path+'/'+operation,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         if(available()&&request===sequence)render(model,{focus:true});
-      }catch(error){if(available()&&request===sequence)notice(error.message,true);}
+      }catch(error){
+        if(available()&&request===sequence){
+          problem.hidden=false;
+          problem.textContent=error.message;
+          problem.focus();
+        }
+      }
       finally{busy=false;submit.disabled=false;}
     };
     target.append(form);
@@ -102,6 +109,8 @@ function localReportSchedule(){
     const title=heading('Simulated UTC schedule');title.tabIndex=-1;
     const panel=add(el('section'),title,
       el('p','One local plan at a time. Nothing starts in the background or goes to a recipient. Choose Run simulated slot to capture the current workspace once for the selected UTC slot.'));
+    const problem=el('p',undefined,'error');
+    problem.hidden=true;problem.tabIndex=-1;problem.setAttribute('role','alert');panel.append(problem);
     const reload=button('Reload local schedule','button','secondary');reload.onclick=()=>load(true);panel.append(reload);
     const outcomes={proposed:'Draft schedule saved. A separate reviewer must approve it.',approved:'Schedule approved for explicit simulated runs.',
       stopped:'Schedule stopped. Its history remains available.',ran:'One scheduled report was saved.',
@@ -117,7 +126,7 @@ function localReportSchedule(){
           reportSelect('Pinned report template','sourceRunId',options,model.templates[0].id),
           reportSelect('UTC cadence','cadence',{daily:'Daily',weekly:'Weekly'},'daily'),
           timeField('First due time (UTC)','firstDueAt',new Date(Date.now()+3600000).toISOString())
-        ],'Propose local schedule',raw=>({...raw,firstDueAt:asUtc(raw.firstDueAt),expectedRevision:model.revision}));
+        ],'Propose local schedule',raw=>({...raw,firstDueAt:asUtc(raw.firstDueAt),expectedRevision:model.revision}),problem);
       }else panel.append(el('p','Pin a report first. Its exact applied filters become the schedule template.'));
     }
     if(!model.plans.length)panel.append(el('p','No local schedule has been proposed.'));
@@ -127,12 +136,12 @@ function localReportSchedule(){
         el('p',(plan.status==='stopped'?'Last unprocessed slot: ':'Next due: ')+pretty(plan.nextDueAt)),
         el('p','Saved filters: '+Object.entries(plan.filters).filter(([,value])=>value!==null).map(([key,value])=>key+' '+value).join(' · '),'hint'));
       const action=()=>({planId:plan.id,expectedRevision:model.revision});
-      if(plan.canApprove)form(row,'approve',[],'Approve local schedule',action);
-      if(plan.canStop)form(row,'stop',[],'Stop local schedule',action);
+      if(plan.canApprove)form(row,'approve',[],'Approve local schedule',action,problem);
+      if(plan.canStop)form(row,'stop',[],'Stop local schedule',action,problem);
       if(plan.status==='active'){
         if(plan.dueNow)row.append(el('p','The next slot is due at the current UTC time.','hint'));
         form(row,'tick',[timeField('Simulated time (UTC)','simulatedAt',plan.nextDueAt)],'Run simulated slot',
-          raw=>({planId:plan.id,slotAt:plan.nextDueAt,simulatedAt:asUtc(raw.simulatedAt)}));
+          raw=>({planId:plan.id,slotAt:plan.nextDueAt,simulatedAt:asUtc(raw.simulatedAt)}),problem);
       }
       if(plan.receipts.length){
         const entries=el('ul');
