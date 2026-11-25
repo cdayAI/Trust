@@ -166,6 +166,7 @@
   "scripts/run-browser-verification.js",
   "scripts/runtime-check.js",
   "scripts/smoke-local.js",
+  "scripts/verify-sqlite-concurrency-local.js",
   "scripts/verify-sqlite-resilience.js",
   "scripts/verify-audit-package.js",
   "server.js",

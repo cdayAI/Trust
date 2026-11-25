@@ -124,3 +124,23 @@ receipts without leaking across workspaces.
 
 Neither the workbench nor any result claims a security audit, performance
 target, production failover, or recovery point objective.
+
+## Two-process SQLite contention rehearsal
+
+```sh
+npm run --silent verify:concurrency
+```
+
+The opt-in rehearsal compares a serial control with four concurrent clients.
+Each trial uses two child Node processes on ephemeral loopback addresses and
+one disposable SQLite database with two fictional workspaces. The runner
+accepts no service, data or credential arguments. It checks all 38 acknowledged
+case IDs, six same-record races (one success and one stale refusal each), the
+ordered audits, workspace boundaries and exact state after both server
+processes stop and a new one starts on the same database.
+
+Three local pairs produced 450 checked HTTP calls in total: 390 expected
+successes and 60 expected denials with no unexpected 5xx. In those small
+samples, the 32-write bulk batch completed sooner with four clients while
+individual p95 grew. This is a bounded local rehearsal, not a load target,
+an infrastructure failure test or a production throughput estimate.
