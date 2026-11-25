@@ -117,7 +117,10 @@ system checks integrity and serves the original bytes only through a scoped,
 audited download using `application/octet-stream`, `nosniff`, a sandbox CSP,
 and no caching. There are no inline previews or public file URLs. Revision
 lists contain metadata only and general state/export views omit the files.
-Audit events contain opaque IDs, not filenames or bytes.
+Audit events contain opaque IDs, not filenames or bytes. A download button
+indicates when its file is in progress. Up to two distinct downloads can run
+independently in the browser. If both slots are in use, wait for one to finish
+and retry. A network interruption names the affected file and permits retry.
 
 This local synthetic workflow stores the original bytes in revision state.
 There is no malware scanner, content classification, dedicated object storage,

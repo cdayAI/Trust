@@ -57,7 +57,9 @@ function render(data){
   const policy=add(node('details'),node('summary','Read assigned policy: '+lesson.policy.title+' · edition '+lesson.policy.number),node('pre',lesson.policy.text));
   card.append(policy);
   if(lesson.status==='completed')showReceipt(card,lesson.receipt);
-  else if(lesson.status==='retry-required')card.append(node('p','No attempts remain. Ask the local analyst to reset attempts.'));
+  else if(lesson.status==='retry-required')card.append(node('p',lesson.resetAvailable?
+    'No attempts remain. Ask the local analyst to reset attempts.':
+    'No attempts remain. The one-time reset has already been used. This assignment cannot be reset again.'));
   else if(lesson.status==='assigned'){
     const b=button('Start exercise');b.onclick=()=>run('start',{assignment:lesson.id,revision:lesson.revision});card.append(b);
   }else{

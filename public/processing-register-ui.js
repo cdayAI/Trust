@@ -1,11 +1,17 @@
 'use strict';
 const processingPane=$('#processing-register-view'),processingPath='/api/processing-register';
 let processingModel,processingSequence=0;
-async function refreshProcessingRegister(){
+async function refreshProcessingRegister(focusId){
   const seq=++processingSequence;
   try{
     const model=await read(processingPath);
-    if(seq===processingSequence&&!processingPane.hidden){processingModel=model;renderProcessingRegister()}
+    if(seq===processingSequence&&!processingPane.hidden){
+      processingModel=model;renderProcessingRegister();
+      if(typeof focusId==='string'){
+        const target=document.getElementById(focusId)?.querySelector('h3');
+        if(target&&processingPane.contains(target)){target.tabIndex=-1;target.focus()}
+      }
+    }
   }catch(error){
     if(seq===processingSequence&&!processingPane.hidden){processingPane.replaceChildren(el('p','The processing register could not be loaded.'));notice(error.message,true)}
   }
@@ -13,17 +19,23 @@ async function refreshProcessingRegister(){
 async function postProcessing(path,data,control){
   if(busy)return;
   busy=true;control.disabled=true;
+  const card=control.closest('.processing-card');
+  card?.querySelector('.processing-conflict')?.remove();
   const seq=++processingSequence;
   try{
     const model=await read(processingPath+path,{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Actor':actor},body:JSON.stringify(data)});
     if(seq===processingSequence&&!processingPane.hidden){processingModel=model;renderProcessingRegister();notice('Processing register updated.')}
   }catch(error){
     if(seq===processingSequence&&!processingPane.hidden){
-      notice(error.message,true);
-      if(error.status===409&&/reload/i.test(error.message)){
-        const retry=button('Reload processing register','button','secondary');retry.onclick=refreshProcessingRegister;
-        $('#notice').append(document.createTextNode(' '),retry);
-      }
+      if(card&&error.status===409&&/reload/i.test(error.message)){
+        notice('');
+        const alert=el('p',error.message,'error');
+        alert.setAttribute('role','alert');alert.tabIndex=-1;
+        const retry=button('Reload processing register','button','secondary');
+        retry.onclick=()=>refreshProcessingRegister(card.id);
+        card.append(add(el('div',undefined,'processing-conflict'),alert,retry));
+        alert.focus();
+      }else notice(error.message,true);
     }
   }finally{control.disabled=false;busy=false}
 }
@@ -153,6 +165,7 @@ function renderProcessingRegister(){
     const path='/entries/'+record.id,card=add(el('section',undefined,'processing-card'),
       add(el('div',undefined,'row'),el('h3',latest.snapshot.title),badge(latest.status)),
       el('p','Version '+latest.version+' · Revision '+revision+(published?' · Current approved v'+published.version:''),'hint'),processingSummary(latest.snapshot));
+    card.id='processing-entry-'+record.id;
     if(latest.decision)card.append(el('p','Reviewer '+latest.decision.account+': '+latest.decision.note,'hint'));
     if(actor==='analyst'&&['draft','returned'].includes(latest.status)){
       const submit=button('Submit processing entry','button','secondary');

@@ -1,6 +1,7 @@
 'use strict';
 const docsPane=$('#governance-docs-view'),docsPath='/api/governance-documents';
 let docsData,docsSeq=0;
+const activeAttachmentDownloads=new Map(),maxConcurrentAttachmentDownloads=2;
 const docsHeaders=()=>({'Content-Type':'application/json','X-Demo-Actor':actor});
 async function refreshDocs(){
   const seq=++docsSeq;
@@ -66,26 +67,43 @@ function saveDocumentFile(blob,filename){
 function downloadDocument(data){
   saveDocumentFile(new Blob([data.text],{type:'text/plain;charset=utf-8'}),data.filename);
 }
-async function downloadAttachment(path,row){
-  if(busy)return;
-  busy=true;
-  const identity=actor,seq=docsSeq;
+function setAttachmentDownloadBusy(control,pending){
+  if(pending){control.setAttribute('aria-disabled','true');control.setAttribute('aria-busy','true')}
+  else{control.removeAttribute('aria-disabled');control.removeAttribute('aria-busy')}
+}
+async function downloadAttachment(path,row,control){
+  const target=scopeUrl(docsPath+path);
+  if(activeAttachmentDownloads.has(target))return;
+  if(busy)return notice('Another workspace action is in progress. Wait for it to finish, then retry.',true);
+  if(activeAttachmentDownloads.size>=maxConcurrentAttachmentDownloads)
+    return notice('Two attachment downloads are in progress. Wait for one to finish, then retry.',true);
+  const transfer={control};
+  activeAttachmentDownloads.set(target,transfer);
+  setAttachmentDownloadBusy(control,true);
+  notice('Downloading '+row.name+'…');
+  const identity=actor,seq=docsSeq,session=localSession;
+  const current=()=>!docsPane.hidden&&actor===identity&&seq===docsSeq&&localSession===session;
   try{
     const headers=docsHeaders();
     if(localSession)delete headers['X-Demo-Actor'];
-    const response=await fetch(scopeUrl(docsPath+path),{method:'POST',headers,body:'{}'});
+    const response=await fetch(target,{method:'POST',headers,body:'{}'});
     if(!response.ok){
       const data=await response.json();
       if(localSession?.authenticated&&[401,403].includes(response.status))await checkContext();
-      throw new Error(data.error||'Attachment could not be downloaded.');
+      if(current())notice(data.error||'Attachment could not be downloaded.',true);
+      return;
     }
     if(response.headers.get('Content-Type')!=='application/octet-stream')throw new Error('Attachment response type is invalid.');
     const blob=await response.blob();
-    if(!docsPane.hidden&&actor===identity&&seq===docsSeq){
+    if(current()){
       saveDocumentFile(blob,row.name);notice('Attachment download recorded.');
     }
-  }catch(error){if(!docsPane.hidden&&actor===identity&&seq===docsSeq)notice(error.message,true);}
-  finally{busy=false;}
+  }catch(error){
+    if(current())notice('Could not download '+row.name+'. '+error.message,true);
+  }finally{
+    activeAttachmentDownloads.delete(target);
+    setAttachmentDownloadBusy(transfer.control,false);
+  }
 }
 function binaryAttachmentBatch(files,expectedRevision){
   const manifest=new TextEncoder().encode(JSON.stringify({version:1,expectedRevision,files:files.map(file=>({
@@ -213,7 +231,10 @@ function attachmentControls(card,path,version,revision,rules){
     if(row.reviewStatus)item.append(badge({pending:'Quarantined',released:'Manually released',rejected:'Rejected',unavailable:'Unavailable'}[row.reviewStatus]??'Unavailable'));
     if(!row.reviewStatus||row.reviewStatus==='released'){
       const download=button('Download attachment '+row.name,'button','secondary');
-      download.onclick=()=>downloadAttachment(rowPath+'/download',row);
+      const downloadPath=rowPath+'/download';
+      download.onclick=()=>downloadAttachment(downloadPath,row,download);
+      const inFlight=activeAttachmentDownloads.get(scopeUrl(docsPath+downloadPath));
+      if(inFlight){inFlight.control=download;setAttachmentDownloadBusy(download,true)}
       item.append(download);
     }
     if(mayAct&&actor==='reviewer'&&version.status==='draft'&&row.reviewStatus==='pending'){

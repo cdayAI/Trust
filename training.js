@@ -21,6 +21,7 @@ const digest=x=>createHash('sha256').update(x).digest('hex');
 const clock=()=>new Date().toISOString();
 const quizHash=digest(JSON.stringify(quiz));
 const model=state=>state.training??{courses:[],assignments:[]};
+const canReset=row=>row.status==='retry-required'&&!row.resetCount;
 const fail=(status,code,message)=>{throw Object.assign(new Error(message),{status,code});};
 const isObject=x=>x&&typeof x==='object'&&!Array.isArray(x);
 const validId=x=>typeof x==='string'&&uuid.test(x);
@@ -94,7 +95,7 @@ function admin(state,learners,actor,account,action,body,event){
       const row=validId(body.assignment)?board.assignments.find(a=>a.id===body.assignment):null;
       if(!row)fail(404,'TRAINING_ASSIGNMENT_MISSING','The training assignment was not found.');
       if(row.revision!==body.revision)fail(409,'TRAINING_STALE','The assignment changed. Reload before retrying.');
-      if(row.status!=='retry-required'||row.resetCount)fail(409,'TRAINING_RESET_UNAVAILABLE','Only a first exhausted assignment can be reset.');
+      if(!canReset(row))fail(409,'TRAINING_RESET_UNAVAILABLE','Only a first exhausted assignment can be reset.');
       row.status='in-progress';row.cycleAttempts=0;row.resetCount=1;row.revision++;
       revisionAudit('assignment-reset',row.id,{course:row.course,revision:row.revision});
       return true;
@@ -174,10 +175,10 @@ function learnerView(state,seat,id){
       attempts:row.attempts,lastScore:row.lastScore,attemptsRemaining:attemptsPerCycle-row.cycleAttempts,receipt:row.receipt};
   });
   if(id===undefined)return {mode:'synthetic-training',assignments};
-  const {course}=ownAssignment(state,seat,id);
+  const {row,course}=ownAssignment(state,seat,id);
   const selected=policy(state,course.policy.document,course.policy.edition,course.policy.hash);
   const summary=assignments.find(x=>x.id===id);
-  return {mode:'synthetic-training',assignments,lesson:{...summary,policy:{title:course.policy.title,number:course.policy.number,text:selected.text},
+  return {mode:'synthetic-training',assignments,lesson:{...summary,resetAvailable:canReset(row),policy:{title:course.policy.title,number:course.policy.number,text:selected.text},
     description:quiz.lesson,questions:quiz.questions.map(({prompt,choices})=>({prompt,choices}))}};
 }
 function query(state,seat,action,body){

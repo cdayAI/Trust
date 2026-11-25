@@ -77,9 +77,14 @@ const staticFiles = new Map([
   ['/reporting.css',['reporting.css','text/css; charset=utf-8']],
   ['/modules-ui.js',['modules-ui.js','text/javascript; charset=utf-8']],
   ['/mvw-horizon.svg',['mvw-horizon.svg','image/svg+xml']],
-  ['/styles.css',['styles.css','text/css; charset=utf-8']],
-  ['/style.css',['style.css','text/css; charset=utf-8']]
+  ['/styles.css',['styles.css','text/css; charset=utf-8']]
 ]);
+const portalAssets = Object.freeze({
+  visitor:['trust-center-visitor.html','trust-center-visitor.js'],
+  employee:['employee.html','employee.js'],
+  training:['training.html','training-learner-ui.js'],
+  requester:['requester.html','requester.js'],
+});
 function send(res,status,value,type='application/json; charset=utf-8',extra={}) {
   res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",...extra});
   res.end(type.startsWith('application/json')&&!Buffer.isBuffer(value)?JSON.stringify(value,null,2)+'\n':value);
@@ -164,7 +169,11 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   }):[dataFile,dataFile+'.workflows'];
   let operations;
   try{
-    operations=createOperations({files,assets:['index.html','app.js','styles.css'].map(file=>path.join(publicDir,file)),
+    const assets=new Set([...staticFiles.values()].map(([file])=>file));
+    for(const [enabled,key] of [[centers,'visitor'],[staff,'employee'],[learners,'training'],[portal,'requester']]){
+      if(enabled)for(const file of portalAssets[key])assets.add(file);
+    }
+    operations=createOperations({files,assets:[...assets].map(file=>path.join(publicDir,file)),
       logEvents:operationalEvents,checkBackend:database?()=>database.checkMode(access?'isolated':'demo'):undefined});
   }catch(error){database?.close();throw error;}
   let activeBatchUploads=0;
@@ -217,25 +226,25 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       const visitPage=pathname.match(/^\/trust-center\/(sample-[a-z0-9-]{1,32})$/);
       if(visit||visitPage||pathname==='/trust-center-visitor.js'){
         if(!centers||req.method!=='GET'||searchParams.size)return send(res,404,{error:'Not found.'});
-        if(pathname==='/trust-center-visitor.js')return send(res,200,await fs.readFile(path.join(publicDir,'trust-center-visitor.js')),'text/javascript; charset=utf-8');
+        if(pathname==='/trust-center-visitor.js')return send(res,200,await fs.readFile(path.join(publicDir,portalAssets.visitor[1])),'text/javascript; charset=utf-8');
         const workspace=centers.workspace((visit??visitPage)[1]);
         if(!workspace)return send(res,404,{error:'Not found.'});
-        if(visitPage)return send(res,200,await fs.readFile(path.join(publicDir,'trust-center-visitor.html')),'text/html; charset=utf-8');
+        if(visitPage)return send(res,200,await fs.readFile(path.join(publicDir,portalAssets.visitor[0])),'text/html; charset=utf-8');
         return send(res,200,runtime(access.spaceForProvisionedGrant(workspace)).store.trustCenterVisitor());
       }
       if(req.method==='GET'&&['/employee','/employee.js'].includes(pathname)){
         if(!staff)return send(res,404,{error:'Not found.'});
-        const [file,type]=pathname==='/employee'?['employee.html','text/html']:['employee.js','text/javascript'];
+        const [file,type]=pathname==='/employee'?[portalAssets.employee[0],'text/html']:[portalAssets.employee[1],'text/javascript'];
         return send(res,200,await fs.readFile(path.join(publicDir,file)),type+'; charset=utf-8');
       }
       if(req.method==='GET'&&['/training','/training.js'].includes(pathname)){
         if(!learners)return send(res,404,{error:'Not found.'});
-        const [file,type]=pathname==='/training'?['training.html','text/html']:['training-learner-ui.js','text/javascript'];
+        const [file,type]=pathname==='/training'?[portalAssets.training[0],'text/html']:[portalAssets.training[1],'text/javascript'];
         return send(res,200,await fs.readFile(path.join(publicDir,file)),type+'; charset=utf-8');
       }
       if(req.method==='GET'&&['/requester','/requester.js'].includes(pathname)){
         if(!portal)return send(res,404,{error:'Not found.'});
-        const [file,type]=pathname==='/requester'?['requester.html','text/html']:['requester.js','text/javascript'];
+        const [file,type]=pathname==='/requester'?[portalAssets.requester[0],'text/html']:[portalAssets.requester[1],'text/javascript'];
         return send(res,200,await fs.readFile(path.join(publicDir,file)),type+'; charset=utf-8');
       }
       if (req.method==='GET'&&staticFiles.has(pathname)) {

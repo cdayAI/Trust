@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const {spawn} = require('node:child_process');
 const {once} = require('node:events');
-const {mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile} = require('node:fs/promises');
+const {cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile} = require('node:fs/promises');
 const {tmpdir} = require('node:os');
 const {dirname, join} = require('node:path');
 const {test} = require('node:test');
@@ -15,9 +15,9 @@ async function scratch(t) {
   return dir;
 }
 
-function launch(t, script, dir, settings = {}) {
+function launch(t, script, dir, settings = {}, cwd = join(__dirname, '..')) {
   const child = spawn(process.execPath, [script], {
-    cwd: join(__dirname, '..'),
+    cwd,
     env: {...process.env, TMPDIR: dir, PORT: '0', DATA_FILE: join(dir, 'data', 'state.json'), ...settings},
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -235,4 +235,53 @@ test('configuration readiness checks the loopback listener and readable workbenc
   await writeFile(asset, 'synthetic asset');
   assert.deepEqual(await operations.ready(undefined), configurationUnavailable);
   assert.deepEqual(await operations.ready(address), ready);
+});
+
+
+test('a missing workflow asset or enabled portal asset fails readiness without failing liveness', {timeout: 12_000}, async t => {
+  const dir = await scratch(t);
+  const source = join(__dirname, '..');
+  const copy = join(dir, 'release');
+  await mkdir(copy);
+  for (const name of await readdir(source)) {
+    if (name.endsWith('.js') || ['public','fixtures','scripts'].includes(name)) {
+      await cp(join(source,name),join(copy,name), {recursive:true,filter:path=>!path.split(/[\\/]/).includes('node_modules')});
+    }
+  }
+  const missing = {status:'not_ready',checks:{configuration:false,storage:true}};
+  const env = {TMP:dir,TEMP:dir};
+  const demo = launch(t, 'server.js', dir, env, copy);
+  const db = launch(t, 'start-release.js', dir, env, copy);
+  const demoUrl = await demo.started;
+  const dbUrl = await db.started;
+  const demoReady = () => assertHealth(demoUrl+'/health/ready',200,ready);
+  const dbReady = () => assertHealth(dbUrl+'/health/ready',200,ready);
+  await demoReady();
+  await dbReady();
+
+  const module = join(copy,'public','governance-docs-ui.js');
+  await rename(module,module+'.saved');
+  const response = await fetch(demoUrl+'/governance-docs-ui.js');
+  assert.equal(response.status,404);
+  assert.deepEqual(await response.json(),{error:'Not found.'});
+  for (const url of [demoUrl,dbUrl]) {
+    await assertHealth(url+'/health/live',200,live);
+    await assertHealth(url+'/health/ready',503,missing);
+  }
+  await rename(module+'.saved',module);
+  await demoReady();
+  await dbReady();
+
+  const portal = join(copy,'public','training-learner-ui.js');
+  await rename(portal,portal+'.saved');
+  await writeFile(portal,'');
+  assert.equal((await fetch(demoUrl+'/training.js')).status,404);
+  await demoReady();
+  await assertHealth(dbUrl+'/health/live',200,live);
+  await assertHealth(dbUrl+'/health/ready',503,missing);
+  await rm(portal);
+  await rename(portal+'.saved',portal);
+  await dbReady();
+  await db.stop();
+  await demo.stop();
 });

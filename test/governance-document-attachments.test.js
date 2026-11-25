@@ -63,6 +63,52 @@ const filename='Fictional  sample.TXT';
 const cleanFilename='Fictional sample.txt';
 const payload={filename,mediaType:'text/plain',data:Buffer.from(original).toString('base64')};
 const doc={kind:'policy',title:'Fictional upload policy',content:'Fictional standalone policy text.',links:[]};
+
+function observeAttachmentDownload(page,url,name){
+  const started=performance.now(),phases=[];
+  let response,requests=0;
+  const mark=phase=>phases.push(Math.round(performance.now()-started)+'ms '+phase);
+  const matches=request=>request.method()==='POST'&&request.url()===url;
+  const onRequest=request=>{if(matches(request)){requests++;mark('POST sent')}};
+  const onResponse=value=>{
+    if(!matches(value.request()))return;
+    response=value;mark('HTTP '+value.status()+' '+(value.headers()['content-type']??'(no content type)'));
+  };
+  const onFinished=request=>{if(matches(request))mark('HTTP body received')};
+  const onFailed=request=>{if(matches(request))mark('HTTP failed: '+request.failure()?.errorText)};
+  const onDownload=download=>{if(download.suggestedFilename()===name)mark('matching browser download started')};
+  const events=[['request',onRequest],['response',onResponse],['requestfinished',onFinished],
+    ['requestfailed',onFailed],['download',onDownload]];
+  for(const [event,handler] of events)page.on(event,handler);
+  return {mark,get response(){return response;},get requests(){return requests;},describe:()=>phases.join('; '),
+    close:()=>events.forEach(([event,handler])=>page.off(event,handler))};
+}
+async function expectAttachmentDownload(page,action,url,name,bytes){
+  const trace=observeAttachmentDownload(page,url,name);
+  try{
+    trace.mark('waiting for click and matching download');
+    const [download]=await Promise.all([
+      page.waitForEvent('download',{predicate:value=>value.suggestedFilename()===name}),
+      action.click().then(()=>trace.mark('click completed'))
+    ]);
+    const failure=await download.failure();
+    trace.mark(failure?'browser download failed: '+failure:'browser download completed');
+    assert.equal(failure,null);
+    assert.equal(trace.requests,1);
+    assert.equal(trace.response?.status(),200);
+    const headers=trace.response.headers();
+    assert.equal(headers['content-disposition'],'attachment; filename="'+name+'"');
+    assert.equal(headers['content-type'],'application/octet-stream');
+    assert.equal(headers['content-security-policy'],"sandbox; default-src 'none'");
+    assert.equal(headers['x-content-type-options'],'nosniff');
+    const chunks=[];
+    for await(const chunk of await download.createReadStream())chunks.push(chunk);
+    assert.deepEqual(Buffer.concat(chunks),bytes,name);
+  }catch(error){
+    throw new Error('Attachment '+name+' failed ('+trace.requests+' matching scoped POSTs): '+trace.describe(),{cause:error});
+  }finally{trace.close();}
+}
+
 test('document attachments: scoped, bounded, immutable and audited roundtrip over local isolated HTTP',async t=>{
   const {root,request,login,stop,start}=await fixture(t);
   const cookies=await Promise.all(roles.map(login));
@@ -618,21 +664,96 @@ test('browser: all allowed formats multi-select with the real chooser and downlo
     assert.equal(chooser.isMultiple(),true);
     await chooser.setFiles(paths);
     await card.getByText(new RegExp('^'+selected.length+' selected')).waitFor();
-    await card.getByRole('button',{name:'Upload attachments',exact:true}).click();
+    const [upload]=await Promise.all([page.waitForResponse(response=>{
+      const target=new URL(response.url());
+      return target.origin===f.url&&response.request().method()==='POST'&&
+        target.pathname.startsWith('/api/'+collection+'/records/')&&target.pathname.endsWith('/attachments/batch');
+    }),card.getByRole('button',{name:'Upload attachments',exact:true}).click()]);
+    assert.equal(upload.status(),200,title+' upload HTTP status');
+    const uploaded=(await upload.json()).documents.flatMap(record=>record.revisions
+      .filter(version=>version.title===title).flatMap(version=>version.attachments.map(row=>({record,version,row}))));
     for(const [name,bytes] of selected){
       const action=card.getByRole('button',{name:'Download attachment '+name,exact:true});
       await action.waitFor().catch(async error=>{
         throw new Error('The selected file was not uploaded: '+name+'. '+await card.textContent(),{cause:error});
       });
-      const [download]=await Promise.all([page.waitForEvent('download'),action.click()]);
-      assert.equal(download.suggestedFilename(),name);
-      const chunks=[];
-      for await(const chunk of await download.createReadStream())chunks.push(chunk);
-      assert.deepEqual(Buffer.concat(chunks),bytes,name);
+      const found=uploaded.find(({row})=>row.name===name);
+      assert.ok(found,title+' upload response omitted '+name);
+      const {record,version,row}=found;
+      await expectAttachmentDownload(page,action,f.url+'/api/'+collection+'/records/'+record.id+
+        '/revisions/'+version.id+'/attachments/'+row.id+'/download?workspace='+primary,name,bytes);
     }
     assert.equal(await card.locator('.document-attachments img, .document-attachments iframe, .document-attachments embed').count(),0);
   }
   assert.deepEqual(pageErrors,[]);assert.deepEqual(external,[]);
+});
+
+test('Chromium: a slow attachment response does not drop a different download click', {
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright installed',timeout:30000
+},async t=>{
+  const {chromium}=require('playwright'),f=await fixture(t),author=await f.login(roles[0]);
+  const {data:draft}=await f.request(collection+'/records?workspace='+primary,200,{cookie:author,body:{...doc,expectedRevision:0}});
+  const record=draft.documents[0],version=record.revisions[0],path=collection+'/records/'+record.id+'/revisions/'+version.id+'/attachments';
+  const files=['fictional.txt','fictional.pdf','fictional.png'].map(name=>[name,formatSamples.get(name)]);
+  const {data:uploaded}=await f.request(path+'/batch?workspace='+primary,200,{cookie:author,body:{
+    expectedRevision:draft.revision,files:files.map(([name,bytes])=>formatPayload(name,bytes))
+  }});
+  const targets=uploaded.documents[0].revisions[0].attachments.map(row=>f.url+'/api/'+path+'/'+row.id+'/download?workspace='+primary);
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  t.after(()=>browser.close());
+  const page=await browser.newPage(),external=[],errors=[];
+  page.setDefaultTimeout(6500);
+  page.on('pageerror',error=>errors.push(error.message));
+  await page.context().addCookies([{url:f.url,name:author.split('=')[0],value:author.slice(author.indexOf('=')+1)}]);
+  const gates=targets.slice(0,2).map(()=>({ready:Promise.withResolvers(),release:Promise.withResolvers()}));
+  const requests=[0,0,0],browserDownloads=[];
+  let failThird=false;
+  page.on('request',request=>{const i=targets.indexOf(request.url());if(i>=0)requests[i]++;});
+  page.on('download',download=>browserDownloads.push(download.suggestedFilename()));
+  await page.route('**/*',async route=>{
+    const url=route.request().url(),i=targets.indexOf(url);
+    if(new URL(url).origin!==f.url){external.push(url);return route.abort();}
+    if(i===2&&failThird){failThird=false;return route.abort('failed');}
+    const gate=gates[i];
+    if(!gate)return route.continue();
+    const actual=await route.fetch();
+    gate.ready.resolve(actual.status());
+    await gate.release.promise;
+    await route.fulfill({response:actual});
+  });
+  await page.goto(f.url);
+  await page.getByRole('button',{name:'Policies and documents',exact:true}).click();
+  const action=i=>page.getByRole('button',{name:'Download attachment '+files[i][0],exact:true});
+  const download=i=>expectAttachmentDownload(page,action(i),targets[i],...files[i]);
+  const first=download(0),pending=[first];first.catch(()=>{});
+  try{
+    assert.equal(await Promise.race([gates[0].ready.promise,first]),200);
+    const second=download(1);pending.push(second);second.catch(()=>{});
+    assert.equal(await Promise.race([gates[1].ready.promise,second]),200);
+    assert.equal(await action(0).getAttribute('aria-disabled'),'true');
+    await action(0).press('Enter');
+    await action(2).click();
+    await page.getByText('Two attachment downloads are in progress. Wait for one to finish, then retry.',{exact:true}).waitFor();
+    assert.deepEqual(requests,[1,1,0]);
+    gates[1].release.resolve();
+    await second;
+    assert.deepEqual(browserDownloads,[files[1][0]],'the second file finishes while the first is still held');
+    failThird=true;
+    const [aborted]=await Promise.all([page.waitForEvent('requestfailed',{predicate:request=>request.url()===targets[2]}),action(2).click()]);
+    assert.match(aborted.failure().errorText,/ERR_FAILED/);
+    await page.getByText(/^Could not download fictional\.png\./).waitFor();
+    assert.equal(await action(2).getAttribute('aria-busy'),null);
+    assert.deepEqual(browserDownloads,[files[1][0]]);
+    await download(2);
+  }finally{
+    for(const gate of gates)gate.release.resolve();
+    await Promise.allSettled(pending);
+  }
+  await first;
+  assert.deepEqual(requests,[1,1,2]);
+  assert.deepEqual(browserDownloads,[files[1][0],files[2][0],files[0][0]]);
+  assert.equal(await page.locator('.document-attachments img, .document-attachments iframe, .document-attachments embed').count(),0);
+  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
 });
 
 for(const backend of ['json','sqlite'])test('batch upload is atomic, role-scoped, audited and durable with '+backend,async t=>{
