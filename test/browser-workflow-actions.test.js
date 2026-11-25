@@ -21,7 +21,7 @@ async function fixture(t){
   const errors=[],evidence=[];
   page.on('pageerror',err=>errors.push(err.message));
   await page.goto('http://127.0.0.1:'+s.address().port);
-  await page.getByRole('heading',{name:'Assessment workspace',level:1}).waitFor();
+  await page.getByRole('heading',{name:'Trust operations',level:1}).waitFor();
   async function action(scope,name,outcome,witness){
     await scope.getByRole('button',{name,exact:true}).click();
     await witness();

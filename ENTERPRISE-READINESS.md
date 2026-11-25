@@ -18,3 +18,32 @@ local transactional SQLite with tested migration and recovery, mock handoff,
 and no live deployment. Production storage, encryption, and recovery
 objectives remain outstanding. The design prototype uses
 public identity cues, not an official corporate brand kit.
+
+## Evidence from the local release
+
+- **Data and recovery:** The opt-in SQLite backend has restart, concurrent
+  command, backup integrity, isolated restore, and offline migration rehearsal
+  tests. Real platform mappings, managed encrypted backups, and an agreed
+  recovery objective are still separate.
+- **Authorization:** Local workspace isolation, role denials, account
+  revocation, group grants, and exact-edition document grants are covered.
+  Grants do not silently carry across document versions. Enterprise directory
+  federation and broad record/field-level policy still require validation.
+- **Documents:** Real Chromium covers multi-select, drag-and-drop,
+  all-or-nothing validation, and byte-exact downloads for supported formats.
+  An opt-in quarantine blocks pending or rejected bytes and requires a
+  separate reviewer before release. Structural validation and manual review
+  are not malware scanning or a production evidence retention policy.
+- **Workflows:** Scoped assessments, rights, incidents, audits, processing,
+  training, disclosures, and more have independent review and role checks.
+  The local operator jobs implement a narrow authorized and audited subset.
+  No external transmission or real corporate decisions are simulated as real.
+- **Operator experience:** The role-specific Home links to scoped live queues and
+  operational views. Case operators see their assigned work only.
+- **Verification:** [Browser acceptance](BROWSER-ACCEPTANCE.md) distinguishes
+  controls that were exercised from controls merely observed. Hosted CI,
+  additional browser engines/devices, screen readers, and all populated/error
+  variants need their own evidence.
+
+Use [Local release](LOCAL-RELEASE.md) to build a runnable source archive and
+[Operations](OPERATIONS.md) to exercise startup, probes, and recovery privately.

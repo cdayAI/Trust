@@ -343,6 +343,7 @@ test('browser configured PIA/DPIA: stale draft recovery, hidden answers discarde
   const choice='Send fictional data externally?',list='Synthetic recipients list',count='Fictional region count';
   const note='Narrow the fictional safeguards.';
   async function open(p,form){
+    await f.nav(p,'Assessments',()=>h(p,'Assessment workspace').waitFor());
     await f.click(p,project,'Opened the synthetic project with PIA and DPIA routes',()=>card(p,form).waitFor());
   }
   await open(page,'Fictional PIA path');

@@ -35,6 +35,7 @@ test('browser smoke: synthetic intake to independent approval, mock retry and au
       return route.abort();
     });
     await page.goto(url);
+    await page.getByRole('button',{name:'Assessments',exact:true}).click();
     await page.getByRole('heading', { name: 'Customer Support Modernization', exact: true }).waitFor();
     await page.getByRole('heading', { name: 'HarborDesk', exact: true }).waitFor();
     await page.getByRole('heading', { name: 'Northstar Assist', exact: true }).waitFor();
@@ -217,6 +218,7 @@ test('browser smoke: isolated sign-in, selected workspace, reload and sign-out',
     await page.getByLabel('Workspace ID').fill('alpha');
     await page.getByLabel('Local access code').fill(code);
     await page.getByRole('button',{name:'Sign in',exact:true}).click();
+    await page.getByRole('button',{name:'Assessments',exact:true}).click();
     await page.getByRole('heading',{name:'Assessment workspace'}).waitFor();
     assert.equal(await page.getByLabel('Demo identity').isVisible(),false);
     await page.getByLabel('Project name').fill('Synthetic Alpha project');
@@ -228,6 +230,7 @@ test('browser smoke: isolated sign-in, selected workspace, reload and sign-out',
     await page.getByLabel('Workspace',{exact:true}).selectOption('beta');
     await page.getByRole('button',{name:'Switch workspace'}).click();
     await page.getByText('pilot-user · reviewer').waitFor();
+    await page.getByRole('button',{name:'Assessments',exact:true}).click();
     assert.equal(await page.getByRole('link',{name:'Export audit JSON'}).isVisible(),true);
     assert.equal(await page.getByRole('heading',{name:'Synthetic Alpha project'}).count(),0);
     assert.equal(await page.getByRole('button',{name:'Create project'}).isDisabled(),true);
@@ -451,7 +454,8 @@ test('browser smoke: MVW Trust desktop and mobile shell, solid surfaces and audi
     desktop.on('pageerror',e=>errors.push(e.message));
     desktop.setDefaultTimeout(6000);
     await desktop.goto(url);
-    await desktop.getByRole('heading',{name:'Assessment workspace'}).waitFor();
+    await desktop.getByRole('heading',{name:'Trust operations'}).waitFor();
+    await desktop.getByRole('button',{name:'Assessments',exact:true}).click();
     assert.equal(await desktop.locator('#workspace-metrics strong').count(),3);
     assert.equal(await desktop.evaluate(()=>document.documentElement.scrollWidth),1440);
     await desktop.getByRole('button',{name:'Solid surfaces'}).click();
@@ -463,7 +467,7 @@ test('browser smoke: MVW Trust desktop and mobile shell, solid surfaces and audi
     mobile.setDefaultTimeout(6000);
     mobile.on('pageerror',e=>errors.push(e.message));
     await mobile.goto(url);
-    await mobile.getByRole('heading',{name:'Assessment workspace'}).waitFor();
+    await mobile.getByRole('heading',{name:'Trust operations'}).waitFor();
     assert.equal(await mobile.evaluate(()=>document.documentElement.scrollWidth),390);
     await mobile.getByRole('button',{name:'Browse workspace'}).click();
     await mobile.getByRole('button',{name:'Privacy rights',exact:true}).click();

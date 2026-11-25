@@ -233,12 +233,14 @@ test('browser smoke: SQLite-backed edits reopen in the UI after server restart',
     const page = await browser.newPage();
     page.setDefaultTimeout(8000);
     await page.goto(first.url);
+    await page.getByRole('button', { name: 'Assessments',exact:true }).click();
     await page.getByLabel('Project name').fill('SQLite browser persistence');
     await page.getByRole('button', { name: 'Create project' }).click();
     await page.getByRole('heading', { name: 'SQLite browser persistence' }).waitFor();
     await first.stop();
     const second = await serverAt(t, options);
     await page.goto(second.url);
+    await page.getByRole('button', { name: 'Assessments',exact:true }).click();
     await page.getByRole('button', { name: 'SQLite browser persistence' }).click();
     await page.getByRole('heading', { name: 'SQLite browser persistence' }).waitFor();
     await assert.rejects(access(options.dataFile), { code: 'ENOENT' });

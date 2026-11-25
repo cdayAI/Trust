@@ -92,9 +92,53 @@ function batch(files,book,version){
   capacity(rows.length,total,book,version);
   return rows;
 }
-function metadata(row){
+const reviewPolicy='manual-v1';
+const accountPattern=/^[a-z][a-z0-9-]{0,47}$/u;
+const isAccount=value=>typeof value==='string'&&accountPattern.test(value);
+function queryPolicy(book){
+  if(book.attachmentReview===undefined)return false;
+  if(book.attachmentReview!==reviewPolicy)throw Error('Unsupported attachment review policy.');
+  return true;
+}
+function status(row,required){
+  const q=row.quarantine;
+  // Even when settings change, a staged row never acts like a legacy upload.
+  if(q===undefined)return required?'unavailable':null;
+  if(!q||typeof q!=='object'||Array.isArray(q)||!isAccount(q.uploader)||!['pending','released','rejected'].includes(q.status))
+    return 'unavailable';
+  if(q.status!=='pending'&&(!isAccount(q.decidedBy)||q.decidedBy===q.uploader||
+    (q.status==='released'&&(typeof q.approvedHash!=='string'||!shaPattern.test(q.approvedHash)||q.approvedHash!==row.sha256))))return 'unavailable';
+  return q.status;
+}
+function stage(row,account){
+  if(!isAccount(account))
+    fail(403,'ATTACHMENT_REVIEW_IDENTITY_REQUIRED','A signed-in analyst is required for quarantined uploads.');
+  return {...row,quarantine:{status:'pending',uploader:account}};
+}
+function assertAvailable(row,required){
+  const current=status(row,required);
+  if(current!==null&&current!=='released')
+    fail(409,'ATTACHMENT_QUARANTINED','This attachment is not released for download.');
+}
+function decide(row,required,account,body){
+  if(!isAccount(account)||row.quarantine?.uploader===account)
+    fail(403,'ATTACHMENT_INDEPENDENT_REVIEW','A separate signed-in reviewer must decide.');
+  if(!required||status(row,required)!=='pending')
+    fail(409,'ATTACHMENT_NOT_PENDING','This attachment is not pending quarantine review.');
+  if(body.operation==='release'){
+    if(typeof body.sha256!=='string'||!shaPattern.test(body.sha256)||body.sha256!==row.sha256)
+      fail(422,'ATTACHMENT_REVIEW_DIGEST','Enter the matching SHA-256 from the independently verified original.');
+    download(row);
+    row.quarantine={...row.quarantine,status:'released',decidedBy:account,approvedHash:row.sha256};
+  }else if(body.operation==='reject'&&body.sha256===undefined){
+    row.quarantine={...row.quarantine,status:'rejected',decidedBy:account};
+  }else fail(422,'ATTACHMENT_REVIEW_OPERATION','Choose release with its exact SHA-256, or reject without a digest.');
+  return row.quarantine.status;
+}
+function metadata(row,required){
   const {id,name,mediaType,size,sha256}=row;
-  return {id,name,mediaType,size,sha256};
+  const reviewStatus=status(row,required);
+  return {id,name,mediaType,size,sha256,...(reviewStatus===null?{}:{reviewStatus})};
 }
 function download(row){
   try{
@@ -111,4 +155,4 @@ function download(row){
     fail(409,'ATTACHMENT_UNAVAILABLE','The stored attachment failed its integrity check.');
   }
 }
-module.exports={rules,uploadRequestBytes,batchUploadRequestBytes,attachment,batch,metadata,download};
+module.exports={rules,uploadRequestBytes,batchUploadRequestBytes,attachment,batch,metadata,download,queryPolicy,reviewPolicy,stage,assertAvailable,decide};

@@ -11,7 +11,9 @@ async function verify() {
   checkRuntime({ sqlite: true });
   const browserModules = join(__dirname, 'browser-tools', 'node_modules');
   const env = { ...process.env, RUN_BROWSER_SMOKE: '1', NODE_PATH: browserModules };
-  const test = ['--test', '--test-timeout=60000'];
+  // Several suites spawn Chromium. Bound parallel workers so low-CPU CI
+  // runners measure the application instead of starving browser processes.
+  const test = ['--test', '--test-concurrency=4', '--test-timeout=90000'];
   // Keep a caller's explicitly opted-in browser binary. The locked bundled
   // Chromium in CI is a Linux x64/ARM64 build, not a desktop installer.
   if (env.CHROMIUM_PATH) {

@@ -7,6 +7,7 @@ const {openStore} = require('./store');
 const {openWorkflowHttp} = require('./workflow-http');
 const {openSqlite} = require('./durable-storage');
 const {view:workQueue}=require('./work-queue');
+const {dashboard:workspaceHome}=require('./workspace-home');
 const {model:myWork,taskToken:myWorkToken}=require('./my-work');
 const myWorkRoute=new RegExp('^/api/my-work(?:/tasks/('+myWorkToken+'))?$');
 const {createAccess}=require('./workspace-access');
@@ -18,6 +19,7 @@ const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
 const employee=require('./employee-attestations');
 const training=require('./training');
+const {provisionReview}=require('./governance-documents');
 const {uploadRequestBytes,batchUploadRequestBytes}=require('./governance-document-attachments');
 const attachmentUploadPath=/^\/api\/governance-documents\/records\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/revisions\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/attachments(?:\/batch)?$/u;
 const reporting=require('./reporting');
@@ -34,7 +36,10 @@ const staticFiles = new Map([
   ['/workflow-studio-ui.js',['workflow-studio-ui.js','text/javascript; charset=utf-8']],
   ['/app.js',['app.js','text/javascript; charset=utf-8']],
   ['/governance-docs-ui.js',['governance-docs-ui.js','text/javascript; charset=utf-8']],
+  ['/workspace-home-ui.js',['workspace-home-ui.js','text/javascript; charset=utf-8']],
+  ['/workspace-home.css',['workspace-home.css','text/css; charset=utf-8']],
   ['/my-work-ui.js',['my-work-ui.js','text/javascript; charset=utf-8']],
+  ['/operator-jobs-ui.js',['operator-jobs-ui.js','text/javascript; charset=utf-8']],
   ['/work-queue-ui.js',['work-queue-ui.js','text/javascript; charset=utf-8']],
   ['/vendor-monitoring-ui.js',['vendor-monitoring-ui.js','text/javascript; charset=utf-8']],
   ['/ethics-ui.js',['ethics-ui.js','text/javascript; charset=utf-8']],
@@ -81,8 +86,9 @@ async function readBody(req,limit=32768) {
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,operationalEvents=false}={}) {
   const scopedCatalogs=groups.provision(isolated);
   const scopedDocuments=documentScope.provision(isolated);
+  const manualReview=provisionReview(isolated);
   const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id),
-    id=>({groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id)}));
+    id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id)}));
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
     grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,now:isolated.now
   }):null;
@@ -96,10 +102,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     requesters:isolated.requesterGrants,employees:isolated.employeeGrants,now:isolated.now
   }):null;
   const database=sqliteFile===undefined?null:openSqlite(sqliteFile);
-  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false){
+  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false,manualAttachmentReview=false){
     const storage=database?.scope(scope);
     const workflow=openWorkflowHttp(workflowFile,{storage});
-    return {store:openStore(stateFile,{empty,storage,scopeDocuments}),workflow};
+    return {store:openStore(stateFile,{empty,storage,scopeDocuments,manualAttachmentReview}),workflow};
   }
   let demo;
   try {
@@ -113,11 +119,11 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   function runtime(space){
     if(!space)return demo;
     if(!runtimes.has(space.id))runtimes.set(space.id,
-      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id)));
+      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id),manualReview.has(space.id)));
     return runtimes.get(space.id);
   }
   try{
-    for(const id of scopedDocuments)runtime(access.spaceForProvisionedGrant(id));
+    for(const id of new Set([...scopedDocuments,...manualReview]))runtime(access.spaceForProvisionedGrant(id));
   }catch(error){database?.close();throw error;}
   const files=database?[sqliteFile]:access?isolated.workspaces.flatMap(({id})=>{
     const {file,workflowFile}=access.spaceForProvisionedGrant(id);
@@ -307,6 +313,14 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         const value=access&&actor==='publisher'&&workflowParts[0]==='studio'&&r.status===200?policy.publisherStudio(r.value):r.value;
         return send(res,r.status,value);
       }
+      if(req.method==='GET'&&pathname==='/api/workspace-home'){
+        // The only alternate actor is the selection made in the synthetic demo.
+        // In isolated mode the session's authorization decides both counts and destinations.
+        const homeActor=actor??'analyst';
+        if(!['analyst','reviewer','case-operator'].includes(homeActor))
+          return send(res,403,{error:'This role has no workspace dashboard.'});
+        return send(res,200,workspaceHome(store.getState(),{mode,actor:homeActor,selection,views:policy.capabilities(homeActor).views},searchParams));
+      }
       if(req.method==='GET'&&['/api/reporting','/api/reporting/export'].includes(pathname)){
         if(access&&!reporting.canReport(actor))return send(res,403,{error:'An analyst or reviewer is required for reporting.'});
         const exporting=pathname.endsWith('/export');
@@ -424,7 +438,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           return send(res,200,store.trustCenterView(centerPath));
         }
         const resourceChange=()=>caseOperator&&parts[0]==='governance-documents'?
-          store.readCaseDocument(parts,documentContext(current),body):store.change(parts,actor,body,selection?.account);
+          store.readCaseDocument(parts,documentContext(current),body):store.change(parts,actor,body,selection?.account,current?.generation);
         if(parts.length===8&&parts[0]==='governance-documents'&&parts[1]==='records'&&parts[3]==='revisions'&&parts[5]==='attachments'&&parts[7]==='download'){
           const {bytes,filename}=resourceChange();
           return send(res,200,bytes,'application/octet-stream',{

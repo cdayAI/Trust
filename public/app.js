@@ -110,10 +110,13 @@ function renderWorkspaceMetrics(){
   ];
   overview.replaceChildren(...cards.map(([label,count,caption])=>add(el('div',undefined,'workspace-metric'),el('span',label),el('strong',String(count)),el('small',caption))));
 }
+function prepareDemoIdentity(){
+  const role=$('#actor');
+  role.replaceChildren(...state.actors.map(a=>{const o=el('option',a.name);o.value=a.id;return o}));
+  role.value=actor;
+}
 function render(){
   renderWorkspaceMetrics();
-  const role=$('#actor');if(!localSession){role.replaceChildren(...state.actors.map(a=>{const o=el('option',a.name);o.value=a.id;return o}));role.value=actor;
-  }
   selected=state.projects.some(p=>p.id===selected)?selected:state.projects[0]?.id;
   const projects=$('#projects');projects.replaceChildren();
   for(const p of state.projects){const b=button(p.name,'button','secondary');if(p.id===selected)b.setAttribute('aria-current','true');b.onclick=()=>{selected=p.id;notice('');render()};projects.append(b)}
@@ -218,9 +221,8 @@ async function start(){
       for(const group of $('#work-tabs').querySelectorAll('.nav-group'))group.hidden=!group.querySelector('button:not([hidden])');
       if(!allowed.length)throw Error('No workspace views are available for this account.');
       if(allowed.includes('my-work')&&ownLinkPattern.test(location.hash))switchView('my-work',{keepMyWorkLink:true});
-      else if(!allowed.includes('assessments'))switchView(allowed[0],{keepMyWorkLink:true});
-      else render();
-    }else render();
+      else switchView(allowed[0],{keepMyWorkLink:true});
+    }else{prepareDemoIdentity();switchView('home');}
     $('#workbench').hidden=false;showSkipDestination('workbench','Skip to workbench');
     if(localSession)openMyWorkLocation();
   }catch(error){

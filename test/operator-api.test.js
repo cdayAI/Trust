@@ -68,7 +68,7 @@ async function launch(t, sqliteFile, entry = 'start-isolated.js') {
     assert.equal(response.status, 200);
     return response.cookie.split(';')[0];
   }
-  return { call, login, stop };
+  return { call, login, stop, url };
 }
 
 async function fixture(t) {
@@ -253,4 +253,180 @@ test('jobs enforce isolated roles, keep durable state, and commit rights and aud
   assert.equal(rejection.status, 'rejected');
   status(await resumed.call(rejectAt('/decision'), { cookie: resumedReviewer, body: decision }), 409, 'JOB_NOT_AWAITING_APPROVAL');
   status(await resumed.call(rejectAt('/run'), { cookie: resumedAnalyst, body: {} }), 409, 'JOB_NOT_RUNNABLE');
+});
+
+const auditPlans = '/api/audit-management';
+const approve = { decision: 'approve' };
+
+async function openAuditPlan(server, cookie, title) {
+  const { controls } = status(await server.call(harbor('/api/risk-controls/controls'), {
+    cookie, body: { title: 'Synthetic job control', intent: 'Fictional control objective', expectedRevision: 0 },
+  }), 200);
+  const { plans } = status(await server.call(harbor(auditPlans + '/plans'), {
+    cookie, body: { title, objective: 'Fictional audit objective', scope: 'Fictional audit scope', controlIds: [controls[0].id] },
+  }), 200);
+  return plans[0];
+}
+
+test('audit jobs use pinned revisions, independent approval and the audit workflow transaction', async t => {
+  const sqlite = await fixture(t);
+  const first = await launch(t, sqlite);
+  const peer = await launch(t, sqlite);
+  const analyst = await first.login('sample-intake');
+  const reviewer = await first.login('sample-review');
+  const peerAnalyst = await peer.login('sample-intake');
+  const orchard = await first.login('sample-orchard', 'orchard');
+  const plan = await openAuditPlan(first, analyst, 'Synthetic audited plan');
+  const submit = (action, args, idempotencyKey = randomUUID()) => ({ action, args, idempotencyKey });
+  const planArgs = { planId: plan.id, expectedRevision: plan.revision };
+  const proposal = submit('audit.plan.begin', planArgs);
+  const readJob = submit('audit.plan.status', { planId: plan.id });
+
+  status(await first.call(harbor(jobs), {
+    cookie: analyst, body: submit('audit.plan.finalize', planArgs),
+  }), 422, 'UNKNOWN_JOB_ACTION');
+  status(await first.call(harbor(jobs), {
+    cookie: analyst, body: submit('audit.plan.begin', { ...planArgs, note: 'extra text' }),
+  }), 422, 'INVALID_JOB_INPUT');
+  status(await first.call(harbor(jobs), { cookie: reviewer, body: proposal }), 403, 'ACCESS_DENIED');
+
+  const pending = status(await first.call(harbor(jobs), { cookie: analyst, body: proposal }), 201).job;
+  const urlFor = (jobId, command = '') => harbor(jobs + '/' + jobId + command);
+  const run = (server, cookie, jobId) => server.call(urlFor(jobId, '/run'), { cookie, body: {} });
+  const decide = (cookie, jobId, body = approve) => first.call(urlFor(jobId, '/decision'), { cookie, body });
+  const planView = async () => status(await first.call(harbor(auditPlans), { cookie: reviewer }), 200).plans[0];
+  const jobAudit = async jobId => status(await first.call(harbor(auditPath), { cookie: reviewer }), 200).audit
+    .filter(event => event.correlationId === jobId);
+  assert.equal(pending.status, 'awaiting-approval');
+  status(await run(first, analyst, pending.id), 409, 'JOB_NOT_RUNNABLE');
+  status(await decide(analyst, pending.id), 403, 'ACCESS_DENIED');
+  status(await run(first, reviewer, pending.id), 404, 'JOB_NOT_FOUND');
+  status(await first.call(jobs + '/' + pending.id + '?workspace=orchard', { cookie: orchard }), 404, 'JOB_NOT_FOUND');
+  status(await first.call(harbor(jobs), {
+    cookie: analyst, body: { ...readJob, idempotencyKey: proposal.idempotencyKey },
+  }), 409, 'IDEMPOTENCY_CONFLICT');
+  assert.equal(status(await first.call(harbor(jobs), { cookie: reviewer }), 200).jobs[0].id, pending.id);
+
+  const read = status(await first.call(harbor(jobs), { cookie: reviewer, body: readJob }), 201).job;
+  status(await first.call(urlFor(read.id), { cookie: analyst }), 404, 'JOB_NOT_FOUND');
+  const summary = status(await run(first, reviewer, read.id), 200).job;
+  assert.deepEqual(summary.result, { planId: plan.id, status: 'planned', revision: 1 });
+  assert.doesNotMatch(JSON.stringify(summary), /Fictional audit|Synthetic audited plan|evidence|keyHash/);
+  const foreign = status(await first.call(jobs + '?workspace=orchard', { cookie: orchard, body: readJob }), 201).job;
+  const foreignRun = status(await first.call(jobs + '/' + foreign.id + '/run?workspace=orchard', {
+    cookie: orchard, body: {},
+  }), 200).job;
+  assert.deepEqual(foreignRun.failure, { code: 'AUDIT_NOT_FOUND' });
+
+  const approved = status(await decide(reviewer, pending.id), 200).job;
+  assert.equal(approved.status, 'queued');
+  assert.equal(approved.decision.by, 'sample-review');
+  assert.deepEqual(await planView(), plan);
+  const database = new DatabaseSync(sqlite);
+  try {
+    database.exec(`
+      CREATE TRIGGER fail_audit_job_write BEFORE UPDATE ON snapshots
+      WHEN NEW.scope = 'workspace:harbor' AND NEW.kind = 'workbench'
+      BEGIN SELECT RAISE(ABORT, 'Synthetic audit job write failure'); END;
+    `);
+    status(await run(peer, peerAnalyst, pending.id), 500);
+    assert.deepEqual(await planView(), plan);
+    assert.deepEqual(status(await first.call(urlFor(pending.id), { cookie: analyst }), 200).job, approved);
+    assert.deepEqual((await jobAudit(pending.id)).map(e => e.action), ['operator.job.submitted', 'operator.job.approved']);
+  } finally {
+    database.exec('DROP TRIGGER IF EXISTS fail_audit_job_write');
+    database.close();
+  }
+
+  const results = await Promise.all([run(first, analyst, pending.id), run(peer, peerAnalyst, pending.id)]);
+  const done = status(results[0], 200).job;
+  assert.deepEqual(status(results[1], 200).job, done);
+  assert.equal(done.status, 'succeeded');
+  assert.deepEqual(done.result, { planId: plan.id, status: 'fieldwork', revision: 2 });
+  const events = await jobAudit(done.id);
+  assert.deepEqual(events.map(e => e.action), [
+    'operator.job.submitted', 'operator.job.approved', 'audit-management.begin', 'operator.job.succeeded',
+  ]);
+  assert.equal(events[2].entityId, plan.id);
+  assert.equal(events[2].account, 'sample-intake');
+  assert.equal((await planView()).revision, 2);
+  assert.deepEqual(status(await peer.call(harbor(jobs), {
+    cookie: peerAnalyst, body: { ...proposal, args: { expectedRevision: 1, planId: plan.id } },
+  }), 200).job, done);
+
+  const stale = status(await first.call(harbor(jobs), {
+    cookie: analyst, body: submit('audit.plan.begin', planArgs),
+  }), 201).job;
+  status(await decide(reviewer, stale.id), 200);
+  assert.deepEqual(status(await run(first, analyst, stale.id), 200).job.failure, { code: 'STALE_REVISION' });
+  assert.deepEqual((await jobAudit(stale.id)).slice(-2).map(e => e.action), [
+    'audit-management.refused', 'operator.job.failed',
+  ]);
+  assert.equal((await planView()).revision, 2);
+
+  const rejected = status(await first.call(harbor(jobs), {
+    cookie: analyst, body: submit('audit.plan.begin', { ...planArgs, expectedRevision: 2 }),
+  }), 201).job;
+  assert.equal(status(await decide(reviewer, rejected.id, { decision: 'reject' }), 200).job.status, 'rejected');
+  status(await run(first, analyst, rejected.id), 409, 'JOB_NOT_RUNNABLE');
+});
+
+test('browser operator jobs show and manage audit proposals with the correct roles', {
+  skip: process.env.RUN_BROWSER_SMOKE !== '1' && 'Set RUN_BROWSER_SMOKE=1 with Playwright installed',
+}, async t => {
+  const server = await launch(t, await fixture(t));
+  const jsonServer = await launch(t);
+  const analystCookie = await server.login('sample-intake');
+  const plan = await openAuditPlan(server, analystCookie, 'Synthetic browser audit plan');
+  const { chromium } = require('playwright');
+  const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH || '/usr/bin/chromium', args: ['--no-sandbox'] });
+  t.after(() => browser.close());
+  const errors = [];
+  async function pageFor(host, cookie) {
+    const page = await browser.newPage();
+    page.on('pageerror', error => errors.push(error.message));
+    page.setDefaultTimeout(10000);
+    await page.context().addCookies([{ name: 'trust_local_session', value: cookie.split('=')[1], url: host.url, httpOnly: true }]);
+    await page.goto(host.url);
+    await page.locator('#local-account').waitFor();
+    return page;
+  }
+  const jobsButton = { name: 'Operator jobs', exact: true };
+  const analyst = await pageFor(server, analystCookie);
+  const reviewer = await pageFor(server, await server.login('sample-review'));
+  const publisher = await pageFor(server, await server.login('sample-publisher'));
+  const legacy = await pageFor(jsonServer, await jsonServer.login('sample-intake'));
+  assert.equal(await publisher.getByRole('button', jobsButton).isVisible(), false);
+  assert.equal(await legacy.getByRole('button', jobsButton).isVisible(), false);
+
+  await analyst.getByRole('button', { name: 'Audit management', exact: true }).click();
+  const auditCard = analyst.locator('#audit-management-view article').filter({ hasText: 'Synthetic browser audit plan' });
+  await auditCard.getByRole('button', { name: 'Queue operator job' }).click();
+  await analyst.getByRole('heading', { name: 'Queue operator job', exact: true }).waitFor();
+  assert.deepEqual(errors, []);
+  assert.equal(await analyst.getByLabel('Action', { exact: true }).inputValue(), 'audit.plan.begin');
+  assert.equal(await analyst.getByLabel('Record ID (UUID)', { exact: true }).inputValue(), plan.id);
+  assert.equal(await analyst.getByLabel('Expected revision', { exact: true }).inputValue(), '1');
+  await analyst.getByRole('button', { name: 'Queue job', exact: true }).click();
+
+  const card = page => page.locator('#operator-jobs-view article').filter({ hasText: plan.id });
+  await card(analyst).getByText('Awaiting approval', { exact: true }).waitFor();
+  assert.equal(await card(analyst).getByRole('button', { name: 'Approve job' }).count(), 0);
+  assert.equal(await card(analyst).getByRole('button', { name: 'Run job' }).count(), 0);
+
+  await reviewer.getByRole('button', jobsButton).click();
+  await card(reviewer).getByRole('button', { name: 'Open audit plan' }).click();
+  await reviewer.getByRole('heading', { name: 'Synthetic browser audit plan', exact: true }).waitFor();
+  await reviewer.getByRole('button', jobsButton).click();
+  await card(reviewer).getByRole('button', { name: 'Approve job' }).click();
+  await card(reviewer).getByText('Queued', { exact: true }).waitFor();
+  assert.equal(await card(reviewer).getByRole('button', { name: 'Run job' }).count(), 0);
+
+  await analyst.getByRole('button', { name: 'Refresh jobs' }).click();
+  await card(analyst).getByRole('button', { name: 'Run job' }).click();
+  await card(analyst).getByText('Succeeded', { exact: true }).waitFor();
+  await card(analyst).getByText('Record status fieldwork · Revision 2', { exact: true }).waitFor();
+  await analyst.getByRole('button', { name: 'Audit management', exact: true }).click();
+  await auditCard.getByText('fieldwork', { exact: true }).waitFor();
+  assert.deepEqual(errors, []);
 });

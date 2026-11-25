@@ -61,6 +61,11 @@ function renderAuditManagement(){
     const card=add(el('article',undefined,'module-record'),el('h3',plan.title),badge(plan.status),el('p',plan.objective),el('p','Scope: '+plan.scope),
       el('p','Plan revision '+plan.revision+' · Created by '+plan.createdBy,'hint'));
     card.id='work-record-'+plan.id;
+    if(localSession?.capabilities.views.includes('operator-jobs')){
+      const queue=button('Queue operator job','button','secondary');
+      queue.onclick=()=>openAuditPlanJobs(plan);
+      card.append(queue);
+    }
     const scoped=add(el('ul'));
     for(const c of plan.controls){
       const assessed=plan.assessments.filter(a=>a.controlId===c.id);

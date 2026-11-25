@@ -61,6 +61,37 @@ This local synthetic workflow stores the original bytes in revision state.
 There is no malware scanner, content classification, dedicated object storage,
 external sharing, or production retention integration.
 
+## Optional manual quarantine
+
+Launch the local isolated sample with `TRUST_ATTACHMENT_REVIEW=manual npm run start:isolated`.
+The server API can provision selected isolated workspaces with
+`isolated.attachmentReviewWorkspaces: ['workspace-id']`. Each selected workspace
+must have no existing attachments and must have separate analyst and reviewer
+accounts. Once activated, the policy is stored per workspace alongside the
+documents and survives restarts, removal of the launch flag, and ordinary
+verified SQLite backup/restore. There is no runtime switch to bypass it. Never
+downgrade a quarantined workspace to application code that does not enforce
+this policy.
+
+A valid single or batch upload stages files atomically. Their authors and
+reviewers can see metadata only, and no role can download pending, rejected or
+invalid-quarantine-state bytes. The reviewer can reject a file or match the
+SHA-256 of the independently verified original from a trusted external
+source supplied through an already authorized separate process. The reviewer
+cannot retrieve or preview the quarantined bytes through the app, and the app
+does not send files anywhere. Only a separate signed-in reviewer can decide.
+A draft cannot be submitted until the analyst removes rejected files and
+remaining files have been released. Releases are audited manual decisions,
+**not malware scans or attestations that a file is safe**.
+
+This slice keeps opaque bytes in the same transaction and backup as the
+document snapshot. Quarantined/rejected bytes are retained and count toward
+the existing file and storage limits until a draft author removes them;
+historical backups can retain the removed bytes. It does not implement
+dedicated object storage, disk-level isolation, a malware scanner, secure
+erasure, or live migration of legacy attachments. Do not use it for real
+workplace data.
+
 Run focused HTTP and browser journeys:
 
 ```sh

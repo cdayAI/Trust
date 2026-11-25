@@ -35,9 +35,9 @@ function localTasks(state,actor,account){
 
 // Each workspace currently provisions at most one account to each workflow role.
 // The verified role is the assigned seat, never a request-supplied owner selector.
-function assigned(state,{space,actor,account},allowedViews){
+function assigned(state,{space,actor,account},allowedViews,asOf){
   if(!space?.id||typeof account!=='string'||!supportedRoles.has(actor))error('My work is unavailable.',404);
-  const queue=queueView(state,new URLSearchParams({owner:actor}));
+  const queue=queueView(state,new URLSearchParams({owner:actor}),asOf);
   const allowed=new Set(allowedViews);
   const rows=[...queue.tasks,...localTasks(state,actor,account)].filter(task=>task.owner===actor&&allowed.has(task.destination.view)&&
       task.destination.view===task.workflow&&safeRef(task.destination.recordId)&&
@@ -54,9 +54,9 @@ function assigned(state,{space,actor,account},allowedViews){
   return {asOf:queue.asOf,rows};
 }
 
-function model(state,session,allowedViews,params,key){
+function model(state,session,allowedViews,params,key,today){
   if([...params.keys()].length)error('My work does not support owner or other query parameters.',422);
-  const {asOf,rows}=assigned(state,session,allowedViews);
+  const {asOf,rows}=assigned(state,session,allowedViews,today);
   if(key===undefined)return {asOf,tasks:rows.map(row=>row.list)};
   const selected=rows.find(row=>row.list.key===key);
   if(!selected)error('Assigned work item not found.',404);

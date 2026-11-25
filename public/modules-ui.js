@@ -105,15 +105,16 @@ function renderModules(){
   mview.replaceChildren(add(el('div',undefined,'module-grid'),add(el('aside'),add(el('section'),heading('Program modules'),nav)),content));
 }
 function switchView(view,{keepMyWorkLink=false}={}){
-  if(['ethics','group-governance','scoped-applications','document-access'].includes(view)&&!localSession)return;
+  if(['ethics','group-governance','scoped-applications','document-access','operator-jobs'].includes(view)&&!localSession)return;
   if(localSession&&!localSession.capabilities.views.includes(view))return;
   if(!keepMyWorkLink)clearMyWorkLocation();
-  $('#audit-export').hidden=view==='my-work'||!!localSession&&!localSession.capabilities.workspaceAudit;
+  $('#audit-export').hidden=['home','my-work'].includes(view)||!!localSession&&!localSession.capabilities.workspaceAudit;
   const item=$('#show-'+view);
-  $('#view-title').textContent=view==='assessments'?'Assessment workspace':item.textContent;
+  $('.hero').classList.toggle('hero-home',view==='home');
+  $('#view-title').textContent=view==='home'?'Trust operations':view==='assessments'?'Assessment workspace':item.textContent;
   $('#view-description').textContent=view==='assessments'?
     'Manage project and vendor reviews, then verify an independent approval.':
-    'Review and manage synthetic records in this local workspace.';
+    view==='home'?'See what needs action in your workspace and pick up where it matters.':'Review and manage synthetic records in this local workspace.';
   $('#workspace-metrics').hidden=view!=='assessments';
   $('#mobile-nav').setAttribute('aria-expanded','false');
   $('#work-tabs').classList.remove('open');
@@ -124,6 +125,8 @@ function switchView(view,{keepMyWorkLink=false}={}){
   overview.hidden=view!=='assessments';mview.hidden=!moduleActive;$('#report-view').hidden=!reportActive;$('#rights-view').hidden=view!=='rights';$('#incident-view').hidden=view!=='incidents';$('#data-map-view').hidden=view!=='data-map';$('#dictionary-view').hidden=view!=='dictionary';$('#preferences-view').hidden=view!=='preferences';$('#retention-view').hidden=view!=='retention';$('#risk-controls-view').hidden=view!=='risk-controls';$('#audit-management-view').hidden=view!=='audit-management';$('#maturity-planning-view').hidden=view!=='maturity-planning';$('#vendor-monitoring-view').hidden=view!=='vendor-monitoring';$('#queue-view').hidden=view!=='queue';$('#governance-docs-view').hidden=view!=='governance-docs';$('#trust-center-view').hidden=view!=='trust-center';$('#employee-attestations-view').hidden=view!=='employee-attestations';$('#workflow-studio-view').hidden=view!=='workflow-studio';
   $('#ethics-view').hidden=view!=='ethics';
   $('#my-work-view').hidden=view!=='my-work';
+  $('#home-view').hidden=view!=='home';
+  $('#operator-jobs-view').hidden=view!=='operator-jobs';
   $('#processing-register-view').hidden=view!=='processing-register';
   $('#assessment-config-view').hidden=view!=='assessment-config';
   $('#training-view').hidden=view!=='training';
@@ -131,12 +134,14 @@ function switchView(view,{keepMyWorkLink=false}={}){
   $('#document-access-view').hidden=view!=='document-access';
   $('#group-governance-view').hidden=view!=='group-governance';
   $('#scoped-applications-view').hidden=view!=='scoped-applications';
-  for(const name of ['document-access','group-governance','scoped-applications','identity-admin','ethics','assessments','assessment-config','rights','incidents','data-map','processing-register','dictionary','preferences','retention','risk-controls','audit-management','maturity-planning','vendor-monitoring','queue','my-work','governance-docs','trust-center','employee-attestations','training','workflow-studio','modules','report']){
+  for(const name of ['home','document-access','group-governance','scoped-applications','identity-admin','ethics','assessments','assessment-config','rights','incidents','data-map','processing-register','dictionary','preferences','retention','risk-controls','audit-management','maturity-planning','vendor-monitoring','queue','my-work','operator-jobs','governance-docs','trust-center','employee-attestations','training','workflow-studio','modules','report']){
     const b=$('#show-'+name),on=view===name;
     b.setAttribute('aria-current',String(on));b.classList.toggle('secondary',!on);
   }
   notice('');
-  if(reportActive){
+  if(view==='home'){
+    refreshWorkspaceHome();
+  }else if(reportActive){
     refreshReporting();
   }else if(moduleActive){
     mview.replaceChildren(el('p','Loading program records…'));
@@ -165,6 +170,8 @@ function switchView(view,{keepMyWorkLink=false}={}){
     $('#vendor-monitoring-view').replaceChildren(el('p','Loading vendor monitoring…'));refreshVendors();
   }else if(view==='my-work'){
     $('#my-work-view').replaceChildren(el('p','Loading assigned work…'));refreshMyWork();
+  }else if(view==='operator-jobs'){
+    mountOperatorJobs();
   }else if(view==='queue'){
     $('#queue-view').replaceChildren(el('p','Loading work queue…'));refreshQueue();
   }else if(view==='governance-docs'){

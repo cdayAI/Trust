@@ -162,7 +162,7 @@ function seed() {
   createVendor(state,'system',{projectId:p.id,name:'Northstar Assist',description:'Fictional service that drafts support replies with AI. Humans review before messages are sent.',usesAI:true},'northstar');
   return state;
 }
-function openStore(file,{empty=false,storage,scopeDocuments=false}={}) {
+function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false}={}) {
   let saveSnapshot;
   function persist(next) {
     if(storage){
@@ -190,6 +190,10 @@ function openStore(file,{empty=false,storage,scopeDocuments=false}={}) {
       if(!empty)persist(state);
     }
     if (state.version!==1 || !['projects','vendors','assessments','audit','handoff','actors'].every(k=>Array.isArray(state[k]))) throw new Error('Unsupported or invalid state file.');
+    if(manualAttachmentReview){
+      const next=structuredClone(state);
+      if(documents.enableManualReview(next)){persist(next);state=next;}
+    }
     if(scopeDocuments&&state.documentAccessScope===undefined){
       const next=structuredClone(state);
       next.documentAccessScope={version:1,revision:0,grants:[]};
@@ -256,6 +260,8 @@ function openStore(file,{empty=false,storage,scopeDocuments=false}={}) {
     const membership = identityAdmin.record(state, caller.account);
     if (membership.disabled || membership.revision !== caller.generation) fail(401, 'Sign in to a local workspace.');
   }
+  const applyProgram = (snapshot, parts, actor, body, appendEvent, account) =>
+    programs.get(parts[0]).change(snapshot, parts, actor, body, appendEvent, createVendorAssessments, account);
   let membershipGeneration=-1, membershipState={};
   const operations={
     groupGovernanceView:context=>groupGovernance.operatorView(state,context),
@@ -276,7 +282,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false}={}) {
       // Check revocation again on the snapshot locked for this write.
       requireCurrentOperatorSession(caller);
       const next = structuredClone(state);
-      const outcome = operatorJobs.change(next, caller, operation, jobId, body, event);
+      const outcome = operatorJobs.change(next, caller, operation, jobId, body, event, applyProgram);
       if (outcome.changed) { persist(next); state = next; }
       return outcome;
     },
@@ -412,7 +418,9 @@ function openStore(file,{empty=false,storage,scopeDocuments=false}={}) {
     getProgramAudit:prefix=>state.audit.filter(e=>e.action.startsWith(prefix+'.')),
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
     reportSnapshot:()=>({state,audit:state.audit.filter(e=>!excludedAudit(e))}),
-    change(parts,actor,body,account) {
+    change(parts,actor,body,account,generation) {
+      if(generation!==undefined&&parts[0]==='governance-documents')
+        requireCurrentOperatorSession({account,generation});
       if (!actors.some(a=>a.id===actor)) fail(403,'Select a valid demo identity.');
       if (actor===rights.backupActor.id&&!['rights','governance-documents'].includes(parts[0])) fail(403,'This identity is assigned to rights cases only.');
       if (!body || typeof body!=='object'||Array.isArray(body)) fail(400,'Expected a JSON object.');
@@ -433,7 +441,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false}={}) {
         if(!result.changed)return {result,map:dataMap.view(state)};
         commit();return {result,map:dataMap.view(state)};
       } else if(program){
-        try{result=program.change(next,parts,actor,body,event,createVendorAssessments,account);}
+        try{result=applyProgram(next,parts,actor,body,event,account);}
         catch(error){
           if(error.persistRefusal)commit();
           throw error;

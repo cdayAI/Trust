@@ -1,10 +1,34 @@
 'use strict';
 
 const { createHash, randomUUID } = require('node:crypto');
-const rights = require('./rights-workflow');
-
-const lookup = 'rights.case.status';
-const assign = 'rights.case.assign';
+const rightsCase = {
+  idField: 'caseId',
+  get: (state, id) => state.rightsCases?.find(row => row.id === id),
+  missing: 'CASE_NOT_FOUND',
+  summarize: ({ id: caseId, kind, owner, status, revision }) => ({ caseId, kind, owner, status, revision }),
+};
+const auditPlan = {
+  idField: 'planId',
+  get: (state, id) => state.auditManagement?.plans.find(row => row.id === id),
+  missing: 'AUDIT_NOT_FOUND',
+  summarize: ({ id: planId, status, revision }) => ({ planId, status, revision }),
+};
+const actions = new Map([
+  ['rights.case.status', rightsCase],
+  ['rights.case.assign', {
+    ...rightsCase,
+    command: (id, expectedRevision) => [
+      ['rights', 'cases', id, 'assign'],
+      { expectedRevision, owner: 'case-operator', note: 'Synthetic operator job reassignment.' },
+    ],
+  }],
+  ['audit.plan.status', auditPlan],
+  ['audit.plan.begin', {
+    ...auditPlan,
+    command: (id, expectedRevision) => [['audit-management', 'plans', id, 'begin'], { expectedRevision }],
+  }],
+]);
+const needsApproval = action => Boolean(actions.get(action)?.command);
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 function fail(status, code, message) {
@@ -21,21 +45,21 @@ function exact(body, fields) {
 function submission(body, role) {
   exact(body, ['action', 'args', 'idempotencyKey']);
   const { action, args, idempotencyKey } = body;
-  if (![lookup, assign].includes(action)) {
-    fail(422, 'UNKNOWN_JOB_ACTION', 'Select an allowlisted operator action.');
+  const definition = actions.get(action);
+  if (!definition) fail(422, 'UNKNOWN_JOB_ACTION', 'Select an allowlisted operator action.');
+  const { idField, command } = definition;
+  if (command && role !== 'analyst') {
+    fail(403, 'ACCESS_DENIED', 'Only the analyst can request this operator change.');
   }
-  if (action === assign && role !== 'analyst') {
-    fail(403, 'ACCESS_DENIED', 'Only the intake analyst can request this reassignment.');
-  }
-  exact(args, action === assign ? ['caseId', 'expectedRevision'] : ['caseId']);
+  exact(args, command ? [idField, 'expectedRevision'] : [idField]);
   if (typeof idempotencyKey !== 'string' || !uuid.test(idempotencyKey) ||
-      typeof args.caseId !== 'string' || !uuid.test(args.caseId) ||
-      (action === assign && (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1))) {
-    fail(422, 'INVALID_JOB_INPUT', 'Use lowercase random UUIDs and a positive case revision for reassignment.');
+      typeof args[idField] !== 'string' || !uuid.test(args[idField]) ||
+      (command && (!Number.isSafeInteger(args.expectedRevision) || args.expectedRevision < 1))) {
+    fail(422, 'INVALID_JOB_INPUT', 'Use lowercase random UUIDs and a positive revision for changes.');
   }
   return {
     action,
-    args: action === assign ? { caseId: args.caseId, expectedRevision: args.expectedRevision } : { caseId: args.caseId },
+    args: { [idField]: args[idField], ...(command ? { expectedRevision: args.expectedRevision } : {}) },
     keyHash: createHash('sha256').update(idempotencyKey).digest('hex'),
   };
 }
@@ -45,7 +69,7 @@ function owns(job, caller) {
 }
 
 function canSee(job, caller) {
-  return owns(job, caller) || (caller.actor === 'reviewer' && job.action === assign);
+  return owns(job, caller) || (caller.actor === 'reviewer' && needsApproval(job.action));
 }
 
 function view(job) {
@@ -66,28 +90,28 @@ function read(state, caller, id) {
   return { jobs: jobs.filter(visible).map(view) };
 }
 
-function execute(state, job, caller, audit) {
-  const current = () => state.rightsCases?.find(row => row.id === job.args.caseId);
-  if (!current()) return { failure: { code: 'CASE_NOT_FOUND' } };
+function execute(state, job, caller, audit, applyProgram) {
+  const definition = actions.get(job.action);
+  if (!definition) throw new Error('Invalid stored operator action.');
+  const { idField, get, missing, summarize, command } = definition;
+  const id = job.args[idField];
+  const record = get(state, id);
+  if (!record) return { failure: { code: missing } };
 
-  if (job.action === assign) {
+  if (command) {
+    const [parts, body] = command(id, job.args.expectedRevision);
     try {
-      rights.change(state, ['rights', 'cases', job.args.caseId, 'assign'], caller.actor, {
-        expectedRevision: job.args.expectedRevision,
-        owner: 'case-operator',
-        note: 'Synthetic operator job reassignment.',
-      }, audit);
+      applyProgram(state, parts, caller.actor, body, audit, caller.account);
     } catch (error) {
-      // The rights workflow explicitly saves the refusal audit for these errors.
+      // Validated domain refusals deliberately append an audit event.
       if (!error.persistRefusal) throw error;
       return { failure: { code: error.code } };
     }
   }
-  const { id: caseId, kind, owner, status, revision } = current();
-  return { result: { caseId, kind, owner, status, revision } };
+  return { result: summarize(command ? get(state, id) : record) };
 }
 
-function change(state, caller, operation, id, body, event) {
+function change(state, caller, operation, id, body, event, applyProgram) {
   const jobs = state.operatorJobs ??= [];
   const now = new Date().toISOString();
 
@@ -118,7 +142,7 @@ function change(state, caller, operation, id, body, event) {
     }
     const job = {
       ...input, id: randomUUID(), requestedBy: caller.account, requestedRole: caller.actor,
-      createdAt: now, status: input.action === assign ? 'awaiting-approval' : 'queued',
+      createdAt: now, status: needsApproval(input.action) ? 'awaiting-approval' : 'queued',
     };
     jobs.push(job);
     return record(job, 'submitted');
@@ -129,7 +153,7 @@ function change(state, caller, operation, id, body, event) {
     if (!['approve', 'reject'].includes(body.decision)) {
       fail(422, 'INVALID_JOB_INPUT', 'Select approve or reject.');
     }
-    const job = find(jobs, id, row => row.action === assign);
+    const job = find(jobs, id, row => needsApproval(row.action));
     if (caller.actor !== 'reviewer' || caller.account === job.requestedBy) {
       fail(403, 'INDEPENDENT_REVIEW_REQUIRED', 'An independent reviewer must decide this request.');
     }
@@ -146,10 +170,10 @@ function change(state, caller, operation, id, body, event) {
   exact(body, []);
   const job = find(jobs, id, row => owns(row, caller));
   if (['succeeded', 'failed'].includes(job.status)) return { job: view(job) };
-  if (job.status !== 'queued' || (job.action === assign && job.decision?.value !== 'approve')) {
+  if (job.status !== 'queued' || (needsApproval(job.action) && job.decision?.value !== 'approve')) {
     fail(409, 'JOB_NOT_RUNNABLE', 'Only queued jobs with any required approval can run.');
   }
-  const outcome = execute(state, job, caller, auditFor(job));
+  const outcome = execute(state, job, caller, auditFor(job), applyProgram);
   Object.assign(job, outcome, { status: outcome.failure ? 'failed' : 'succeeded' });
   return record(job, job.status);
 }

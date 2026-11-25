@@ -163,7 +163,9 @@ function attachmentForm(path,revision,rules,remaining){
       if(!current())return;
       if(!fileErrors.length){
         await docsPost(path+'/attachments/batch',{files:payload,expectedRevision:revision},data=>{
-          docsData=data;renderDocs();notice(selected.length===1?'Attachment added to the draft.':selected.length+' attachments added to the draft.');
+          docsData=data;renderDocs();notice(rules.manualReview?
+            selected.length+' attachment'+(selected.length===1?'':'s')+' staged for quarantine review.':
+            selected.length===1?'Attachment added to the draft.':selected.length+' attachments added to the draft.');
         },error=>fileErrors.push(...(error.fileErrors??[])));
       }
     }finally{
@@ -176,13 +178,28 @@ function attachmentForm(path,revision,rules,remaining){
 }
 function attachmentControls(card,path,version,revision,rules){
   const group=add(el('div',undefined,'document-attachments'),el('h4','Attachments'));
+  if(rules.manualReview&&['analyst','reviewer'].includes(actor))
+    group.append(el('p','Uploads are quarantined until a separate reviewer confirms the exact file. No automatic malware scanning is configured.','hint'));
   if(!version.attachments.length)group.append(el('p','No attachments.'));
   const items=el('ul');
   for(const row of version.attachments){
     const item=add(el('li'),el('span',row.name+' · '+row.size+' bytes'));
-    const download=button('Download attachment '+row.name,'button','secondary');
-    download.onclick=()=>downloadAttachment(path+'/attachments/'+row.id+'/download',row);
-    item.append(download);
+    const rowPath=path+'/attachments/'+row.id;
+    if(row.reviewStatus)item.append(badge({pending:'Quarantined',released:'Manually released',rejected:'Rejected',unavailable:'Unavailable'}[row.reviewStatus]??'Unavailable'));
+    if(!row.reviewStatus||row.reviewStatus==='released'){
+      const download=button('Download attachment '+row.name,'button','secondary');
+      download.onclick=()=>downloadAttachment(rowPath+'/download',row);
+      item.append(download);
+    }
+    if(actor==='reviewer'&&version.status==='draft'&&row.reviewStatus==='pending'){
+      const panel=docsPanel(item,'Review attachment '+row.name);
+      panel.append(el('p','Use the SHA-256 of the original file you independently verified outside the app. This is a manual decision, not a malware scan. If you cannot verify it, reject it.','hint'));
+      const field=labelled('Verified original SHA-256','sha256','','input');
+      const input=field.querySelector('input');
+      input.required=true;input.pattern='[a-f0-9]{64}';input.maxLength=64;input.autocomplete='off';input.spellcheck=false;
+      docsForm(panel,rowPath+'/review',[field],'Release attachment',f=>({operation:'release',sha256:f.get('sha256')}),revision);
+      docsForm(panel,rowPath+'/review',[],'Reject attachment',()=>({operation:'reject'}),revision);
+    }
     if(actor==='analyst'&&version.status==='draft'){
       const remove=button('Remove attachment '+row.name,'button','secondary');
       remove.onclick=()=>docsPost(path+'/attachments/'+row.id+'/remove',{expectedRevision:revision},data=>{
@@ -245,7 +262,9 @@ function renderDocs(){
         load.onclick=()=>docsPost(path+'/read',{},data=>{fields[1].querySelector('textarea').value=data.text;notice('Document access recorded.')});
         edit.append(load);
         docsForm(edit,path+'/edit',fields,'Save draft',documentPayload,revision);
-        docsForm(card,path+'/submit',[],'Submit for review',()=>({}),revision);
+        if(v.attachments.some(row=>row.reviewStatus&&row.reviewStatus!=='released'))
+          card.append(el('p','Clear attachment quarantine or remove unavailable files before submitting this revision.','hint'));
+        else docsForm(card,path+'/submit',[],'Submit for review',()=>({}),revision);
       }
       if(actor==='reviewer'&&v.status==='review'){
         for(const [action,caption] of [['publish','Publish locally'],['return','Return to draft']])

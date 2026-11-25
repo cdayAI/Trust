@@ -18,9 +18,9 @@ function candidates(s){
     ...(s.incidentCases??[]).map(x=>({type:'incident',id:x.id,label:x.title}))
   ];
 }
-function redactVersion(version){
+function redactVersion(version,manualReview){
   const {content,attachments:rows,...safe}=version;
-  return {...safe,attachments:(rows??[]).map(attachments.metadata)};
+  return {...safe,attachments:(rows??[]).map(row=>attachments.metadata(row,manualReview))};
 }
 function permitted(s,doc,v,actor){
   if(!s.actors.some(x=>x.id===actor))return false;
@@ -31,14 +31,15 @@ function permitted(s,doc,v,actor){
 function view(s,actor){
   if(!s.actors.some(x=>x.id===actor))issue(403,'ACTOR_REQUIRED','Select a known local demo identity.');
   const book=docsOf(s);
+  const manualReview=attachments.queryPolicy(book);
   const administrator=actor==='analyst'||actor==='reviewer';
   const documents=book.documents.map(doc=>{
-    const revisions=doc.revisions.filter(v=>permitted(s,doc,v,actor)).map(redactVersion);
+    const revisions=doc.revisions.filter(v=>permitted(s,doc,v,actor)).map(v=>redactVersion(v,manualReview));
     if(!revisions.length)return null;
     const currentRevisionId=revisions.findLast(v=>v.status==='published')?.id??null;
     return {...doc,revisions,currentRevisionId};
   }).filter(Boolean);
-  return {revision:administrator?book.revision:null,kinds,linkKinds,attachmentRules:attachments.rules,documents,targets:administrator?candidates(s):[],
+  return {revision:administrator?book.revision:null,kinds,linkKinds,attachmentRules:manualReview?{...attachments.rules,manualReview:true}:attachments.rules,documents,targets:administrator?candidates(s):[],
     legacyRecords:administrator?(s.moduleRecords??[]).filter(x=>x.moduleId==='policies'):[]};
 }
 function versionFields(s,kind,body){
@@ -58,17 +59,18 @@ function versionFields(s,kind,body){
 const actionKeys={
   create:['kind','title','content','links'],revise:['title','content','links'],edit:['title','content','links'],
   submit:[],publish:['note'],return:['note'],read:[],download:[],
-  'attachment-upload':['filename','mediaType','data'],'attachment-upload-batch':['files'],'attachment-remove':[],'attachment-download':[]
+  'attachment-upload':['filename','mediaType','data'],'attachment-upload-batch':['files'],'attachment-review':['operation','sha256'],'attachment-remove':[],'attachment-download':[]
 };
-function change(s,parts,actor,body,event){
+function change(s,parts,actor,body,event,_vendorAssessments,account){
   const book=s.governanceDocuments??=docsOf(s);
+  const manualReview=attachments.queryPolicy(book);
   const [,collection,docId,part,revId,operation,attachmentId,attachmentOperation]=parts;
   let action=parts.length===2?'create':parts.length===4&&part==='revise'?'revise':null;
   if(part==='revisions'){
     if(parts.length===6&&['edit','submit','publish','return','read','download'].includes(operation))action=operation;
     if(operation==='attachments'&&parts.length===6)action='attachment-upload';
     if(operation==='attachments'&&parts.length===7&&attachmentId==='batch')action='attachment-upload-batch';
-    if(operation==='attachments'&&parts.length===8&&['download','remove'].includes(attachmentOperation))action='attachment-'+attachmentOperation;
+    if(operation==='attachments'&&parts.length===8&&['download','remove','review'].includes(attachmentOperation))action='attachment-'+attachmentOperation;
   }
   if(collection!=='records'||!action)issue(404,'NOT_FOUND','Governance document action not found.');
   const doc=book.documents.find(x=>x.id===docId);
@@ -83,18 +85,21 @@ function change(s,parts,actor,body,event){
       if(action==='attachment-download'){
         const row=v.attachments?.find(x=>x.id===attachmentId);
         if(!row)issue(404,'ATTACHMENT_NOT_FOUND','Attachment not found in this document revision.');
+        attachments.assertAvailable(row,manualReview);
         const result=attachments.download(row);
         audit(action,doc,v,{attachmentId:row.id,version:v.number});
         return result;
       }
       audit(action,doc,v,{hash:v.contentHash,version:v.number});
-      return {id:doc.id,kind:doc.kind,version:redactVersion(v),text:v.content,filename:'synthetic-'+doc.kind+'-v'+v.number+'.txt'};
+      return {id:doc.id,kind:doc.kind,version:redactVersion(v,manualReview),text:v.content,filename:'synthetic-'+doc.kind+'-v'+v.number+'.txt'};
     }
     if(!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0)issue(422,'REVISION_REQUIRED','Provide the current document workspace revision.');
     if(body.expectedRevision!==book.revision)issue(409,'STALE_REVISION','The document workspace changed. Reload before retrying.');
     const review=['publish','return'].includes(action);
-    if(actor!==(review?'reviewer':'analyst'))issue(403,review?'INDEPENDENT_REVIEW_REQUIRED':'AUTHOR_REQUIRED',
-      review?'A separate demo reviewer must decide.':'Only the demo author can take this action.');
+    const attachmentReview=action==='attachment-review';
+    const reviewer=review||attachmentReview;
+    if(actor!==(reviewer?'reviewer':'analyst'))issue(403,reviewer?'INDEPENDENT_REVIEW_REQUIRED':'AUTHOR_REQUIRED',
+      reviewer?'A separate demo reviewer must decide.':'Only the demo author can take this action.');
     const now=new Date().toISOString();
     let d=doc,row=v;
     if(action==='create'||action==='revise'){
@@ -113,10 +118,18 @@ function change(s,parts,actor,body,event){
       if(!doc||!v)issue(404,'RECORD_NOT_FOUND','That document revision was not found.');
       if(v.status==='published')issue(409,'IMMUTABLE_REVISION','Published revisions cannot be changed.');
       if(v.status!==(review?'review':'draft'))issue(409,'OUT_OF_ORDER','This action is unavailable for the current revision stage.');
+      if(attachmentReview){
+        const target=v.attachments?.find(row=>row.id===attachmentId);
+        if(!target)issue(404,'ATTACHMENT_NOT_FOUND','Attachment not found in this document revision.');
+        const disposition=attachments.decide(target,manualReview,account,body);
+        book.revision++;v.updatedAt=now;
+        audit(action,doc,v,{attachmentId:target.id,disposition,version:v.number,revision:book.revision});
+        return;
+      }
       if(action==='edit')Object.assign(v,versionFields(s,doc.kind,body));
       if(action==='attachment-upload'||action==='attachment-upload-batch'){
         const rows=action==='attachment-upload'?[attachments.attachment(body,book,v)]:attachments.batch(body.files,book,v);
-        (v.attachments??=[]).push(...rows);
+        (v.attachments??=[]).push(...(manualReview?rows.map(row=>attachments.stage(row,account)):rows));
         book.revision++;v.updatedAt=now;
         for(const row of rows)audit('attachment-upload',doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
         return;
@@ -128,6 +141,9 @@ function change(s,parts,actor,body,event){
         book.revision++;v.updatedAt=now;
         audit(action,doc,v,{attachmentId:row.id,version:v.number,revision:book.revision});
         return;
+      }
+      if(['submit','publish'].includes(action)){
+        for(const target of v.attachments??[])attachments.assertAvailable(target,manualReview);
       }
       if(action==='submit'){v.status='review';v.reviewNote=null}
       if(review){
@@ -163,4 +179,29 @@ function listPolicyEditions(state){
   return docsOf(state).documents.flatMap(doc=>doc.kind==='policy'?
     doc.revisions.filter(x=>x.status==='published').map(v=>({document:doc.id,edition:v.id,number:v.number,hash:v.contentHash,title:v.title})):[]);
 }
-module.exports={view,change,stateView,policyEdition,listPolicyEditions};
+function enableManualReview(state){
+  const book=docsOf(state);
+  if(attachments.queryPolicy(book))return false;
+  if(book.documents.some(d=>d.revisions.some(v=>v.attachments?.length)))
+    throw Error('Manual attachment review needs a workspace with no existing attachments.');
+  state.governanceDocuments={...book,attachmentReview:attachments.reviewPolicy};
+  return true;
+}
+// Explicit local provisioning; there is deliberately no route to switch off a
+// persisted quarantine policy or release staged files outside review.
+function provisionReview(isolated){
+  const selection=isolated?.attachmentReviewWorkspaces;
+  if(selection===undefined)return new Set();
+  if(!Array.isArray(selection)||!selection.length||new Set(selection).size!==selection.length||
+    !Array.isArray(isolated.workspaces)||!Array.isArray(isolated.accounts))
+    throw Error('Manual attachment review requires explicit isolated workspaces.');
+  for(const id of selection){
+    if(!isolated.workspaces.some(s=>s.id===id))throw Error('Manual attachment review workspace is unknown.');
+    const author=isolated.accounts.find(a=>Object.hasOwn(a.memberships??{},id)&&a.memberships[id]==='analyst');
+    const reviewer=isolated.accounts.find(a=>Object.hasOwn(a.memberships??{},id)&&a.memberships[id]==='reviewer');
+    if(!author||!reviewer||author.id===reviewer.id)
+      throw Error('Manual attachment review requires independent author and reviewer accounts.');
+  }
+  return new Set(selection);
+}
+module.exports={view,change,stateView,policyEdition,listPolicyEditions,enableManualReview,provisionReview};

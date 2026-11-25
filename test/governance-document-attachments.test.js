@@ -12,6 +12,7 @@ const sampleBytes=require('../fixtures/governance-upload-formats.json');
 const {randomBytes,createHash}=require('node:crypto');
 const {createServer}=require('../server');
 const {codeHash}=require('../workspace-access');
+const {backupDatabase,restoreDatabase}=require('../durable-storage');
 const attachmentPolicy=require('../governance-document-attachments');
 
 const primary='alpha', secondary='beta';
@@ -19,14 +20,15 @@ const roles=[
   ['fictional-author',primary,'analyst'],['fictional-reviewer',primary,'reviewer'],
   ['fictional-operator',primary,'case-operator'],['fictional-other',secondary,'analyst']
 ];
-async function fixture(t,backend){
+async function fixture(t,backend,manualReview=false){
   const root=await mkdtemp(join(tmpdir(),'mvw-attachment-'));
   const passwords=Object.fromEntries(roles.map(([id])=>[id,randomBytes(32).toString('base64url')]));
   const options={root,workspaces:[{id:primary,label:'Synthetic Alpha'},{id:secondary,label:'Synthetic Beta'}],
+    ...(manualReview?{attachmentReviewWorkspaces:[primary]}:{}),
     accounts:roles.map(([id,workspace,role])=>({id,codeHash:codeHash(passwords[id]),memberships:{[workspace]:role}}))};
-  let server,url;
+  let server,url,sqliteFile=backend==='sqlite'?join(root,'fictional.sqlite'):undefined;
   async function start(){
-    server=createServer({isolated:options,...(backend==='sqlite'?{sqliteFile:join(root,'fictional.sqlite')}:{})}).listen(0,'127.0.0.1');
+    server=createServer({isolated:options,sqliteFile}).listen(0,'127.0.0.1');
     await once(server,'listening');
     url='http://127.0.0.1:'+server.address().port;
   }
@@ -51,7 +53,9 @@ async function fixture(t,backend){
     const {response}=await request('session/login',200,{body:{account,workspace,code:passwords[account]}});
     return response.headers.get('set-cookie').split(';')[0];
   }
-  return {root,start,stop,request,login, get url(){return url;},passwords,options};
+  return {root,start,stop,request,login,get url(){return url;},passwords,options,get sqliteFile(){return sqliteFile;},
+    useSqliteFile:file=>{sqliteFile=file;}};
+
 }
 const collection='governance-documents';
 const original='Fictional attachment fixture.\r\nRésumé for a simulated review.\r\n';
@@ -561,4 +565,129 @@ test('Chromium drops multiple files and shows content refusals individually with
   await page.getByRole('button',{name:'Remove selected file Fictional bad.pdf',exact:true}).click();
   await button.click();
   await page.getByRole('button',{name:'Download attachment Fictional drop.txt',exact:true}).waitFor();
+});
+
+for(const backend of ['json','sqlite'])test('manual attachment quarantine persists and gates bytes, publication and release in '+backend,async t=>{
+  const f=await fixture(t,backend,true);
+  let author=await f.login(roles[0]),reviewer=await f.login(roles[1]);
+  const secondaryAuthor=await f.login(roles[3]);
+  let revision=0;
+  const view=async(cookie=author,scope=primary)=>(await f.request(collection+'?workspace='+scope,200,{cookie})).data;
+  const route=(suffix,scope=primary)=>collection+suffix+'?workspace='+scope;
+  const post=async(suffix,body,status=200,cookie=author,scope=primary)=>{
+    const response=await f.request(route(suffix,scope),status,{cookie,body:{expectedRevision:revision,...body}});
+    if(status===200&&!Buffer.isBuffer(response.data)&&Number.isSafeInteger(response.data.revision))revision=response.data.revision;
+    return response;
+  };
+  const draft=(await post('/records',doc)).data;
+  const r=draft.documents[0],v=r.revisions[0],path='/records/'+r.id+'/revisions/'+v.id;
+  assert.equal(draft.attachmentRules.manualReview,true);
+  assert.equal((await view(secondaryAuthor,secondary)).attachmentRules.manualReview,undefined);
+  const uploads=path+'/attachments';
+  const files=[payload,{...payload,filename:'Fictional second.txt'}];
+  const staged=(await post(uploads+'/batch',{files})).data.documents[0].revisions[0].attachments;
+  assert.deepEqual(staged.map(x=>x.reviewStatus),['pending','pending']);
+  assert.ok(staged.every(x=>!Object.hasOwn(x,'quarantine')&&!Object.hasOwn(x,'data')));
+  const paths=staged.map(row=>uploads+'/'+row.id);
+  const digest=createHash('sha256').update(original).digest('hex');
+  for(const c of [author,reviewer]){
+    const refused=await post(paths[0]+'/download',{},409,c);
+    assert.equal(refused.data.code,'ATTACHMENT_QUARANTINED');
+    assert.ok(!JSON.stringify(refused.data).includes(payload.data));
+  }
+  assert.equal((await post(path+'/submit',{},409)).data.code,'ATTACHMENT_QUARANTINED');
+  await post(paths[0]+'/review',{operation:'release',sha256:digest},403);
+  await post(paths[0]+'/review',{operation:'release',sha256:digest},403,secondaryAuthor);
+  assert.equal((await post(paths[0]+'/review',{operation:'release',sha256:'0'.repeat(64)},422,reviewer)).data.code,'ATTACHMENT_REVIEW_DIGEST');
+  assert.equal((await post(paths[0]+'/review',{operation:'release',sha256:digest,expectedRevision:0},409,reviewer)).data.code,'STALE_REVISION');
+
+  await f.stop();
+  delete f.options.attachmentReviewWorkspaces;
+  if(backend==='sqlite'){
+    const backup=join(f.root,'review-backup.json'),restored=join(f.root,'review-restored.sqlite');
+    backupDatabase(f.sqliteFile,backup);restoreDatabase(backup,restored);
+    f.useSqliteFile(restored);
+  }
+  const authorAccount=f.options.accounts[0],reviewerAccount=f.options.accounts[1];
+  authorAccount.memberships[primary]='reviewer';reviewerAccount.memberships[primary]='analyst';
+  await f.start();
+  const nowReviewer=await f.login(roles[0]);
+  const self=await post(paths[0]+'/review',{operation:'release',sha256:digest},403,nowReviewer);
+  assert.equal(self.data.code,'ATTACHMENT_INDEPENDENT_REVIEW');
+  await f.stop();
+  authorAccount.memberships[primary]='analyst';reviewerAccount.memberships[primary]='reviewer';
+  await f.start();
+  author=await f.login(roles[0]);reviewer=await f.login(roles[1]);
+  assert.equal((await view()).attachmentRules.manualReview,true);
+  assert.equal((await post(paths[1]+'/download',{},409)).data.code,'ATTACHMENT_QUARANTINED');
+  const released=(await post(paths[0]+'/review',{operation:'release',sha256:digest},200,reviewer)).data;
+  assert.equal(released.documents[0].revisions[0].attachments[0].reviewStatus,'released');
+  const downloaded=await post(paths[0]+'/download',{},200,reviewer);
+  assert.deepEqual(downloaded.data,Buffer.from(original));
+  assert.equal(downloaded.response.headers.get('content-disposition'),'attachment; filename="'+cleanFilename+'"');
+  assert.equal((await post(paths[0]+'/review',{operation:'reject'},409,reviewer)).data.code,'ATTACHMENT_NOT_PENDING');
+  const rejected=(await post(paths[1]+'/review',{operation:'reject'},200,reviewer)).data;
+  assert.equal(rejected.documents[0].revisions[0].attachments[1].reviewStatus,'rejected');
+  assert.equal((await post(paths[1]+'/download',{},409,reviewer)).data.code,'ATTACHMENT_QUARANTINED');
+  await post(path+'/submit',{},409);
+  await post(paths[1]+'/remove',{});
+  await post(path+'/submit',{});
+  await post(path+'/publish',{note:'Synthetic policy review, not a malware scan.'},200,reviewer);
+  const audit=(await f.request('audit/export?workspace=alpha',200,{cookie:reviewer})).data.audit;
+  const reviews=audit.filter(e=>e.action===collection+'.attachment-review');
+  assert.deepEqual(reviews.map(e=>[e.account,e.details.disposition]),[[roles[1][0],'released'],[roles[1][0],'rejected']]);
+  assert.doesNotMatch(JSON.stringify(reviews),new RegExp(cleanFilename+'|'+digest));
+});
+
+test('manual quarantine refuses legacy activation and treats invalid review records as unavailable',async t=>{
+  const f=await fixture(t);
+  const author=await f.login(roles[0]);
+  const {data:draft}=await f.request(collection+'/records?workspace=alpha',200,{cookie:author,body:{...doc,expectedRevision:0}});
+  const d=draft.documents[0],v=d.revisions[0];
+  await f.request(collection+'/records/'+d.id+'/revisions/'+v.id+'/attachments?workspace=alpha',200,{cookie:author,body:{...payload,expectedRevision:1}});
+  await f.stop();
+  f.options.attachmentReviewWorkspaces=[primary];
+  await assert.rejects(f.start(),/workspace with no existing attachments/);
+  const malformed={sha256:'a'.repeat(64),quarantine:{status:'released',uploader:'fictional-author',decidedBy:'fictional-author',approvedHash:'a'.repeat(64)}};
+  for(const row of [malformed,{...malformed,quarantine:{...malformed.quarantine,decidedBy:'fictional-reviewer',approvedHash:'b'.repeat(64)}},{}]){
+    assert.throws(()=>attachmentPolicy.assertAvailable(row,true),{code:'ATTACHMENT_QUARANTINED'});
+  }
+  assert.throws(()=>attachmentPolicy.assertAvailable(malformed,false),{code:'ATTACHMENT_QUARANTINED'});
+});
+
+test('Chromium quarantine workflow blocks downloads until independent matching-digest release',{
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright installed',timeout:30000
+},async t=>{
+  const {chromium}=require('playwright'),f=await fixture(t,undefined,true);
+  const cookie=await f.login(roles[0]);
+  await f.request(collection+'/records?workspace=alpha',200,{cookie,body:{...doc,expectedRevision:0}});
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  t.after(()=>browser.close());
+  async function login([name]){
+    const page=await browser.newPage();page.setDefaultTimeout(8500);
+    await page.goto(f.url);
+    await page.getByLabel('Test account',{exact:true}).fill(name);
+    await page.getByLabel('Workspace ID',{exact:true}).fill(primary);
+    await page.getByLabel('Local access code',{exact:true}).fill(f.passwords[name]);
+    await page.getByRole('button',{name:'Sign in',exact:true}).click();
+    await page.getByRole('button',{name:'Policies and documents',exact:true}).click();
+    return page;
+  }
+  const analyst=await login(roles[0]);
+  await analyst.getByLabel('Fictional attachments',{exact:true}).setInputFiles({name:filename,mimeType:'text/plain',buffer:Buffer.from(original)});
+  await analyst.getByRole('button',{name:'Upload attachments',exact:true}).click();
+  await analyst.getByText('Quarantined',{exact:true}).waitFor();
+  assert.equal(await analyst.getByRole('button',{name:'Download attachment '+cleanFilename,exact:true}).count(),0);
+  assert.equal(await analyst.getByRole('button',{name:'Submit for review',exact:true}).count(),0);
+  const reviewer=await login(roles[1]);
+  assert.equal(await reviewer.getByRole('button',{name:'Download attachment '+cleanFilename,exact:true}).count(),0);
+  await reviewer.getByText('Review attachment '+cleanFilename,{exact:true}).click();
+  await reviewer.getByLabel('Verified original SHA-256',{exact:true}).fill(createHash('sha256').update(original).digest('hex'));
+  await reviewer.getByRole('button',{name:'Release attachment',exact:true}).click();
+  await reviewer.getByText('Manually released',{exact:true}).waitFor();
+  const action=reviewer.getByRole('button',{name:'Download attachment '+cleanFilename,exact:true});
+  const [download]=await Promise.all([reviewer.waitForEvent('download'),action.click()]);
+  const chunks=[];
+  for await(const chunk of await download.createReadStream())chunks.push(chunk);
+  assert.equal(Buffer.concat(chunks).toString(),original);
 });

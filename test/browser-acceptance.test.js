@@ -27,7 +27,7 @@ async function login(page,url,account,code){
   await page.getByLabel('Workspace ID',{exact:true}).fill('synthetic');
   await page.getByLabel('Local access code',{exact:true}).fill(code);
   await page.getByRole('button',{name:'Sign in',exact:true}).click();
-  await page.getByRole('heading',{name:'Assessment workspace',exact:true,level:1}).waitFor();
+  await page.getByRole('heading',{name:'Trust operations',exact:true,level:1}).waitFor();
 }
 test('browser acceptance: separate signed-in accounts create, return, finalize and download a synthetic audit',browserOnly,async t=>{
   const identities={qaAnalyst:randomBytes(32).toString('base64url'),qaReviewer:randomBytes(32).toString('base64url')};
@@ -130,7 +130,7 @@ test('browser acceptance: compact viewport supports keyboard skip, nav disclosur
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     const focused=()=>page.evaluate(()=>({id:document.activeElement?.id,text:document.activeElement?.textContent?.trim()}));
     await page.goto(url);
-    await page.getByRole('heading',{name:'Assessment workspace',level:1}).waitFor();
+    await page.getByRole('heading',{name:'Trust operations',level:1}).waitFor();
     await page.keyboard.press('Tab');
     assert.equal((await focused()).text,'Skip to workbench');
     await page.keyboard.press('Enter');
@@ -139,6 +139,8 @@ test('browser acceptance: compact viewport supports keyboard skip, nav disclosur
     assert.equal((await focused()).id,'mobile-nav');
     await page.keyboard.press('Space');
     assert.equal(await page.locator('#mobile-nav').getAttribute('aria-expanded'),'true');
+    await page.keyboard.press('Tab');
+    assert.equal((await focused()).id,'show-home');
     await page.keyboard.press('Tab');
     assert.equal((await focused()).id,'show-assessments');
     await page.keyboard.press('Tab');
@@ -155,7 +157,7 @@ test('browser acceptance: compact viewport supports keyboard skip, nav disclosur
 });
 
 const views={
-  assessments:'assessment-view',queue:'queue-view',rights:'rights-view',incidents:'incident-view',
+  home:'home-view',assessments:'assessment-view',queue:'queue-view',rights:'rights-view',incidents:'incident-view',
   'vendor-monitoring':'vendor-monitoring-view','data-map':'data-map-view',dictionary:'dictionary-view',
   preferences:'preferences-view',retention:'retention-view','governance-docs':'governance-docs-view',
   'employee-attestations':'employee-attestations-view',training:'training-view','risk-controls':'risk-controls-view',
@@ -169,7 +171,7 @@ test('browser inventory: all workbench views and JSON download controls, with ro
     page.setDefaultTimeout(6000);
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(url);
-    await page.getByRole('heading',{name:'Assessment workspace',level:1}).waitFor();
+    await page.getByRole('heading',{name:'Trust operations',level:1}).waitFor();
     const inventory=[];
     const links=new Set();
     assert.equal(await page.locator('#show-identity-admin').isVisible(),false);

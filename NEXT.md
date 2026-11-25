@@ -1,9 +1,21 @@
-# Next steps
+# What remains before enterprise rollout
 
-This is a local work in progress. Use only fictional data.
+The release is a functioning local synthetic workbench, not an official service.
+Use [Local release](LOCAL-RELEASE.md) to run an isolated copy and
+[Browser acceptance](BROWSER-ACCEPTANCE.md) for the actual test coverage.
 
-1. Extend the remaining privacy operations workflows, including audit management and configurable reporting.
-2. Run the full browser journeys with an installed Playwright browser, including isolated workspaces and the end-user portals.
-3. Record acceptance evidence and reopen verified test states before making broader readiness claims.
+1. Verify configurable corporate sign-in against a test identity provider,
+   then map approved company identities, roles, groups, and lifecycle rules in
+   the receiving environment.
+2. Extend record- and field-level authorization beyond the tested document
+   grants, including every list, deep link, bulk action, and export.
+3. Increase approved operator-job coverage, preserve independent decision
+   gates, and verify all downstream failure and recovery paths.
+4. Rehearse the receiving-environment migration with permitted representative
+   data, managed backup/restore and rollback, and verify every interactive
+   control across applicable roles, data states and supported devices.
+5. Obtain the owner approvals and operational sign-off listed in
+   [Enterprise readiness](ENTERPRISE-READINESS.md) before any real rollout.
 
-Cookie and consent management are out of scope. Privacy notice publication and privacy rights remain separate capabilities.
+Tracking and consent management are out of scope. Privacy notices and
+requests remain separate capabilities.

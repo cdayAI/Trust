@@ -24,6 +24,10 @@ async function openWorkTask(target,{keepMyWorkLink=false,isCurrent=()=>true}={})
     if(target.view==='assessments')focusWorkRecord('assessments');
   }catch(e){if(isCurrent()){queueTarget=null;notice(e.message,true)}}
 }
+function openQueueFromHome({owner='all',workflow='all',timing='all'}={}){
+  queueFilters={owner,workflow,timing};
+  switchView('queue');
+}
 function queueParams(){
   return new URLSearchParams({owner:queueFilters.owner??actor,workflow:queueFilters.workflow,timing:queueFilters.timing});
 }
