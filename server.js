@@ -16,8 +16,10 @@ const {createAccess}=require('./workspace-access');
 const policy=require('./access-policy');
 const groups=require('./group-governance');
 const documentScope=require('./document-scope');
+const directoryLifecycle=require('./directory-lifecycle');
 const rightsCaseScope=require('./rights-case-scope');
 const {fixtureOptions}=require('./discovery-import');
+const discoveryRuns=require('./discovery-runs');
 const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
 const employee=require('./employee-attestations');
@@ -28,12 +30,14 @@ const {uploadRequestBytes,batchUploadRequestBytes}=require('./governance-documen
 const attachmentUploadPath=/^\/api\/governance-documents\/records\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/revisions\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/attachments(?:\/batch)?$/u;
 const reporting=require('./reporting');
 const reportRuns=require('./reporting-runs');
+const {route:reportScheduleRoute}=require('./report-schedules');
 const publicDir = path.join(__dirname,'public');
 const staticFiles = new Map([
   ['/',['index.html','text/html; charset=utf-8']],
   ['/index.html',['index.html','text/html; charset=utf-8']],
   ['/trust-center-ui.js',['trust-center-ui.js','text/javascript; charset=utf-8']],
   ['/identity-admin-ui.js',['identity-admin-ui.js','text/javascript; charset=utf-8']],
+  ['/directory-lifecycle-ui.js',['directory-lifecycle-ui.js','text/javascript; charset=utf-8']],
   ['/document-access-ui.js',['document-access-ui.js','text/javascript; charset=utf-8']],
   ['/group-governance-ui.js',['group-governance-ui.js','text/javascript; charset=utf-8']],
   ['/training-admin-ui.js',['training-admin-ui.js','text/javascript; charset=utf-8']],
@@ -95,6 +99,7 @@ async function readBody(req,limit=32768) {
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false}={}) {
+  const directoryScopes=directoryLifecycle.provision(isolated,corporate===undefined);
   const oidcModule=corporate===undefined?null:require('./oidc/client');
   const oidc=oidcModule?.createOidc(corporate);
   if((oidc&&!isolated)||Boolean(tls)!==Boolean(oidc?.secure))
@@ -102,11 +107,12 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   const scopedCatalogs=groups.provision(isolated);
   const scopedDocuments=documentScope.provision(isolated);
   const scopedRights=rightsCaseScope.provision(isolated);
+  const stagedDiscovery=discoveryRuns.provision(isolated,sqliteFile,corporate);
   const manualReview=provisionReview(isolated);
   const largePdfScopes=binaryAttachments.provision(isolated,sqliteFile,manualReview);
   if(oidc&&largePdfScopes.size)throw Error('Larger PDF batches are limited to the local synthetic workbench.');
   const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id),
-    id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id)}),oidc);
+    id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id),directoryLifecycle:directoryScopes.has(id)}),oidc);
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
     grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,releaseWorkspaces:oidc?[]:isolated.requesterReleaseWorkspaces,now:isolated.now
   }):null;
@@ -304,6 +310,19 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         policy.requirePermission(req.method,pathname,checked.actor);
         return send(res,200,store.identityAdminChange(roster(),access.identityTime(),checked.account,body));
       }
+      if(pathname==='/api/directory-lifecycle'){
+        if(!directoryScopes.has(selection?.space.id))return send(res,404,{error:'Not found.'});
+        if(searchParams.size)return send(res,422,{error:'Directory reconciliation does not accept query filters.'});
+        const directoryContext=checked=>({
+          enabled:true,workspace:checked.space.id,role:checked.actor,account:checked.account,generation:checked.generation,
+          roster:access.identityRoster(checked.space.id),at:access.identityTime()
+        });
+        if(req.method==='GET')return send(res,200,store.directoryView(directoryContext(selection)));
+        if(req.method!=='POST')return send(res,404,{error:'Not found.'});
+        const body=await readBody(req),checked=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,checked.actor);
+        return send(res,200,store.directoryChange(directoryContext(checked),body));
+      }
       if(pathname==='/api/group-governance'||pathname==='/api/scoped-applications'){
         const catalog=scopedCatalogs.get(selection?.space.id);
         if(!catalog)return send(res,404,{error:'Not found.'});
@@ -379,6 +398,16 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           return send(res,403,{error:'This role has no workspace dashboard.'});
         return send(res,200,workspaceHome(caseOperator?store.caseOperatorState(scopeContext(selection)):store.getState(),{mode,actor:homeActor,selection,views:policy.capabilities(homeActor).views},searchParams));
       }
+      const scheduleRoute=pathname.match(reportScheduleRoute);
+      if(scheduleRoute){
+        if(!access||oidc)return send(res,404,{error:'Local report schedules require a local synthetic staff session.'});
+        if(searchParams.size)return send(res,422,{error:'Report schedules accept only the workspace URL parameter.'});
+        if(req.method==='GET'&&!scheduleRoute[1])return send(res,200,store.listReportSchedules(selection));
+        if(req.method!=='POST'||!scheduleRoute[1])return send(res,404,{error:'Not found.'});
+        const body=await readBody(req),current=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,current.actor);
+        return send(res,200,store.changeReportSchedule(current,scheduleRoute[1],body));
+      }
       const reportRoute=pathname.match(reportRuns.routePattern);
       if(reportRoute){
         const [,saved,id,download]=reportRoute;
@@ -451,8 +480,26 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if (req.method==='GET'&&pathname==='/api/dictionary/export')return send(res,200,{schemaVersion:1,mode,
         dictionary:store.getDictionary(),audit:store.getProgramAudit('dictionary')},undefined,
         {'Content-Disposition':'attachment; filename="privacy-workbench-dictionary.json"'});
+      const runPath=pathname.match(discoveryRuns.pattern);
+      if(runPath){
+        if(!selection||!stagedDiscovery.has(selection.space.id))return send(res,404,{error:'Not found.'});
+        if(searchParams.size)return send(res,422,{error:'Discovery rehearsal does not accept filters.'});
+        if(req.method==='GET'&&!runPath[1])return send(res,200,store.discoveryRunModel());
+        if(req.method!=='POST')return send(res,404,{error:'Not found.'});
+        const body=await readBody(req),checked=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,checked.actor);
+        return send(res,200,store.changeDiscoveryRun(checked,runPath[1],runPath[2],body));
+      }
+      if(selection&&['/api/data-map/discovery/preview','/api/data-map/discovery/apply'].includes(pathname)&&
+        (stagedDiscovery.has(selection.space.id)||store.hasDiscoveryRehearsals()))
+        return send(res,409,{error:'Use the staged discovery rehearsal for this workspace.'});
       if (req.method==='GET'&&pathname==='/api/data-map/discovery') return send(res,200,{fixtures:fixtureOptions()});
-      if (req.method==='GET'&&pathname==='/api/data-map') return send(res,200,store.getDataMap());
+      if (req.method==='GET'&&pathname==='/api/data-map'){
+        const map=store.getDataMap();
+        if(selection&&stagedDiscovery.has(selection.space.id))map.discoveryRehearsal='available';
+        else if(selection&&store.hasDiscoveryRehearsals())map.discoveryRehearsal='disabled';
+        return send(res,200,map);
+      }
       if (req.method==='GET'&&pathname==='/api/data-map/export') return send(res,200,{schemaVersion:1,mode,
         graph:store.getDataMap(),audit:store.getState().audit.filter(e=>e.action.startsWith('data-map.'))},undefined,
         {'Content-Disposition':'attachment; filename="privacy-workbench-data-map.json"'});

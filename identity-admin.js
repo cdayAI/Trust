@@ -74,4 +74,17 @@ function change(state,seats,at,admin,body,audit){
   return view(state,seats,at);
 }
 
-module.exports={record,view,change};
+function applySuspensionPlan(state,targets){
+  const current=new Map(records(state).map(row=>[row.id,row]));
+  const changes=targets.map(({account,before,after})=>{
+    const row=current.get(account)??{revision:0,disabled:false};
+    if(!accountPattern.test(account)||row.disabled||row.revision!==before.revision||before.disabled!==false||
+      !Number.isSafeInteger(after.revision)||after.revision!==row.revision+1||after.disabled!==true)
+      failure(409,'IDENTITY_STALE','An account changed before suspension. No membership was changed.');
+    return {id:account,revision:after.revision,disabled:true};
+  });
+  for(const row of changes)current.set(row.id,row);
+  state.identityAdministration={schemaVersion:1,members:[...current.values()]};
+}
+
+module.exports={record,view,change,applySuspensionPlan};

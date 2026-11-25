@@ -26,7 +26,8 @@ The launcher checks liveness, SQLite readiness, a real sign-in for each
 workspace and cross-workspace denial before announcing the URL. It starts
 with two empty fictional workspaces and enables local identity administration,
 group and document scope, account-scoped rights delegation, manual attachment
-review, the larger-PDF upload profile, and SQLite-backed operator jobs, along with the supported synthetic
+review, the larger-PDF upload profile, staged fictional discovery, reviewed
+local directory lifecycle changes, and SQLite-backed operator jobs, along with the supported synthetic
 portals. Each launch automatically stops after eight hours. It does not start corporate SSO,
 send external communications, or deploy anything. The optional `--port 4173`
 selects a specific loopback port; otherwise a free port is chosen. Existing

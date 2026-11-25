@@ -1,6 +1,6 @@
 'use strict';
 const mapPane=$('#data-map-view'),mapPath='/api/data-map';
-let mapData,selectedNode;
+let mapData,selectedNode,discoveryRunFocus;
 const mapNodeOption=(n,types)=>({value:n.id,label:n.name+' ('+types[n.type].label+' · '+n.id.slice(0,8)+')'});
 async function refreshDataMap(){
   try{
@@ -18,8 +18,10 @@ function mapForm(parent,route,fields,caption,revision){
     busy=true;const submit=form.querySelector('button');submit.disabled=true;
     try{
       const values=Object.fromEntries(new FormData(form));
+      const discoveryRehearsal=mapData?.discoveryRehearsal;
       mapData=await read(mapPath+route,{method:'POST',
         headers:{'Content-Type':'application/json','X-Demo-Actor':actor},body:JSON.stringify({...values,expectedRevision:revision})});
+      if(discoveryRehearsal)mapData.discoveryRehearsal=discoveryRehearsal;
       if(!mapPane.hidden){renderDataMap();notice('Data map updated.')}
     }catch(error){
       if(!mapPane.hidden){
@@ -104,6 +106,91 @@ function discoveryPanel(){
     }catch(error){result.replaceChildren(el('p',error.message,'error'))}
     finally{load.disabled=false}
   };
+  return panel;
+}
+function discoveryRehearsalPanel(){
+  const path=mapPath+'/discovery/runs',panel=add(el('section'),heading('Staged fixture discovery rehearsal'),
+    el('p','This walkthrough reads only bundled schema definitions. A scripted metadata check fails once. Nothing scans a device, connector, host or network.'));
+  const board=el('div'),status=el('p');status.setAttribute('role','status');
+  const refresh=button('Refresh discovery rehearsals','button','secondary');
+  panel.append(refresh,status,board);
+  let pending=false,request=0;
+  async function load(focus=false){
+    const seq=++request;
+    try{
+      const model=await read(path);
+      if(panel.isConnected&&seq===request){render(model);if(focus)refresh.focus();}
+    }catch(error){if(panel.isConnected&&seq===request)status.textContent=error.message;}
+  }
+  refresh.onclick=()=>load(true);
+  async function write(url,body,trigger){
+    if(pending)return;
+    pending=true;trigger.disabled=true;
+    try{
+      const response=await read(path+url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      if(!panel.isConnected)return;
+      discoveryRunFocus=response.run.id;
+      if(url.endsWith('/apply')){await refreshDataMap();notice('Reviewed rehearsal applied.');}
+      else{render(response.model);status.textContent=response.changed?'Discovery rehearsal updated.':'Existing rehearsal reopened.';}
+    }catch(error){
+      if(panel.isConnected){status.textContent=error.message;if(error.status===409)await load();}
+    }finally{pending=false;trigger.disabled=false;}
+  }
+  function render(model){
+    const sections=[];
+    if(actor==='analyst'){
+      const form=add(el('form'),rightsSelect('Bundled rehearsal version','version',
+        model.versions.map(x=>({value:String(x.version),label:x.label+' · v'+x.version}))),button('Queue fixture scan','submit'));
+      form.onsubmit=e=>{e.preventDefault();write('',{source:model.source,version:Number(form.elements.version.value)},form.querySelector('button'))};
+      sections.push(form);
+    }
+    if(!model.runs.length)sections.push(el('p','No discovery rehearsals have been queued.'));
+    const stages={queued:'Queued',partial:'Partial failure',ready:'Ready for review',review:'Awaiting independent review',approved:'Approved',applied:'Applied'};
+    const mutations={scan:'Run fixture checks',resume:'Resume failed check',submit:'Send schema plan for review',
+      approve:'Approve exact schema plan',reconcile:'Reconcile inventory changes',apply:'Apply approved schema'};
+    for(const run of model.runs.slice().reverse()){
+      const name=el('h3','Library fixture v'+run.version);name.id='fixture-scan-'+run.id;
+      const box=add(el('article',undefined,'module-record'),name,badge(stages[run.status]),
+        el('p','Completed checks: '+run.checks.filter(c=>c.status==='complete').length+' of '+run.checks.length+
+          ' · Resume '+run.resumes+'/'+model.bounds.resumes+' · Reconciliation '+run.reconciliations+'/'+model.bounds.reconciliations,'hint'));
+      const checks=el('ul');
+      for(const c of run.checks)checks.append(el('li',c.name+': '+c.status+(c.code?' (scripted metadata unavailable)':c.status==='complete'?' · '+c.fieldCount+' fields':'')));
+      box.append(checks);
+      const plan=run.review?.plan;
+      const stale=!!plan&&plan.mapRevision!==model.mapRevision&&run.status!=='applied';
+      if(plan){
+        const evidence=add(el('details'),el('summary','Review schema changes'),
+          el('p','Reviewed inventory revision '+plan.mapRevision+' · Plan SHA-256 '+run.review.fingerprint,'hint'));
+        const list=el('ul');
+        for(const item of plan.candidates)list.append(el('li',item.name+' · '+item.action+
+          (item.provenance.fields.length?' · fields: '+item.provenance.fields.map(f=>f.id+' ('+f.type+')').join(', '):'')));
+        for(const conflict of plan.conflicts)list.append(el('li','Conflict: '+conflict.reason));
+        evidence.append(list);box.append(evidence);
+      }
+      if(stale)box.append(el('p','Inventory changed. Reconciliation requires a fresh independent review.','error'));
+      if(run.result)box.append(el('p','Created '+run.result.createdNodes+' records · Refreshed '+run.result.refreshedNodes+
+        ' · Added '+run.result.createdLinks+' links.','hint'));
+      const operation=stale?(actor==='analyst'&&run.reconciliations<model.bounds.reconciliations?'reconcile':null):
+        actor==='analyst'?({queued:'scan',partial:'resume',ready:'submit',approved:'apply'}[run.status]):
+        run.status==='review'&&!plan?.conflicts.length?'approve':null;
+      if(stale&&run.reconciliations===model.bounds.reconciliations)
+        box.append(el('p','This rehearsal has reached its reconciliation limit. No changes were applied.','hint'));
+      if(operation){
+        const control=button(mutations[operation],'button');
+        control.onclick=()=>write('/'+run.id+'/'+operation,{expectedRevision:run.revision},control);
+        box.append(control);
+      }
+      sections.push(box);
+    }
+    board.replaceChildren(...sections);
+    if(discoveryRunFocus){
+      const focus=document.getElementById('fixture-scan-'+discoveryRunFocus);
+      if(focus){focus.tabIndex=-1;focus.focus({preventScroll:true});}
+      discoveryRunFocus=undefined;
+    }
+  }
+  // The section is attached in the same renderDataMap call before the request returns.
+  load();
   return panel;
 }
 const mapBlank={value:'',label:'Select an option'};
@@ -193,7 +280,11 @@ function renderDataMap(){
     }
     flows.append(card);
   }
-  const sections=[intro,...(actor==='analyst'?[discoveryPanel()]:[]),lineagePanel,inventory,flows];
+  const discoverySection=mapData.discoveryRehearsal==='available'?discoveryRehearsalPanel():
+    mapData.discoveryRehearsal==='disabled'?add(el('section'),heading('Staged fixture discovery rehearsal'),
+      el('p','This saved rehearsal is disabled for this workspace. The quick importer remains unavailable.')):
+    actor==='analyst'?discoveryPanel():null;
+  const sections=[intro,...(discoverySection?[discoverySection]:[]),lineagePanel,inventory,flows];
   if(legacyRecords.length){
     const legacy=add(el('section'),heading('Legacy inventory entries'),el('p','These historical entries are separate from the verified graph.'));
     for(const row of legacyRecords)legacy.append(el('p',row.title+' · '+row.status));

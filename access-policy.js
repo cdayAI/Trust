@@ -27,6 +27,10 @@ route('GET','workspace-home',rights);
 route('GET','assessment-config',operators);
 route('GET','reporting/runs(?:/'+uuid+'(?:/export)?)?',operators);
 route('POST','reporting/runs',operators);
+route('GET','reporting/schedules',operators);
+route('POST','reporting/schedules/create',['analyst']);
+route('POST','reporting/schedules/(?:approve|stop)',['reviewer']);
+route('POST','reporting/schedules/tick',operators);
 route('GET','processing-register(?:/export|/entries/'+uuid+'/versions/[1-9][0-9]*/export)?',operators);
 route('POST','processing-register/entries(?:/'+uuid+'/(?:edit|submit|revise))?',['analyst']);
 route('POST','processing-register/entries/'+uuid+'/(?:return|publish)',['reviewer']);
@@ -35,12 +39,16 @@ route('POST','assessment-config/(?:return|publish)',['reviewer']);
 route('GET','my-work(?:/tasks/'+myWorkToken+')?',rights);
 route('GET','identity-admin',['identity-admin']);
 route('POST','identity-admin',['identity-admin']);
+route('GET','directory-lifecycle',['identity-admin','reviewer']);
+route('POST','directory-lifecycle',['identity-admin','reviewer']);
 route('GET','group-governance',['identity-admin','reviewer']);
 route('POST','group-governance',['identity-admin','reviewer']);
 route('GET','scoped-applications',['analyst','case-operator']);
 route('GET','document-access',['reviewer','identity-admin']);
 route('POST','document-access',['reviewer','identity-admin']);
 route('GET','(?:vendor-monitoring|risk-controls|retention|privacy-notices|dictionary|dictionary/export|modules|work-queue|work-queue/export|reporting|reporting/export)',operators);
+route('GET','data-map/discovery/runs',operators);
+route('POST','data-map/discovery/runs(?:/'+uuid+'/(?:scan|resume|submit|approve|reconcile|apply))?',operators);
 route('GET','(?:data-map|data-map/discovery|data-map/export|data-map/nodes/'+uuid+'/lineage)',operators);
 route('GET','(?:risk-controls/export|incidents/cases|audit-management|audit-management/plans/'+uuid+'/report)',operators);
 route('GET','(?:employee-attestations|training|trust-center)',operators);
@@ -108,11 +116,12 @@ const views={
   'ethics-reviewer':['ethics'],
   'case-operator':['home','rights','my-work','governance-docs'],
 };
-function capabilities(role,{groupGovernance=false,documentScope=false,operatorJobs=false}={}){
+function capabilities(role,{groupGovernance=false,documentScope=false,operatorJobs=false,directoryLifecycle=false}={}){
   const permitted=[...(Object.hasOwn(views,role)?views[role]:[])];
   if(groupGovernance&&['identity-admin','reviewer'].includes(role))permitted.push('group-governance');
   if(groupGovernance&&['analyst','case-operator'].includes(role))permitted.push('scoped-applications');
   if(documentScope&&['reviewer','identity-admin'].includes(role))permitted.push('document-access');
+  if(directoryLifecycle&&['identity-admin','reviewer'].includes(role))permitted.push('directory-lifecycle');
   if(operatorJobs&&operators.includes(role))permitted.push('operator-jobs');
   return {views:permitted,workspaceAudit:role==='reviewer'};
 }

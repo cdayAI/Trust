@@ -108,7 +108,9 @@ test('release run keeps private fixture access outside source and provisions sig
   await req('/workspace.sqlite',404);
   await req('/api/state',403,{...intake,workspace:'orchard'});
   await req('/api/operator/v1/jobs',200,intake);
+  await req('/api/data-map/discovery/runs',200,intake);
   await req('/api/identity-admin',200,admin);
+  await req('/api/directory-lifecycle',200,admin);
   await req('/api/group-governance',200,admin);
   await req('/api/document-access',200,admin);
   await req('/api/ethics/cases',200,investigator);

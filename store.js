@@ -6,6 +6,7 @@ const {hasLegacySnapshot}=require('./durable-storage');
 const operatorJobs = require('./operator-jobs');
 const modules = require('./modules');
 const reportRuns=require('./reporting-runs');
+const reportSchedules=require('./report-schedules');
 const assessmentFlow = require('./assessment-workflow');
 const forms = require('./assessment-questionnaire');
 const assessmentConfig=require('./assessment-config');
@@ -19,6 +20,7 @@ const assessmentIncident=require('./assessment-incident');
 const dataMap = require('./data-map');
 const dictionary=require('./data-dictionary');
 const discovery = require('./discovery-import');
+const discoveryRuns=require('./discovery-runs');
 const trustCenter = require('./trust-center');
 const employee = require('./employee-attestations');
 const training = require('./training');
@@ -38,6 +40,7 @@ const programs=new Map([
   ['privacy-notices',preferences],['retention',retention],['risk-controls',riskControls],['audit-management',auditManagement],['maturity-planning',maturityPlanning],['vendor-monitoring',vendorMonitoring],['governance-documents',documents]
 ]);
 const identityAdmin=require('./identity-admin');
+const directoryLifecycle=require('./directory-lifecycle');
 const groupGovernance=require('./group-governance');
 const actors = [
   {id:'analyst',name:'Alex Morgan',role:'analyst'},
@@ -266,7 +269,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {fixtureMigrationReceipt,requesterReceipts,requesterReleases,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,auditRemediation:privateAuditRemediation,...safe}=state;
+    const {fixtureMigrationReceipt,requesterReceipts,requesterReleases,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,directoryLifecycle:privateDirectory,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,reportScheduleBook:privateReportSchedules,discoveryRuns:privateDiscoveryRuns,auditRemediation:privateAuditRemediation,...safe}=state;
     if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,requesterIntake,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
@@ -326,6 +329,16 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
         membershipGeneration=generation;
       }
       return identityAdmin.record(membershipState,id);
+    },
+    directoryView:context=>directoryLifecycle.view(state,context),
+    directoryChange(context,body){
+      const next=structuredClone(state);
+      const result=directoryLifecycle.change(next,context,body,(s,action,target,details)=>{
+        event(s,context.role,action,null,target,details);
+        s.audit.at(-1).account=context.account;
+      });
+      persist(next);state=next;
+      return result;
     },
     identityAdminView:(seats,at)=>identityAdmin.view(state,seats,at),
     identityAdminChange(seats,at,admin,body){
@@ -397,6 +410,17 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       return result.value;
     },
     previewDiscovery:(actor,body,account)=>discovery.preview(state,actor,body,discoveryScope(account)),
+    discoveryRunModel:()=>discoveryRuns.view(state),
+    hasDiscoveryRehearsals:()=>discoveryRuns.hasSavedRuns(state),
+    changeDiscoveryRun(ctx,id,action,body){
+      requireCurrentOperatorSession(ctx);
+      const next=structuredClone(state);
+      const result=discoveryRuns.change(next,ctx,id,action,body,(target,role,kind,project,entity,details)=>{
+        event(target,role,kind,project,entity,details);target.audit.at(-1).account=ctx.account;
+      });
+      if(result.changed){persist(next);state=next;}
+      return {run:result.run,model:discoveryRuns.view(state),changed:result.changed};
+    },
     getState:()=>state,
     publicState,
     getDocuments:(actor,account)=>documents.view(state,actor,documentCapabilities,account),
@@ -500,6 +524,17 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     getVendorMonitoring:()=>vendorMonitoring.view(state),
     getProgramAudit:prefix=>state.audit.filter(e=>e.action.startsWith(prefix+'.')),
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
+    listReportSchedules(caller){
+      requireCurrentOperatorSession(caller);
+      return reportSchedules.list(state,caller.actor,caller.account);
+    },
+    changeReportSchedule(caller,action,body){
+      requireCurrentOperatorSession(caller);
+      const next={...state,audit:state.audit.slice(),reportScheduleBook:structuredClone(state.reportScheduleBook)};
+      const result=reportSchedules.change(next,state.audit.filter(e=>!excludedAudit(e)),caller,action,body,event);
+      if(result.changed){persist(next);state=next;}
+      return result.value;
+    },
     listReportRuns:()=>reportRuns.list(state),
     readReportRun:(id,format)=>reportRuns.read(state,id,format),
     pinReportRun(body,mode){
@@ -531,6 +566,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
         if (actor!=='analyst') fail(403,'Only the intake analyst can create intake records.');
         (parts[0]==='projects'?createProject:createVendor)(next,actor,body);
       } else if(parts.length===3&&parts[0]==='data-map'&&parts[1]==='discovery'&&parts[2]==='apply'){
+        if(discoveryRuns.hasSavedRuns(state))fail(409,'Use the staged discovery rehearsal for this workspace.');
         try{result=discovery.apply(next,actor,body,event,discoveryScope(account));}
         catch(error){if(error.persistRefusal)commit();throw error;}
         if(!result.changed)return {result,map:dataMap.view(state)};
@@ -559,7 +595,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['openAssessmentIncident','changeRequesterRelease','changeRequesterIntakeForm','pinReportRun','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRequesterIntakeForm','pinReportRun','changeReportSchedule','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name!=='identityMembership')state=storage.read(workbench)??fresh();

@@ -67,6 +67,110 @@ function reportSelect(label,name,options,selected){
   field.value=selected;
   return add(el('label',label),field);
 }
+function localReportSchedule(){
+  const path=reportingPath+'/schedules';
+  const detail=add(el('details',undefined,'report-run-history'),el('summary','Local report scheduling'));
+  const content=el('div');
+  detail.append(content);
+  let sequence=0;
+  const available=()=>!reportingPane.hidden&&detail.isConnected&&detail.open;
+  const asUtc=value=>/^\d{4}-\d\d-\d\dT\d\d:\d\d$/u.test(value)?value+':00.000Z':value;
+  const pretty=value=>value?value.replace('T',' ').slice(0,19)+' UTC':'—';
+  function timeField(label,name,value){
+    const field=labelled(label,name,'','input'),input=field.querySelector('input');
+    input.type='datetime-local';
+    input.value=value.slice(0,16);input.step='60';
+    return field;
+  }
+  function form(target,operation,fields,label,payload){
+    const submit=button(label,'submit','secondary'),form=add(el('form'),...fields,submit);
+    form.onsubmit=async event=>{
+      event.preventDefault();
+      if(busy||!available())return;
+      busy=true;submit.disabled=true;
+      const request=++sequence;
+      try{
+        const body=payload(Object.fromEntries(new FormData(form)));
+        const model=await read(path+'/'+operation,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        if(available()&&request===sequence)render(model,{focus:true});
+      }catch(error){if(available()&&request===sequence)notice(error.message,true);}
+      finally{busy=false;submit.disabled=false;}
+    };
+    target.append(form);
+  }
+  function render(model,{focus=false}={}){
+    const title=heading('Simulated UTC schedule');title.tabIndex=-1;
+    const panel=add(el('section'),title,
+      el('p','One local plan at a time. Nothing starts in the background or goes to a recipient. Choose Run simulated slot to capture the current workspace once for the selected UTC slot.'));
+    const reload=button('Reload local schedule','button','secondary');reload.onclick=()=>load(true);panel.append(reload);
+    const outcomes={proposed:'Draft schedule saved. A separate reviewer must approve it.',approved:'Schedule approved for explicit simulated runs.',
+      stopped:'Schedule stopped. Its history remains available.',ran:'One scheduled report was saved.',
+      'already-run':'That UTC slot was already processed.', 'not-due':'No report was saved. The slot is not due at the simulated time.'};
+    if(outcomes[model.outcome]){
+      const result=el('p',outcomes[model.outcome]);result.setAttribute('role','status');panel.append(result);
+    }
+    if(model.canCreate){
+      if(model.templates.length){
+        const options=Object.fromEntries(model.templates.map(saved=>[saved.id,(saved.filters.dataset==='activity'?'Audit activity':'Workflow records')+
+          ' · '+saved.filters.workflow+' · '+pretty(saved.generatedAt)+' · '+saved.id.slice(0,8)]));
+        form(panel,'create',[
+          reportSelect('Pinned report template','sourceRunId',options,model.templates[0].id),
+          reportSelect('UTC cadence','cadence',{daily:'Daily',weekly:'Weekly'},'daily'),
+          timeField('First due time (UTC)','firstDueAt',new Date(Date.now()+3600000).toISOString())
+        ],'Propose local schedule',raw=>({...raw,firstDueAt:asUtc(raw.firstDueAt),expectedRevision:model.revision}));
+      }else panel.append(el('p','Pin a report first. Its exact applied filters become the schedule template.'));
+    }
+    if(!model.plans.length)panel.append(el('p','No local schedule has been proposed.'));
+    for(const plan of model.plans){
+      const row=add(el('article',undefined,'module-record'),el('h3',(plan.cadence==='weekly'?'Weekly':'Daily')+' report plan · '+plan.status),
+        el('p','First due: '+pretty(plan.firstDueAt)),
+        el('p',(plan.status==='stopped'?'Last unprocessed slot: ':'Next due: ')+pretty(plan.nextDueAt)),
+        el('p','Saved filters: '+Object.entries(plan.filters).filter(([,value])=>value!==null).map(([key,value])=>key+' '+value).join(' · '),'hint'));
+      const action=()=>({planId:plan.id,expectedRevision:model.revision});
+      if(plan.canApprove)form(row,'approve',[],'Approve local schedule',action);
+      if(plan.canStop)form(row,'stop',[],'Stop local schedule',action);
+      if(plan.status==='active'){
+        if(plan.dueNow)row.append(el('p','The next slot is due at the current UTC time.','hint'));
+        form(row,'tick',[timeField('Simulated time (UTC)','simulatedAt',plan.nextDueAt)],'Run simulated slot',
+          raw=>({planId:plan.id,slotAt:plan.nextDueAt,simulatedAt:asUtc(raw.simulatedAt)}));
+      }
+      if(plan.receipts.length){
+        const entries=el('ul');
+        for(const receipt of plan.receipts){
+          const entry=add(el('li'),el('p','Slot '+pretty(receipt.slotAt)+' · '+receipt.total+' matched'),
+            el('p','Captured '+pretty(receipt.capturedAt)+' · Simulated '+pretty(receipt.simulatedAt),'hint'));
+          if(receipt.available){
+            for(const format of ['json','csv']){
+              const link=el('a','Download scheduled '+format.toUpperCase(),'button quiet');
+              link.href=scopeUrl(reportingPath+'/runs/'+encodeURIComponent(receipt.reportId)+'/export?format='+format);
+              link.download='';entry.append(link);
+            }
+          }else entry.append(el('p','Pinned bytes expired or were evicted. The slot receipt remains.','hint'));
+          entries.append(entry);
+        }
+        row.append(el('h4','Simulated run history'),entries);
+      }
+      panel.append(row);
+    }
+    content.replaceChildren(panel);
+    if(focus)title.focus({preventScroll:true});
+  }
+  async function load(focus=false){
+    const request=++sequence;
+    content.replaceChildren(el('p','Loading local report schedule…'));
+    try{
+      const model=await read(path);
+      if(available()&&request===sequence)render(model,{focus});
+    }catch{
+      if(!available()||request!==sequence)return;
+      const retry=button('Retry local schedule','button','secondary');retry.onclick=()=>load(true);
+      content.replaceChildren(add(el('section'),el('p','The local schedule could not be loaded.'),retry));
+      if(focus)retry.focus({preventScroll:true});
+    }
+  }
+  detail.ontoggle=()=>{if(available())load();};
+  return detail;
+}
 function renderOperationalReport({filters,counts,rows,options,generatedAt,run},history){
   const activity=filters.dataset==='activity';
   const intro=add(el('section',undefined,'report-intro'),el('p','WORKSPACE INSIGHTS','eyebrow'),heading('Operational reporting'),
@@ -151,6 +255,8 @@ function renderOperationalReport({filters,counts,rows,options,generatedAt,run},h
     results.append(wrap);
   }
   const focusId=document.activeElement?.id;
-  reportingPane.replaceChildren(intro,results,renderReportRuns(history,options,run?.id));
+  const contents=[intro,results,renderReportRuns(history,options,run?.id)];
+  if(localSession?.mode==='local-isolated'&&localSession.authenticated)contents.push(localReportSchedule());
+  reportingPane.replaceChildren(...contents);
   if(focusId==='report-apply'||focusId==='report-reset')document.getElementById(focusId).focus({preventScroll:true});
 }

@@ -34,7 +34,35 @@ form answers, requester notes, evidence contents, or audit payloads.
   expire after 30 days. New runs can remove the oldest sooner to keep no more
   than 30 runs or 1 MiB of stored export bytes; a single run is limited to 256
   KiB. Expired runs immediately stop opening, and their stored bytes are pruned
-  on the next successful pin. There are no scheduled checks or background sends.
+  on the next successful pin. There are no background checks or sends.
+
+## Local schedule simulation
+
+Under **Reporting → Local report scheduling**, an analyst proposes one plan
+from an available pinned report. The current UTC daily or weekly cadence,
+first slot, and exact normalized template filters are fixed for that plan.
+A separate reviewer approves it. The plan's first UTC slot can be at the
+current minute or up to 366 days ahead. A reviewer can stop a draft or active
+plan without removing its receipts, after which an analyst can propose a
+replacement. A workspace stores at most eight plans.
+
+**Run simulated slot** is a deliberate local test, not an automatic job.
+The caller selects a simulated UTC time and explicitly targets the next
+displayed slot. If it is not due, no report is written. A due tick captures
+the current workspace, not its historical or future state, and saves the
+result through the existing pinned-report engine. The result has its own
+immutable JSON and CSV exports, actual capture time, and slot receipt.
+Repeated hits on the same slot never create another report or run a
+different slot. Each successful test advances the due time exactly one UTC
+day or seven UTC days. It never sweeps missed slots automatically.
+
+The most recent 24 receipts per plan remain after restart. Receipt metadata
+may outlive report bytes governed by the ordinary pinned-report limits.
+An older processed slot cannot run again after its receipt or bytes expire.
+No recipients, real sending, outbound network actions, background timers, rolling
+filters, or corporate sign-in integration are supported. The panel and
+routes require an authenticated analyst or reviewer in a local isolated
+synthetic workspace.
 
 ## Local HTTP
 
@@ -43,6 +71,10 @@ form answers, requester notes, evidence contents, or audit payloads.
 - `POST /api/reporting/runs` with `{"filters":{"dataset":"records","group":"stage"}}`
 - `GET /api/reporting/runs` lists active pins. `GET /api/reporting/runs/:id` views one.
 - `GET /api/reporting/runs/:id/export?format=json` downloads the same bytes, or use `format=csv`.
+- `GET /api/reporting/schedules` lists local plans, draft revision, and retained receipts.
+- `POST /api/reporting/schedules/create` takes `expectedRevision`, `sourceRunId`, `cadence` (`daily` or `weekly`), and `firstDueAt` (canonical UTC at a whole minute, for example `2027-03-01T09:00:00.000Z`).
+- `POST /api/reporting/schedules/approve` and `/stop` take `expectedRevision` and `planId`.
+- `POST /api/reporting/schedules/tick` takes `planId`, the exact `slotAt`, and canonical UTC `simulatedAt`.
 
 The live routes accept `dataset`, `workflow`, `stage`, `outcome`, `group`,
 `from`, and `to`. Only the export route accepts `format` (`csv` or `json`).

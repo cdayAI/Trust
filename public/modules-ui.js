@@ -105,7 +105,7 @@ function renderModules(){
   mview.replaceChildren(add(el('div',undefined,'module-grid'),add(el('aside'),add(el('section'),heading('Program modules'),nav)),content));
 }
 function switchView(view,{keepMyWorkLink=false,engagementAssessments=null}={}){
-  if(['ethics','group-governance','scoped-applications','document-access','operator-jobs'].includes(view)&&!localSession)return;
+  if(['ethics','group-governance','scoped-applications','document-access','operator-jobs','directory-lifecycle'].includes(view)&&!localSession)return;
   if(localSession&&!localSession.capabilities.views.includes(view))return;
   if(!keepMyWorkLink)clearMyWorkLocation();
   if(view==='assessments')scopedEngagementAssessments=engagementAssessments;
@@ -132,10 +132,11 @@ function switchView(view,{keepMyWorkLink=false,engagementAssessments=null}={}){
   $('#assessment-config-view').hidden=view!=='assessment-config';
   $('#training-view').hidden=view!=='training';
   $('#identity-admin-view').hidden=view!=='identity-admin';
+  $('#directory-lifecycle-view').hidden=view!=='directory-lifecycle';
   $('#document-access-view').hidden=view!=='document-access';
   $('#group-governance-view').hidden=view!=='group-governance';
   $('#scoped-applications-view').hidden=view!=='scoped-applications';
-  for(const name of ['home','document-access','group-governance','scoped-applications','identity-admin','ethics','assessments','assessment-config','rights','incidents','data-map','processing-register','dictionary','preferences','retention','risk-controls','audit-management','maturity-planning','vendor-monitoring','queue','my-work','operator-jobs','governance-docs','trust-center','employee-attestations','training','workflow-studio','modules','report']){
+  for(const name of ['home','directory-lifecycle','document-access','group-governance','scoped-applications','identity-admin','ethics','assessments','assessment-config','rights','incidents','data-map','processing-register','dictionary','preferences','retention','risk-controls','audit-management','maturity-planning','vendor-monitoring','queue','my-work','operator-jobs','governance-docs','trust-center','employee-attestations','training','workflow-studio','modules','report']){
     const b=$('#show-'+name),on=view===name;
     b.setAttribute('aria-current',String(on));b.classList.toggle('secondary',!on);
   }
@@ -185,6 +186,8 @@ function switchView(view,{keepMyWorkLink=false,engagementAssessments=null}={}){
     $('#employee-attestations-view').replaceChildren(el('p','Loading assignments…'));refreshEmployeeAdmin();
   }else if(view==='ethics'){
     $('#ethics-view').replaceChildren(el('p','Loading synthetic cases…'));refreshEthics();
+  }else if(view==='directory-lifecycle'){
+    refreshDirectoryReconciliation();
   }else if(view==='identity-admin'){
     $('#identity-admin-view').replaceChildren(el('p','Loading workspace accounts…'));refreshIdentityAdmin();
   }else if(view==='assessment-config'){
