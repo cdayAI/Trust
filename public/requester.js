@@ -22,6 +22,16 @@ function questionnaireInput(field){
   caption.append(input);
   return {caption,input,field};
 }
+function focusStatus(){
+  const heading=result.querySelector('h2');
+  if(heading){heading.tabIndex=-1;heading.focus();}
+}
+function denyAccess(error){
+  result.replaceChildren(make('p',error.message));
+  localCode=undefined;
+  clear.hidden=true;
+  codeForm.elements.code.focus();
+}
 function show(data){
   if(data.status==='not-submitted'){
     const form=make('form'),label=make('label','Fictional request type'),select=make('select');
@@ -75,12 +85,15 @@ function show(data){
         try{
           const payload=await call('result',{code:localCode});
           if(current!==epoch)return;
-          if(payload.status!=='available'){show({...data,resultAvailable:false});return;}
-          const section=make('section'),list=make('ul');
-          section.append(make('h3',payload.result.title),make('p','Fictional examples only. No actual information was released.'),list);
+          if(payload.status!=='available'){show({...data,resultAvailable:false});focusStatus();return;}
+          const section=make('section'),list=make('ul'),heading=make('h3',payload.result.title);
+          section.className='requester-approved-projection';
+          heading.tabIndex=-1;
+          section.append(heading,make('p','Fictional examples only. No actual information was released.'),list);
           for(const {label,count} of payload.result.sections)list.append(make('li',label+': '+count));
           open.replaceWith(section);
-        }catch(error){if(current===epoch){result.replaceChildren(make('p',error.message));localCode=undefined;clear.hidden=true;}}
+          heading.focus();
+        }catch(error){if(current===epoch)denyAccess(error);}
         finally{open.disabled=false;}
       };
       result.append(open);
@@ -92,8 +105,13 @@ function show(data){
 async function check(trigger){
   if(!localCode||trigger.disabled)return;
   const current=++epoch;trigger.disabled=true;
-  try{const data=await call('status',{code:localCode});if(current===epoch)show(data)}
-  catch(error){if(current===epoch){result.replaceChildren(make('p',error.message));localCode=undefined;clear.hidden=true}}
+  const concealed=!!result.querySelector('.requester-approved-projection');
+  result.querySelector('.requester-approved-projection')?.remove();
+  try{
+    const data=await call('status',{code:localCode});
+    if(current===epoch){show(data);if(concealed)focusStatus();}
+  }catch(error){if(current===epoch)denyAccess(error);}
+
   finally{trigger.disabled=false}
 }
 codeForm.onsubmit=e=>{

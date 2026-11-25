@@ -29,8 +29,21 @@ async function refreshRights(){
     if(sequence===rightsSequence&&!rightsPane.hidden){rightsPane.replaceChildren(el('p','Privacy rights cases could not be loaded.'));notice(e.message,true)}
   }
 }
+function restoreRequesterResultFocus(caseId){
+  if(!caseId||rightsPane.hidden)return;
+  const card=document.getElementById('work-record-'+caseId);
+  const panel=card?.querySelector('[data-requester-result]');
+  if(panel){
+    panel.open=true;
+    panel.querySelector('summary').focus();
+  }else{
+    const title=card?.querySelector('h3');
+    if(title){title.tabIndex=-1;title.focus();}
+  }
+}
 function rightsForm(target,path,fields,requestBody,caption){
   const form=add(el('form'),...fields,button(caption,'submit'));
+  const resultCase=target.dataset.requesterResult;
   form.onsubmit=async e=>{
     e.preventDefault();
     if(busy)return;
@@ -39,14 +52,15 @@ function rightsForm(target,path,fields,requestBody,caption){
       const values=Object.fromEntries(new FormData(form));
       rightsData=await read(path,{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Actor':actor},
         body:JSON.stringify(requestBody(values))});
-      if(!rightsPane.hidden){renderRights();notice('Privacy rights case updated.')}
+      if(!rightsPane.hidden){renderRights();notice('Privacy rights case updated.');restoreRequesterResultFocus(resultCase);}
     }catch(err){
       if(!rightsPane.hidden){
         notice(err.message,true);
         if(err.status===409&&err.message.includes('Reload')){
           const reload=button('Reload cases','button','secondary');
-          reload.onclick=async()=>{notice('');await refreshRights()};
+          reload.onclick=async()=>{notice('');await refreshRights();restoreRequesterResultFocus(resultCase);};
           $('#notice').append(document.createTextNode(' '),reload);
+          if(resultCase)reload.focus();
         }
       }
     }finally{busy=false;submit.disabled=false}
@@ -136,6 +150,7 @@ function renderRequesterResult(card,row){
   const panel=add(el('details'),el('summary','Fictional requester result'),
     el('p','Stage: '+model.stage.replaceAll('-',' ')),
     el('p','Only fixed fictional categories and counts can appear. Approval alone does not release anything.','hint'));
+  panel.dataset.requesterResult=row.id;
   if(model.preview)panel.append(el('h4','Redacted preview · version '+model.version),
     add(el('ul'),...model.preview.sections.map(item=>el('li',item.label+': '+item.count))));
   const root=rightsPath+'/'+encodeURIComponent(row.id)+'/result/';

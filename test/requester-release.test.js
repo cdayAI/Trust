@@ -4,7 +4,8 @@ const assert=require('node:assert/strict');
 const {test}=require('node:test');
 const {once}=require('node:events');
 const {randomBytes}=require('node:crypto');
-const {mkdtemp,rm}=require('node:fs/promises');
+const {mkdtemp,readFile,rm}=require('node:fs/promises');
+const {spawn}=require('node:child_process');
 const {tmpdir}=require('node:os');
 const {join}=require('node:path');
 const {createServer}=require('../server');
@@ -189,7 +190,11 @@ test('Chromium: reviewer approval alone stays private, explicit release reveals 
       await page.getByRole('button',{name:'Privacy rights',exact:true}).click();
       return page.locator('#work-record-'+id);
     };
-    const reveal=async card=>card.getByText('Fictional requester result',{exact:true}).click();
+    const reveal=async card=>{
+      const disclosure=card.locator('[data-requester-result]');
+      await disclosure.waitFor();
+      if(!await disclosure.evaluate(node=>node.open))await disclosure.locator('summary').click();
+    };
     const author=await rights(a,'author');
     await reveal(author);
     await author.getByLabel('Fictional result projection').selectOption('summary-only');
@@ -226,6 +231,230 @@ test('Chromium: reviewer approval alone stays private, explicit release reveals 
     await p.getByRole('button',{name:'Check my request'}).click();
     await p.getByRole('heading',{name:'No request submitted'}).waitFor();
     assert.equal(await p.getByRole('button',{name:'View approved fictional result'}).count(),0);
+    assert.deepEqual(errors,[]);
+  }finally{await browser.close();}
+});
+
+async function launchedRelease(t){
+  const root=await mkdtemp(join(tmpdir(),'trust-release-result-acceptance-'));
+  const launcher=spawn(process.execPath,[join(__dirname,'..','start-release.js')],{
+    cwd:root,env:{...process.env,TMPDIR:root,TMP:root,TEMP:root},stdio:['ignore','pipe','pipe'],
+  });
+  let errors='',output='',timer;
+  launcher.stdout.setEncoding('utf8');launcher.stderr.setEncoding('utf8').on('data',chunk=>errors+=chunk);
+  const closed=new Promise((resolve,reject)=>{launcher.once('error',reject);launcher.once('close',resolve);});
+  closed.catch(()=>{});
+  t.after(async()=>{
+    if(launcher.exitCode===null&&launcher.signalCode===null)launcher.kill();
+    try{await closed;}finally{await rm(root,{recursive:true,force:true,maxRetries:2});}
+  });
+  const ready=await Promise.race([
+    new Promise(resolve=>launcher.stdout.on('data',chunk=>{
+      output+=chunk;if(output.includes('\n'))resolve(JSON.parse(output.trim()));
+    })),
+    closed.then(()=>{throw new Error('Local release failed to start: '+errors);}),
+    new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Local release startup timed out.')),12000);}),
+  ]).finally(()=>clearTimeout(timer));
+  assert.equal(ready.status,'ready');
+  assert.match(ready.url,/^http:\/\/127\.0\.0\.1:\d+$/);
+  const access=JSON.parse(await readFile(ready.accessFile,'utf8'));
+  const seats={author:'sample-intake',reviewer:'sample-review'},workspace='harbor';
+  const codes=Object.fromEntries(Object.entries(seats).map(([role,id])=>[role,access.staff.find(row=>row.id===id).code]));
+  codes.request=access.requesters.find(row=>row.workspace===workspace).code;
+  codes.otherWorkspace=access.requesters.find(row=>row.workspace==='orchard').code;
+  async function request(path,status,{body,cookie,scoped=false}={}){
+    const response=await fetch(ready.url+path+(scoped?'?workspace='+workspace:''),{
+      signal:AbortSignal.timeout(6000),
+      ...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)}),
+      headers:{...(cookie?{Cookie:cookie}:{}),...(body===undefined?{}:{Origin:ready.url,'Content-Type':'application/json'})},
+    });
+    const data=await response.json();
+    assert.equal(response.status,status,path+': '+JSON.stringify(data));
+    return {data,cookie:response.headers.get('set-cookie')?.split(';')[0]};
+  }
+  const login=role=>request('/api/session/login',200,{body:{account:seats[role],code:codes[role],workspace}});
+  const staff=(path,status,session,body)=>request(path,status,{cookie:session.cookie,body,scoped:true}).then(x=>x.data);
+  const visitor=(operation,key,status=200,body={})=>request(portal+'/'+operation,status,{body:{code:codes[key]??key,...body}}).then(x=>x.data);
+  return {url:ready.url,seats,workspace,codes,login,staff,visitor};
+}
+async function requesterCheck(page,code){
+  await page.getByLabel('Synthetic access code').fill(code);
+  await page.getByRole('button',{name:'Check my request',exact:true}).click();
+}
+async function assertFocus(locator){
+  await locator.waitFor();
+  assert.equal(await locator.evaluate(node=>node===document.activeElement),true);
+}
+test('Chromium composed release: return, digest rework, stale retry, explicit release and requester focus/privacy', {
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1',timeout:45000,
+},async t=>{
+  const release=await launchedRelease(t),expiring=await fixture(t);
+  const {id}=await fulfill(release);
+  const exp=await fulfill(expiring);
+  const draft=record(await expiring.staff(exp.result+'draft',200,exp.a,{expectedRevision:0,selection:'summary-only'}),exp.id).resultDelivery;
+  await expiring.staff(exp.result+'submit',200,exp.a,permit(draft));
+  await expiring.staff(exp.result+'approve',200,exp.r,permit(draft));
+  await expiring.staff(exp.result+'release',200,exp.r,{...permit(draft),confirm:true});
+  const {chromium}=require('playwright');
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  try{
+    const analyst=await browser.newPage(),review=await browser.newPage(),stale=await browser.newPage(),
+      visitor=await browser.newPage({viewport:{width:390,height:844}}),expired=await browser.newPage();
+    const errors=[];
+    for(const page of [analyst,review,stale,visitor,expired]){
+      page.setDefaultTimeout(6500);page.on('pageerror',e=>errors.push(e.message));
+    }
+    async function caseCard(page,role){
+      await page.goto(release.url);
+      await page.getByLabel('Test account').fill(release.seats[role]);
+      await page.getByLabel('Workspace ID').fill(release.workspace);
+      await page.getByLabel('Local access code').fill(release.codes[role]);
+      await page.getByRole('button',{name:'Sign in',exact:true}).click();
+      await page.getByRole('button',{name:'Privacy rights',exact:true}).click();
+      const card=page.locator('#work-record-'+id);
+      await card.getByRole('heading',{name:'Access case'}).waitFor();
+      return card;
+    }
+    const panel=card=>card.locator('details').filter({hasText:/Fictional requester result/});
+    const summary=card=>panel(card).locator('summary');
+    const button=(card,name)=>card.getByRole('button',{name,exact:true});
+    const stage=(card,text)=>card.getByText('Stage: '+text,{exact:true}).waitFor({state:'attached'});
+    async function actorAction(page,card,name,operation,status=200){
+      const [wire]=await Promise.all([
+        page.waitForResponse(response=>new URL(response.url()).pathname.endsWith('/result/'+operation)),
+        button(card,name).press('Enter'),
+      ]);
+      assert.equal(wire.status(),status);
+      return wire.request().postDataJSON();
+    }
+    await visitor.goto(release.url+'/requester');
+    await requesterCheck(visitor,release.codes.request);
+    const noResult=async()=>{
+      await visitor.getByRole('heading',{name:'Simulation complete'}).waitFor();
+      assert.equal(await visitor.getByRole('button',{name:'View approved fictional result'}).count(),0);
+      assert.doesNotMatch(await visitor.locator('#portal-result').innerText(),/Fictional (?:preference|example records|access result)|INTERNAL|RAW-RESULT/);
+    };
+    const refreshWithoutResult=async()=>{
+      const [response]=await Promise.all([
+        visitor.waitForResponse(item=>new URL(item.url()).pathname==='/api/requester/status'),
+        button(visitor,'Refresh status').click(),
+      ]);
+      assert.equal(response.status(),200);
+      assert.equal((await response.json()).resultAvailable,undefined);
+      await noResult();
+    };
+    await noResult();
+
+    const a=await caseCard(analyst,'author');
+    await summary(a).press('Enter');
+    await a.getByLabel('Fictional result projection').selectOption('category-overview');
+    await actorAction(analyst,a,'Save redacted result draft','draft');
+    await stage(a,'draft');
+    await assertFocus(summary(a));
+    const first=await actorAction(analyst,a,'Submit exact result for review','submit');
+    await stage(a,'review');
+    const r=await caseCard(review,'reviewer'),s=await caseCard(stale,'reviewer');
+    await summary(r).press('Enter');await summary(s).press('Enter');
+    await r.getByText('Fictional preference examples: 2').waitFor();
+    const sentBack=await actorAction(review,r,'Return result for changes','return');
+    assert.deepEqual(sentBack,first);
+    await panel(r).waitFor({state:'detached'});
+    await assertFocus(r.getByRole('heading',{name:'Access case'}));
+    await refreshWithoutResult();
+
+    await analyst.getByRole('button',{name:'Work queue',exact:true}).click();
+    await analyst.getByRole('button',{name:'Privacy rights',exact:true}).click();
+    await summary(a).press('Enter');
+    await stage(a,'returned');
+    await a.getByLabel('Fictional result projection').selectOption('summary-only');
+    await actorAction(analyst,a,'Save redacted result draft','draft');
+    await stage(a,'draft');
+    assert.doesNotMatch(await panel(a).innerText(),/Fictional preference examples/);
+    const second=await actorAction(analyst,a,'Submit exact result for review','submit');
+    await stage(a,'review');
+    assert.equal(second.expectedRevision,first.expectedRevision+1);
+    assert.notEqual(second.digest,first.digest);
+    assert.deepEqual(await actorAction(stale,s,'Approve this exact result','approve',409),first);
+    const reload=stale.getByRole('button',{name:'Reload cases',exact:true});
+    await assertFocus(reload);
+    await reload.press('Enter');
+    await s.getByText('Fictional example records: 3').waitFor();
+    await assertFocus(summary(s));
+    assert.equal(await s.getByText('Fictional preference examples: 2').count(),0);
+    assert.deepEqual(await actorAction(stale,s,'Approve this exact result','approve'),second);
+    await stage(s,'approved');
+    await refreshWithoutResult();
+    await s.getByLabel('Confirm release to the original synthetic code.').check();
+    assert.deepEqual(await actorAction(stale,s,'Release approved result locally','release'),{...second,confirm:true});
+    await stage(s,'released');
+    await assertFocus(summary(s));
+
+    await button(visitor,'Refresh status').click();
+    await button(visitor,'View approved fictional result').press('Enter');
+    const resultHeading=visitor.getByRole('heading',{name:'Fictional access result',exact:true});
+    await assertFocus(resultHeading);
+    assert.match(await visitor.locator('#portal-result').innerText(),/Fictional example records: 3/);
+    assert.doesNotMatch(await visitor.locator('#portal-result').innerText(),/Fictional preference|INTERNAL|RAW-RESULT/);
+    let releaseRefresh;
+    const refreshGate=new Promise(resolve=>{releaseRefresh=resolve;});
+    const delayStatus=async route=>{await refreshGate;await route.continue();};
+    await visitor.route('**/api/requester/status',delayStatus);
+    try{
+      const requested=visitor.waitForRequest(request=>new URL(request.url()).pathname==='/api/requester/status');
+      await button(visitor,'Refresh status').click();
+      await requested;
+      assert.equal(await resultHeading.count(),0);
+    }finally{releaseRefresh();}
+    await button(visitor,'View approved fictional result').waitFor();
+    await visitor.unroute('**/api/requester/status',delayStatus);
+    await button(visitor,'View approved fictional result').press('Enter');
+    await assertFocus(resultHeading);
+
+    // Changing capability removes an already-disclosed projection.
+    await requesterCheck(visitor,release.codes.otherWorkspace);
+    await visitor.getByRole('heading',{name:'No request submitted'}).waitFor();
+    assert.equal(await resultHeading.count(),0);
+    assert.equal(await button(visitor,'View approved fictional result').count(),0);
+    assert.doesNotMatch(await visitor.locator('#portal-result').innerText(),/Receipt:|Fictional example records/);
+
+    // Start a real result request, then change to a different workspace's
+    // grant before the original wire response is allowed to return.
+    await requesterCheck(visitor,release.codes.request);
+    const view=button(visitor,'View approved fictional result');
+    await view.waitFor();
+    let releaseResult;
+    const resultGate=new Promise(resolve=>{releaseResult=resolve;});
+    const delayResult=async route=>{await resultGate;await route.continue();};
+    await visitor.route('**/api/requester/result',delayResult);
+    const requested=visitor.waitForRequest(request=>new URL(request.url()).pathname==='/api/requester/result');
+    const finished=visitor.waitForEvent('requestfinished',{predicate:request=>new URL(request.url()).pathname==='/api/requester/result'});
+    try{
+      await view.press('Enter');
+      await requested;
+      await requesterCheck(visitor,release.codes.otherWorkspace);
+      await visitor.getByRole('heading',{name:'No request submitted'}).waitFor();
+    }finally{releaseResult();}
+    await finished;
+    await visitor.unroute('**/api/requester/result',delayResult);
+    await visitor.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+    assert.equal(await resultHeading.count(),0);
+    assert.doesNotMatch(await visitor.locator('#portal-result').innerText(),/Receipt:|Fictional example records/);
+    await requesterCheck(visitor,makeCode());
+    const generic='A valid local synthetic access code is required.';
+    await visitor.getByText(generic,{exact:true}).waitFor();
+    await assertFocus(visitor.getByLabel('Synthetic access code'));
+    assert.equal(await button(visitor,'Clear access code').count(),0);
+
+    await expired.goto(expiring.url+'/requester');
+    await requesterCheck(expired,expiring.codes.request);
+    await button(expired,'View approved fictional result').press('Enter');
+    await assertFocus(expired.getByRole('heading',{name:'Fictional access result',exact:true}));
+    expiring.advance(61000);
+    await button(expired,'Refresh status').click();
+    await expired.getByText(generic,{exact:true}).waitFor();
+    await assertFocus(expired.getByLabel('Synthetic access code'));
+    assert.equal(await expired.getByRole('heading',{name:'Fictional access result'}).count(),0);
+    assert.equal(await expired.locator('#portal-result').innerText(),await visitor.locator('#portal-result').innerText());
     assert.deepEqual(errors,[]);
   }finally{await browser.close();}
 });
