@@ -1,0 +1,12 @@
+.assessment-config-release { display: grid; gap: 1rem; }
+.assessment-config-release h3 { overflow-wrap: anywhere; }
+.assessment-config-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 13rem), 1fr)); gap: .75rem; }
+.assessment-config-scenario, .assessment-config-builder, .assessment-config-item {
+  min-width: 0; border: 1px solid var(--line, rgba(95, 127, 144, .3));
+  border-radius: 1rem; padding: .8rem 1rem; margin-block: .75rem;
+  background: linear-gradient(145deg, rgba(128, 170, 193, .13), rgba(128, 170, 193, .03));
+  overflow-wrap: anywhere;
+}
+.assessment-config-check { display: flex; align-items: center; gap: .5rem; }
+.assessment-config-check input { width: auto; }
+.assessment-config-item .actions { flex-wrap: wrap; }

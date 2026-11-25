@@ -8,6 +8,8 @@ const {launchLocalServer}=require('./operational-health');
 const {codeHash}=require('./workspace-access');
 launchLocalServer(()=>{
 const enableIdentityAdmin=process.env.TRUST_ENABLE_LOCAL_IDENTITY_ADMIN==='1';
+const enableGroupGovernance=process.env.TRUST_ENABLE_LOCAL_GROUP_GOVERNANCE==='1';
+if(enableGroupGovernance&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first to opt into local group governance.');
 const root=mkdtempSync(join(tmpdir(),'trust-synthetic-'));
 const codes=join(root,'local-access.json');
 const requesterCodes=join(root,'requester-access.json');
@@ -41,6 +43,10 @@ writeFileSync(trainingCodes,JSON.stringify(learners,null,2)+'\n',{flag:'wx',mode
 const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,operationalEvents:true,isolated:{
   root:join(root,'workspaces'),enableIdentityAdmin,
   workspaces:[{id:'harbor',label:'Fictional Harbor'},{id:'orchard',label:'Fictional Orchard'}],
+  ...(enableGroupGovernance?{groupApplications:['harbor','orchard'].map(workspace=>({workspace,applications:[
+    {id:'sample-case-reference',name:'Sample Case Reference',summary:'Fictional reference application for the scoped access walkthrough.'},
+    {id:'sample-service-register',name:'Sample Service Register',summary:'Fictional service summary. This is not connected to an external system.'}
+  ]}))}:{}),
   employeeGrants:employees.map(({code,...seat})=>({...seat,codeHash:codeHash(code)})),
   employeeSigningKey:randomBytes(32).toString('hex'),
   trainingGrants:learners.map(({code,...seat})=>({...seat,codeHash:codeHash(code)})),

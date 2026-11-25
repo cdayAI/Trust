@@ -17,10 +17,19 @@ function route(method,value,roles){
 }
 
 // Specific methods and resource paths, never an open-ended workspace prefix.
+route('GET','operator/v1/jobs(?:/'+uuid+')?',operators);
+route('POST','operator/v1/jobs(?:/'+uuid+'/run)?',operators);
+route('POST','operator/v1/jobs/'+uuid+'/decision',['reviewer']);
 route('GET','state',all);
+route('GET','assessment-config',operators);
+route('POST','assessment-config/(?:create|edit|submit)',['analyst']);
+route('POST','assessment-config/(?:return|publish)',['reviewer']);
 route('GET','my-work(?:/tasks/'+myWorkToken+')?',rights);
 route('GET','identity-admin',['identity-admin']);
 route('POST','identity-admin',['identity-admin']);
+route('GET','group-governance',['identity-admin','reviewer']);
+route('POST','group-governance',['identity-admin','reviewer']);
+route('GET','scoped-applications',['analyst','case-operator']);
 route('GET','(?:vendor-monitoring|risk-controls|retention|privacy-notices|dictionary|dictionary/export|modules|work-queue|work-queue/export|reporting|reporting/export)',operators);
 route('GET','(?:data-map|data-map/discovery|data-map/export|data-map/nodes/'+uuid+'/lineage)',operators);
 route('GET','(?:risk-controls/export|incidents/cases|audit-management|audit-management/plans/'+uuid+'/report)',operators);
@@ -62,15 +71,20 @@ route('POST','workflows/definitions',['publisher']);
 route('POST','workflows/(?:instances|instances/'+key+'/transitions)',operators);
 
 const views={
-  analyst:['assessments','my-work','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
-  reviewer:['assessments','my-work','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
+  analyst:['assessments','assessment-config','my-work','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
+  reviewer:['assessments','assessment-config','my-work','queue','rights','incidents','vendor-monitoring','data-map','dictionary','preferences','retention','governance-docs','employee-attestations','training','risk-controls','audit-management','maturity-planning','workflow-studio','trust-center','report','modules'],
   publisher:['workflow-studio'],
   'identity-admin':['identity-admin'],
   'ethics-investigator':['ethics'],
   'ethics-reviewer':['ethics'],
   'case-operator':['rights','my-work','governance-docs'],
 };
-const capabilities=role=>({views:[...(Object.hasOwn(views,role)?views[role]:[])],workspaceAudit:role==='reviewer'});
+function capabilities(role,{groupGovernance=false}={}){
+  const permitted=[...(Object.hasOwn(views,role)?views[role]:[])];
+  if(groupGovernance&&['identity-admin','reviewer'].includes(role))permitted.push('group-governance');
+  if(groupGovernance&&['analyst','case-operator'].includes(role))permitted.push('scoped-applications');
+  return {views:permitted,workspaceAudit:role==='reviewer'};
+}
 function requirePermission(method,pathname,role){
   const rule=routes.find(x=>x.method===method&&x.path.test(pathname));
   if(!rule)throw Object.assign(new Error('Not found.'),{status:404});

@@ -65,6 +65,7 @@ function evaluate(questionnaire, previous, updates, submitting) {
     const input=Object.hasOwn(payload,q.id)?payload[q.id]:(previous[q.id]??'');
     if(typeof input!=='string'||input.length>2000)return fail('INVALID_ANSWER',q.label+' must be text of at most 2,000 characters.');
     const value=input.trim();
+    if(q.kind==='integer'&&value&&(!/^(?:0|-?[1-9][0-9]{0,8})$/.test(value)))return fail('INVALID_ANSWER',q.label+' must be a whole number between -999,999,999 and 999,999,999.');
     if(q.kind==='choice'&&value&&!q.options.includes(value))return fail('INVALID_ANSWER',q.label+' must match a listed choice.');
     if(submitting&&q.required&&!value)return fail('REQUIRED_ANSWER','Answer required: '+q.label+'.');
     answers[q.id]=value;

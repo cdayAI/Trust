@@ -52,6 +52,7 @@ function renderAssessment(parent,a){
   const q=a.questionnaire;
   card.append(el('p',q.label+' · Form v'+q.version+' · Workflow v'+a.workflowDefinitionVersion+' · Record revision '+a.revision,'hint'));
   card.append(el('p','Routing: '+a.routing.reason,'hint'));
+  if(a.routing.configurationVersion)card.append(el('p','Configuration v'+a.routing.configurationVersion+' · Rule '+a.routing.ruleId,'hint'));
   if(a.monitoringCycleId)card.append(el('p','Vendor monitoring reassessment · '+a.id,'hint'));
   if(actor==='analyst'&&['draft','rejected'].includes(a.status)){
     if(a.decisionReason)card.append(el('p','Returned by reviewer: '+a.decisionReason,'hint'));
@@ -62,12 +63,13 @@ function renderAssessment(parent,a){
     const inputs=new Map();
     for(const question of q.questions){
       const label=el('label',question.label+(question.required?' *':''));
-      const field=el(question.kind==='choice'?'select':'textarea');
+      const field=el(question.kind==='choice'?'select':question.kind==='integer'?'input':'textarea');
       field.name=question.id;field.required=!!question.required;
       if(question.kind==='choice'){
         const blank=el('option','Select an answer');blank.value='';field.append(blank);
         for(const choice of question.options){const opt=el('option',choice);opt.value=choice;field.append(opt)}
-      }else{field.rows=2;field.maxLength=2000}
+      }else if(question.kind==='integer'){field.inputMode='numeric';field.maxLength=10;field.pattern='(?:0|-?[1-9][0-9]{0,8})'}
+      else{field.rows=2;field.maxLength=2000}
       field.value=a.answers[question.id]??'';
       inputs.set(question.id,{label,field,question});f.append(add(label,field));
     }

@@ -1,51 +1,49 @@
 'use strict';
 const {createHash, randomUUID}=require('node:crypto');
+const {formats,catalog}=require('./document-attachment-formats');
 const rules=Object.freeze({
-  extension:'.txt',
-  mediaType:'text/plain',
-  maxFileBytes:16*1024,
+  formats:catalog,
+  maxFileBytes:Math.max(...catalog.map(format=>format.maxFileBytes)),
   maxFilesPerRevision:4,
-  maxWorkspaceBytes:2*1024*1024,
+  maxWorkspaceBytes:8*1024*1024,
   maxFilesPerWorkspace:256
 });
-const maxEncodedLength=Math.ceil(rules.maxFileBytes/3)*4;
-const encoding=/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const uploadRequestBytes=Math.ceil(rules.maxFileBytes/3)*4+1024;
 const idPattern=/^[a-f\d]{8}-[a-f\d]{4}-4[a-f\d]{3}-[89ab][a-f\d]{3}-[a-f\d]{12}$/u;
 const shaPattern=/^[a-f\d]{64}$/u;
-const utf8=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
-function fail(status,code,message){throw Object.assign(new Error(message),{status,code});}
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
+function fail(status,code,message){throw Object.assign(new Error(message),{status,code});}
 
 function cleanName(name){
-  if(typeof name!=='string'||!/^[A-Za-z0-9][A-Za-z0-9 _.-]{0,91}\.txt$/iu.test(name))
-    fail(422,'INVALID_ATTACHMENT_FILENAME','Use a .txt filename with up to 96 letters, numbers, spaces, periods, dashes, or underscores.');
-  const base=name.slice(0,-4).replace(/ +/g,' ').trimEnd();
-  if(/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(base))fail(422,'INVALID_ATTACHMENT_FILENAME','Use a regular .txt filename.');
-  return base+'.txt';
+  if(typeof name!=='string'||name.length>96||!/^[A-Za-z0-9][A-Za-z0-9 _.-]*\.[A-Za-z0-9]{2,8}$/u.test(name))
+    fail(422,'INVALID_ATTACHMENT_FILENAME','Use a filename of up to 96 letters, numbers, spaces, periods, dashes, or underscores.');
+  const dot=name.lastIndexOf('.');
+  const base=name.slice(0,dot).replace(/ +/g,' ').trimEnd();
+  if(/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(base))
+    fail(422,'INVALID_ATTACHMENT_FILENAME','Use a regular filename.');
+  return base+name.slice(dot).toLowerCase();
 }
-function rawBytes(data){
-  if(typeof data!=='string'||!data)fail(422,'ATTACHMENT_REQUIRED','Choose a nonempty fictional text file.');
-  if(data.length>maxEncodedLength)fail(413,'ATTACHMENT_TOO_LARGE','An attachment cannot exceed 16 KiB.');
-  if(!encoding.test(data))fail(422,'INVALID_ATTACHMENT_ENCODING','The attachment encoding is invalid.');
+function rawBytes(data,format){
+  if(typeof data!=='string'||!data)fail(422,'ATTACHMENT_REQUIRED','Choose a nonempty fictional file.');
+  const limit=format.maxFileBytes, tooLarge=()=>fail(413,'ATTACHMENT_TOO_LARGE',
+    'This file format cannot exceed '+(limit>=1024*1024?limit/(1024*1024)+' MiB':limit/1024+' KiB')+'.');
+  if(data.length>Math.ceil(limit/3)*4)tooLarge();
+  if(data.length%4||/[^A-Za-z0-9+/=]/u.test(data))fail(422,'INVALID_ATTACHMENT_ENCODING','The attachment encoding is invalid.');
   const bytes=Buffer.from(data,'base64');
-  if(bytes.length>rules.maxFileBytes)fail(413,'ATTACHMENT_TOO_LARGE','An attachment cannot exceed 16 KiB.');
+  if(bytes.length>limit)tooLarge();
   if(!bytes.length||bytes.toString('base64')!==data)fail(422,'INVALID_ATTACHMENT_ENCODING','The attachment encoding is invalid.');
   return bytes;
 }
-function checkText(bytes){
-  let text;
-  try{text=utf8.decode(bytes);}
-  catch{fail(415,'ATTACHMENT_NOT_TEXT','Attachments must be valid UTF-8 plain text.');}
-  text=text.replace(/^\uFEFF/u,'');
-  const printable=text.replace(/[\r\n\t]/gu,'');
-  // Reject non-text controls and markup at the start. No uploaded content is rendered inline.
-  if(!text.trim()||/\p{C}/u.test(printable)||/^\s*<(?:[!?]|\/?[A-Za-z])/u.test(text)||/^\s*\{\\rtf/u.test(text))
-    fail(415,'ATTACHMENT_NOT_TEXT','Attachments must be nonempty, printable UTF-8 plain text, not markup or binary files.');
+function namedFormat(name){
+  const format=formats.get(name.slice(name.lastIndexOf('.')));
+  if(!format)fail(415,'ATTACHMENT_TYPE_UNSUPPORTED','Choose a supported PDF, modern Office, text, CSV, TSV, or raster image file.');
+  return format;
 }
 function attachment(body,book,version){
-  if(body.mediaType!==rules.mediaType)fail(415,'ATTACHMENT_TYPE_UNSUPPORTED','Only UTF-8 .txt attachments are accepted.');
-  const name=cleanName(body.filename), bytes=rawBytes(body.data);
-  checkText(bytes);
+  const name=cleanName(body.filename), format=namedFormat(name);
+  if(typeof body.mediaType!=='string'||(body.mediaType&&body.mediaType!==format.mediaType&&!format.aliases.includes(body.mediaType)))
+    fail(415,'ATTACHMENT_TYPE_MISMATCH','The selected file type does not match the filename.');
+  const bytes=rawBytes(body.data,format);
   if((version.attachments??[]).length>=rules.maxFilesPerRevision)
     fail(409,'ATTACHMENT_REVISION_LIMIT','A revision can contain at most four attachments.');
   let count=0,total=0;
@@ -54,7 +52,8 @@ function attachment(body,book,version){
   }
   if(count>=rules.maxFilesPerWorkspace||total+bytes.length>rules.maxWorkspaceBytes)
     fail(409,'ATTACHMENT_WORKSPACE_LIMIT','This workspace has reached its attachment storage limit.');
-  return {id:randomUUID(),name,mediaType:rules.mediaType,size:bytes.length,sha256:digest(bytes),data:bytes.toString('base64')};
+  format.check(bytes);
+  return {id:randomUUID(),name,mediaType:format.mediaType,size:bytes.length,sha256:digest(bytes),data:bytes.toString('base64')};
 }
 function metadata(row){
   const {id,name,mediaType,size,sha256}=row;
@@ -62,14 +61,17 @@ function metadata(row){
 }
 function download(row){
   try{
-    if(!idPattern.test(row.id)||!shaPattern.test(row.sha256)||row.mediaType!==rules.mediaType||cleanName(row.name)!==row.name)
+    const name=cleanName(row.name),format=namedFormat(name);
+    if(!idPattern.test(row.id)||!shaPattern.test(row.sha256)||row.mediaType!==format.mediaType||name!==row.name)
       throw new Error('Stored metadata mismatch.');
-    const bytes=rawBytes(row.data);
+    const bytes=rawBytes(row.data,format);
     if(bytes.length!==row.size||digest(bytes)!==row.sha256)throw new Error('Stored bytes mismatch.');
-    checkText(bytes);
+    // Uploaded data is validated before persistence and immutable once published.
+    // Revalidate bounded opaque file structure before download, never open or render.
+    format.check(bytes);
     return {filename:row.name,bytes};
   }catch{
     fail(409,'ATTACHMENT_UNAVAILABLE','The stored attachment failed its integrity check.');
   }
 }
-module.exports={rules,attachment,metadata,download};
+module.exports={rules,uploadRequestBytes,attachment,metadata,download};

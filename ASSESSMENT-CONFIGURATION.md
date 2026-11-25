@@ -1,0 +1,11 @@
+# Assessment configuration
+
+MVW Trust can configure fictional privacy impact assessments (PIA) and data protection impact assessments (DPIA) without deploying code. This workbench is not a determination of legal DPIA requirements and does not include actual Marriott Vacations Worldwide rules or data.
+
+1. Open **Assessment configuration** under **Assurance & setup** as the intake analyst. Start a first draft, or draft the next version after publication.
+2. Edit PIA/DPIA titles, custom questions and routing rules. Each form preserves required Summary and Safeguards and supports up to 16 additional long-text, single-choice, or bounded whole-number questions. A conditional question can depend on one exact answer of an earlier choice question. Answer values from closed branches are removed rather than kept for review. Choice answers and whole numbers are checked on the server.
+3. Save the draft to see the rule preview covering all four combinations of sensitive intake and AI use. Rules are checked in order; the first match wins. Conditions use only those two intake declarations. Unmatched intake retains the built-in questionnaires. Rules cannot send sensitive intake to a PIA, and a separate AI assessment still opens when the vendor uses AI. No expressions, executable code, service calls, or arbitrary workflow IDs are accepted.
+4. Submit the exact saved version. The independent reviewer returns it with a reason or approves and publishes it with a review note. Review decisions and changes are recorded in the scoped audit history. Stale writes fail; the reviewer cannot edit the release or approve a release they drafted, edited, or submitted.
+5. The newest published release applies to future assessments, including vendor monitoring reassessments. Draft and returned releases cannot route work. Prior records keep their pinned question set, matched rule, configuration version and workflow definition. Publishing a new version does not modify old instances or prior published configuration.
+
+The workspace-scoped GET endpoint is `/api/assessment-config`. Its POST commands are `create`, `edit`, `submit`, `return`, and `publish`; all require `expectedRevision`. The edit command accepts `configuration`, and reviewer commands require `note`. The workflow uses the existing assessment approvals and does not provide external routing or notifications.

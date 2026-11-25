@@ -142,6 +142,8 @@ test('browser acceptance: compact viewport supports keyboard skip, nav disclosur
     await page.keyboard.press('Tab');
     assert.equal((await focused()).id,'show-assessments');
     await page.keyboard.press('Tab');
+    assert.equal((await focused()).id,'show-assessment-config');
+    await page.keyboard.press('Tab');
     assert.equal((await focused()).id,'show-queue');
     await page.keyboard.press('Enter');
     await page.getByRole('heading',{name:'Work queue',level:2}).waitFor();
@@ -157,7 +159,7 @@ const views={
   'vendor-monitoring':'vendor-monitoring-view','data-map':'data-map-view',dictionary:'dictionary-view',
   preferences:'preferences-view',retention:'retention-view','governance-docs':'governance-docs-view',
   'employee-attestations':'employee-attestations-view',training:'training-view','risk-controls':'risk-controls-view',
-  'audit-management':'audit-management-view','maturity-planning':'maturity-planning-view','workflow-studio':'workflow-studio-view',
+  'assessment-config':'assessment-config-view','audit-management':'audit-management-view','maturity-planning':'maturity-planning-view','workflow-studio':'workflow-studio-view',
   'trust-center':'trust-center-view',report:'report-view',modules:'module-view'
 };
 test('browser inventory: all workbench views and JSON download controls, with role-specific control evidence',browserOnly,async t=>{
@@ -224,7 +226,7 @@ test('browser inventory: all workbench views and JSON download controls, with ro
     const result={source:'local synthetic demo fixture',capturedAt:new Date().toISOString(),rows:inventory,
       independentlyExercisedGlobal:['Export audit JSON'],uncoveredByInventory:[
         'Actions only created by populated records, permissions or status transitions',
-        'File input, upload, rejection, download and deletion in the pending attachment feature',
+        'File input, upload, rejection, byte-exact download and deletion are covered by the dedicated governance attachment journeys, not by this inventory',
         'Separate requester, employee and visitor portal states'
       ]};
     if(process.env.QA_INVENTORY_FILE)await writeFile(process.env.QA_INVENTORY_FILE,JSON.stringify(result,null,2)+'\n','utf8');

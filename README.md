@@ -54,6 +54,8 @@ the browser handles the resulting cookie. See `test/workspace-access.test.js`.
 ## Durable local mode
 
 Set `TRUST_SQLITE_FILE` to use the optional transactional SQLite backend.
+The [local synthetic operator API](OPERATOR-API.md) uses this backend in isolated
+mode for durable jobs and independently reviewed rights-case reassignment.
 See [backup, restore, and migration](DURABLE-STORAGE.md). The legacy JSON
 backend remains available for local compatibility.
 
@@ -194,8 +196,11 @@ policy or evidence document. An evidence revision must link to at least one
 existing typed record. Publication preserves immutable, hash-identified
 revisions. In-app viewing and downloads use local role checks and record an
 audit event without putting document text in the generic state or audit
-export. These are selectable demo identities, not authenticated users, and
-the server is loopback-only. No files are uploaded or externally distributed.
+export. Demo identities are selectable; isolated mode uses signed-in local roles.
+The server is loopback-only. Scoped governance attachments support synthetic PDF,
+modern Office, TXT/CSV/TSV and common raster files as opaque downloads only.
+See [attachment types, limits and validation](DOCUMENT-ATTACHMENTS.md). No files
+are sent outside the local workspace.
 
 
 ### Synthetic schema discovery and reviewed inventory import

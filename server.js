@@ -11,11 +11,14 @@ const {model:myWork,taskToken:myWorkToken}=require('./my-work');
 const myWorkRoute=new RegExp('^/api/my-work(?:/tasks/('+myWorkToken+'))?$');
 const {createAccess}=require('./workspace-access');
 const policy=require('./access-policy');
+const groups=require('./group-governance');
 const {fixtureOptions}=require('./discovery-import');
 const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
 const employee=require('./employee-attestations');
 const training=require('./training');
+const {uploadRequestBytes}=require('./governance-document-attachments');
+const attachmentUploadPath=/^\/api\/governance-documents\/records\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/revisions\/[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\/attachments$/u;
 const reporting=require('./reporting');
 const publicDir = path.join(__dirname,'public');
 const staticFiles = new Map([
@@ -23,6 +26,7 @@ const staticFiles = new Map([
   ['/index.html',['index.html','text/html; charset=utf-8']],
   ['/trust-center-ui.js',['trust-center-ui.js','text/javascript; charset=utf-8']],
   ['/identity-admin-ui.js',['identity-admin-ui.js','text/javascript; charset=utf-8']],
+  ['/group-governance-ui.js',['group-governance-ui.js','text/javascript; charset=utf-8']],
   ['/training-admin-ui.js',['training-admin-ui.js','text/javascript; charset=utf-8']],
   ['/employee-admin-ui.js',['employee-admin-ui.js','text/javascript; charset=utf-8']],
   ['/workflow-studio-ui.js',['workflow-studio-ui.js','text/javascript; charset=utf-8']],
@@ -40,6 +44,8 @@ const staticFiles = new Map([
   ['/data-map-ui.js',['data-map-ui.js','text/javascript; charset=utf-8']],
   ['/incident-ui.js',['incident-ui.js','text/javascript; charset=utf-8']],
   ['/rights-ui.js',['rights-ui.js','text/javascript; charset=utf-8']],
+  ['/assessment-config-ui.js',['assessment-config-ui.js','text/javascript; charset=utf-8']],
+  ['/assessment-config.css',['assessment-config.css','text/css; charset=utf-8']],
   ['/maturity-planning-ui.js',['maturity-planning-ui.js','text/javascript; charset=utf-8']],
   ['/maturity-planning.css',['maturity-planning.css','text/css; charset=utf-8']],
   ['/reporting-ui.js',['reporting-ui.js','text/javascript; charset=utf-8']],
@@ -53,19 +59,24 @@ function send(res,status,value,type='application/json; charset=utf-8',extra={}) 
   res.writeHead(status,{'Content-Type':type,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Referrer-Policy':'no-referrer','Content-Security-Policy':"default-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'",...extra});
   res.end(type.startsWith('application/json')?JSON.stringify(value,null,2)+'\n':value);
 }
-async function readBody(req) {
+async function readBody(req,limit=32768) {
+  const tooLarge=()=>Object.assign(new Error(limit===32768?'Request exceeds 32 KiB.':'Attachment request exceeds the encoded upload limit.'),
+    {status:413,closeConnection:true});
+  if(Number(req.headers['content-length'])>limit)throw tooLarge();
   let bytes=0;
   const chunks=[];
-  for await (const chunk of req) {
+  for await (const chunk of req.iterator({destroyOnReturn:false})) {
     bytes+=chunk.length;
-    if (bytes>32768) throw Object.assign(new Error('Request exceeds 32 KiB.'),{status:413});
+    if (bytes>limit)throw tooLarge();
     chunks.push(chunk);
   }
   try { return bytes?JSON.parse(Buffer.concat(chunks).toString('utf8')):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,operationalEvents=false}={}) {
-  const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id));
+  const scopedCatalogs=groups.provision(isolated);
+  const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id),
+    id=>scopedCatalogs.has(id));
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
     grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,now:isolated.now
   }):null;
@@ -190,6 +201,8 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         return send(res,200,value);
       }
       if(!pathname.startsWith('/api/'))return send(res,404,{error:'Not found.'});
+      const operator = pathname === '/api/operator' || pathname.startsWith('/api/operator/');
+      if (operator && (!access || !database)) return send(res, 404, {error:'Not found.'});
       const expected=searchParams.getAll('workspace');
       const selection=access?.context(req,expected);
       const actor=access?selection.actor:req.headers['x-demo-actor'];
@@ -199,6 +212,15 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       const caseOperator=!!access&&actor==='case-operator';
       const {store,workflow}=runtime(selection?.space);
+      if (operator) {
+        if (searchParams.size) return send(res, 422, {error:'Operator jobs only accept the workspace URL parameter.'});
+        const [jobId, command] = pathname.split('/').slice(5);
+        if (req.method === 'GET') return send(res, 200, store.readOperatorJobs(selection, jobId));
+        const body = await readBody(req);
+        const caller = access.context(req, expected);
+        const { changed, job } = store.changeOperatorJob(caller, command ?? 'submit', jobId, body);
+        return send(res, changed && !jobId ? 201 : 200, { job });
+      }
       if(pathname==='/api/identity-admin'){
         if(!access)return send(res,404,{error:'Not found.'});
         if(searchParams.size)return send(res,422,{error:'No identity administration query filters are supported.'});
@@ -208,6 +230,23 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         const checked=access.context(req,expected);
         policy.requirePermission(req.method,pathname,checked.actor);
         return send(res,200,store.identityAdminChange(roster(),access.identityTime(),checked.account,body));
+      }
+      if(pathname==='/api/group-governance'||pathname==='/api/scoped-applications'){
+        const catalog=scopedCatalogs.get(selection?.space.id);
+        if(!catalog)return send(res,404,{error:'Not found.'});
+        if(searchParams.size)return send(res,422,{error:'Scope governance does not use query filters.'});
+        const groupContext=checked=>({
+          role:checked.actor,account:checked.account,roster:access.identityRoster(checked.space.id),
+          at:access.identityTime(),catalog,generation:checked.generation
+        });
+        if(req.method==='GET'){
+          const context=groupContext(selection);
+          return send(res,200,pathname==='/api/scoped-applications'?store.scopedApplications(context):store.groupGovernanceView(context));
+        }
+        const body=await readBody(req);
+        const checked=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,checked.actor);
+        return send(res,200,store.groupGovernanceChange(groupContext(checked),body));
       }
       const mode=access?'local-isolated':'synthetic-demo';
       const workflowParts=pathname.startsWith('/api/workflows/')?pathname.slice(15).split('/'):null;
@@ -272,6 +311,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         if(req.method==='GET'&&report)return send(res,200,store.getAuditReport(report[1]),undefined,
           {'Content-Disposition':'attachment; filename="synthetic-audit-'+report[1]+'.json"'});
       }
+      if(req.method==='GET'&&pathname==='/api/assessment-config')return send(res,200,store.getAssessmentConfiguration());
       if(req.method==='GET'&&pathname==='/api/maturity-planning')return send(res,200,store.getMaturityPlanning());
       const maturityReport=pathname.match(/^\/api\/maturity-planning\/plans\/([a-f0-9-]{36})\/versions\/([1-9][0-9]*)\/report$/);
       if(req.method==='GET'&&maturityReport)return send(res,200,store.getMaturityReport(maturityReport[1],Number(maturityReport[2])),undefined,
@@ -308,9 +348,11 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         return send(res,200,{schemaVersion:1,mode,exportedAt:new Date().toISOString(),audit},undefined,{'Content-Disposition':'attachment; filename="privacy-workbench-audit.json"'});
       }
       if (req.method==='POST'&&pathname.startsWith('/api/')) {
-        const body=await readBody(req);
+        const isAttachmentUpload=attachmentUploadPath.test(pathname);
+        const body=await readBody(req,isAttachmentUpload?uploadRequestBytes:undefined);
         // The session may have expired, been switched, or logged out while the body was arriving.
-        access?.context(req,expected);
+        const current=access?.context(req,expected);
+        if(isAttachmentUpload&&current&&current.actor!==actor)return send(res,403,{error:'The upload role changed.'});
         if (workflowParts) {
           if(access&&workflowParts[0]==='definitions'&&Array.isArray(body?.definition?.transitions)&&
             body.definition.transitions.some(t=>Array.isArray(t?.roles)&&t.roles.includes('publisher')))
@@ -354,7 +396,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       return send(res,404,{error:'Not found.'});
     } catch (error) {
       if((!error.status&&error.code!=='ENOENT')||error.status>=500)operations.requestError();
-      if (!res.headersSent) send(res,error.status||(error.code==='ENOENT'?404:500),{error:error.status?error.message:error.code==='ENOENT'?'Not found.':'Server error.',...(error.status&&error.code?{code:error.code}:{})});
+      if (!res.headersSent) send(res,error.status||(error.code==='ENOENT'?404:500),{error:error.status?error.message:error.code==='ENOENT'?'Not found.':'Server error.',...(error.status&&error.code?{code:error.code}:{})},undefined,error.closeConnection?{'Connection':'close'}:undefined);
     }
   });
   if(database)server.once('close',()=>database.close());

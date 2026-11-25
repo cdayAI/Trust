@@ -12,7 +12,7 @@ const denied=(status,message)=>{throw Object.assign(new Error(message),{status})
 const cookie=(token='',age=0)=>cookieName+'='+token+'; Path=/; Max-Age='+age+'; HttpOnly; SameSite=Strict';
 
 function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdentityAdmin=false,now=Date.now},
-  readIdentityRecord=()=>({revision:0,disabled:false})){
+  readIdentityRecord=()=>({revision:0,disabled:false}),groupWorkspace=()=>false){
   if(typeof root!=='string'||!root||!Number.isSafeInteger(sessionSeconds)||sessionSeconds<1||sessionSeconds>3600||
     typeof now!=='function'||typeof readIdentityRecord!=='function'||typeof enableIdentityAdmin!=='boolean'||!Array.isArray(workspaces)||!workspaces.length||!Array.isArray(accounts)||!accounts.length)
     throw new Error('Invalid isolated workspace configuration.');
@@ -68,11 +68,12 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
     const current=lookup(req);
     if(!current)denied(401,'Sign in to a local workspace.');
     if(expected.length!==1||expected[0]!==current.workspace)denied(403,'This request does not match the active workspace.');
-    return {space:spaces.get(current.workspace),actor:current.account.grants.get(current.workspace),account:current.account.id};
+    return {space:spaces.get(current.workspace),actor:current.account.grants.get(current.workspace),
+      account:current.account.id,generation:current.generation};
   }
   const describe=session=>({mode:'local-isolated',authenticated:!!session,...(session?{
     account:session.account.id,actor:session.account.grants.get(session.workspace),workspace:session.workspace,
-    capabilities:capabilities(session.account.grants.get(session.workspace)),
+    capabilities:capabilities(session.account.grants.get(session.workspace),{groupGovernance:groupWorkspace(session.workspace)}),
     workspaces:[...session.account.grants].filter(([id])=>!membership(id,session.account.id).disabled).map(([id])=>({id,label:spaces.get(id).label}))
   }:{})});
   function issue(account,workspace,previous){
@@ -109,7 +110,8 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
     logout(req){sessions.delete(tokenOf(req));return {value:describe(null),cookie:cookie()}},
     identityRoster(id){
       return [...users.values()].filter(u=>u.grants.has(id)).map(u=>({
-        id:u.id,role:u.grants.get(id),configuredDisabled:u.disabled,validUntil:u.validUntil
+        id:u.id,role:u.grants.get(id),configuredDisabled:u.disabled,validUntil:u.validUntil,
+        provisioning:digest(JSON.stringify([u.hash.toString('hex'),u.validUntil])).toString('hex')
       }));
     },
     identityTime:now,

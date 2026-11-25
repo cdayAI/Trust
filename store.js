@@ -3,9 +3,11 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {randomUUID} = require('node:crypto');
 const {hasLegacySnapshot}=require('./durable-storage');
+const operatorJobs = require('./operator-jobs');
 const modules = require('./modules');
 const assessmentFlow = require('./assessment-workflow');
 const forms = require('./assessment-questionnaire');
+const assessmentConfig=require('./assessment-config');
 const rights = require('./rights-workflow');
 const incidents = require('./incident-workflow');
 const dataMap = require('./data-map');
@@ -23,10 +25,12 @@ const maturityPlanning = require('./maturity-planning');
 const vendorMonitoring = require('./vendor-monitoring');
 const documents = require('./governance-documents');
 const programs=new Map([
+  ['assessment-config',assessmentConfig],
   ['dictionary',dictionary],['trust-center',trustCenter],['rights',rights],['incidents',incidents],['data-map',dataMap],
   ['privacy-notices',preferences],['retention',retention],['risk-controls',riskControls],['audit-management',auditManagement],['maturity-planning',maturityPlanning],['vendor-monitoring',vendorMonitoring],['governance-documents',documents]
 ]);
 const identityAdmin=require('./identity-admin');
+const groupGovernance=require('./group-governance');
 const actors = [
   {id:'analyst',name:'Alex Morgan',role:'analyst'},
   {id:'reviewer',name:'Jordan Lee',role:'reviewer'},
@@ -69,7 +73,7 @@ function createVendor(state, actor, body, byId=id()) {
 function createVendorAssessments(state,row,cycleId){
   const created=[];
   for (const type of row.usesAI?['privacy','ai']:['privacy']) {
-    const a={id:id(),vendorId:row.id,projectId:row.projectId,type,status:'draft',answers:{summary:'',safeguards:''},submittedBy:null,decisionBy:null,decisionReason:null,revision:0,...forms.assignment(type,row)};
+    const a={id:id(),vendorId:row.id,projectId:row.projectId,type,status:'draft',answers:{summary:'',safeguards:''},submittedBy:null,decisionBy:null,decisionReason:null,revision:0,...(assessmentConfig.assignment(state,type,row)??forms.assignment(type,row))};
     if(cycleId)a.monitoringCycleId=cycleId;
     const workflowEvent=assessmentFlow.start(state,a);
     state.assessments.push(a);created.push(a.id);
@@ -205,7 +209,11 @@ function openStore(file,{empty=false,storage}={}) {
       migrated.privacyNotices={revision:legacy.revision,notices:legacy.notices.map(({purposes,...notice})=>notice)};
       persist(migrated);state=migrated;
     }
-    for(const a of state.assessments) {forms.verify(a);assessmentFlow.instanceFor(state,a);}
+    assessmentConfig.verifyBook(state);
+    for(const a of state.assessments){
+      if(a.routing?.id?.startsWith('configured-'))assessmentConfig.verifyPinned(state,a);else forms.verify(a);
+      assessmentFlow.instanceFor(state,a);
+    }
     if(!state.actors.some(a=>a.id===rights.backupActor.id)){
       const migrated=structuredClone(state);
       migrated.actors.push(rights.backupActor);
@@ -228,12 +236,39 @@ function openStore(file,{empty=false,storage}={}) {
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,ethicsCases,maturityPlanning:privatePlanning,...safe}=state;
+    const {requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,ethicsCases,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,...safe}=state;
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
+    delete safe.operatorJobs;
     safe.audit=safe.audit.filter(e=>!excludedAudit(e));
     return documents.stateView(safe);
   };
+  function requireCurrentOperatorSession(caller) {
+    const membership = identityAdmin.record(state, caller.account);
+    if (membership.disabled || membership.revision !== caller.generation) fail(401, 'Sign in to a local workspace.');
+  }
   const operations={
+    groupGovernanceView:context=>groupGovernance.operatorView(state,context),
+    scopedApplications:context=>groupGovernance.list(state,context),
+    groupGovernanceChange(context,body){
+      const next=structuredClone(state);
+      const result=groupGovernance.change(next,context,body,event);
+      persist(next);
+      state=next;
+      return result;
+    },
+    readOperatorJobs(caller, jobId) {
+      requireCurrentOperatorSession(caller);
+      return operatorJobs.read(state, caller, jobId);
+    },
+    changeOperatorJob(caller, operation, jobId, body) {
+      if (!storage) throw new Error('Operator jobs require transactional storage.');
+      // Check revocation again on the snapshot locked for this write.
+      requireCurrentOperatorSession(caller);
+      const next = structuredClone(state);
+      const outcome = operatorJobs.change(next, caller, operation, jobId, body, event);
+      if (outcome.changed) { persist(next); state = next; }
+      return outcome;
+    },
     identityMembership:id=>identityAdmin.record(state,id),
     identityAdminView:(seats,at)=>identityAdmin.view(state,seats,at),
     identityAdminChange(seats,at,admin,body){
@@ -304,6 +339,7 @@ function openStore(file,{empty=false,storage}={}) {
     getRetention:()=>retention.view(state),
     getRiskControls:()=>riskControls.view(state),
     getAuditManagement:()=>auditManagement.view(state),
+    getAssessmentConfiguration:()=>assessmentConfig.view(state),
     getAuditReport:id=>auditManagement.report(state,id),
     getMaturityPlanning:()=>maturityPlanning.view(state),
     getMaturityReport:(id,version)=>maturityPlanning.report(state,id,version),
@@ -352,7 +388,7 @@ function openStore(file,{empty=false,storage}={}) {
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       state=storage.read(workbench)??fresh();

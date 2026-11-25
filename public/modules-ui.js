@@ -105,7 +105,7 @@ function renderModules(){
   mview.replaceChildren(add(el('div',undefined,'module-grid'),add(el('aside'),add(el('section'),heading('Program modules'),nav)),content));
 }
 function switchView(view,{keepMyWorkLink=false}={}){
-  if(view==='ethics'&&!localSession)return;
+  if(['ethics','group-governance','scoped-applications'].includes(view)&&!localSession)return;
   if(localSession&&!localSession.capabilities.views.includes(view))return;
   if(!keepMyWorkLink)clearMyWorkLocation();
   $('#audit-export').hidden=view==='my-work'||!!localSession&&!localSession.capabilities.workspaceAudit;
@@ -124,9 +124,12 @@ function switchView(view,{keepMyWorkLink=false}={}){
   overview.hidden=view!=='assessments';mview.hidden=!moduleActive;$('#report-view').hidden=!reportActive;$('#rights-view').hidden=view!=='rights';$('#incident-view').hidden=view!=='incidents';$('#data-map-view').hidden=view!=='data-map';$('#dictionary-view').hidden=view!=='dictionary';$('#preferences-view').hidden=view!=='preferences';$('#retention-view').hidden=view!=='retention';$('#risk-controls-view').hidden=view!=='risk-controls';$('#audit-management-view').hidden=view!=='audit-management';$('#maturity-planning-view').hidden=view!=='maturity-planning';$('#vendor-monitoring-view').hidden=view!=='vendor-monitoring';$('#queue-view').hidden=view!=='queue';$('#governance-docs-view').hidden=view!=='governance-docs';$('#trust-center-view').hidden=view!=='trust-center';$('#employee-attestations-view').hidden=view!=='employee-attestations';$('#workflow-studio-view').hidden=view!=='workflow-studio';
   $('#ethics-view').hidden=view!=='ethics';
   $('#my-work-view').hidden=view!=='my-work';
+  $('#assessment-config-view').hidden=view!=='assessment-config';
   $('#training-view').hidden=view!=='training';
   $('#identity-admin-view').hidden=view!=='identity-admin';
-  for(const name of ['identity-admin','ethics','assessments','rights','incidents','data-map','dictionary','preferences','retention','risk-controls','audit-management','maturity-planning','vendor-monitoring','queue','my-work','governance-docs','trust-center','employee-attestations','training','workflow-studio','modules','report']){
+  $('#group-governance-view').hidden=view!=='group-governance';
+  $('#scoped-applications-view').hidden=view!=='scoped-applications';
+  for(const name of ['group-governance','scoped-applications','identity-admin','ethics','assessments','assessment-config','rights','incidents','data-map','dictionary','preferences','retention','risk-controls','audit-management','maturity-planning','vendor-monitoring','queue','my-work','governance-docs','trust-center','employee-attestations','training','workflow-studio','modules','report']){
     const b=$('#show-'+name),on=view===name;
     b.setAttribute('aria-current',String(on));b.classList.toggle('secondary',!on);
   }
@@ -172,6 +175,10 @@ function switchView(view,{keepMyWorkLink=false}={}){
     $('#ethics-view').replaceChildren(el('p','Loading synthetic cases…'));refreshEthics();
   }else if(view==='identity-admin'){
     $('#identity-admin-view').replaceChildren(el('p','Loading workspace accounts…'));refreshIdentityAdmin();
+  }else if(view==='assessment-config'){
+    $('#assessment-config-view').replaceChildren(el('p','Loading assessment configuration…'));refreshAssessmentConfig();
+  }else if(view==='group-governance'||view==='scoped-applications'){
+    refreshScopeView(view);
   }else if(view==='workflow-studio'){
     $('#workflow-studio-view').replaceChildren(el('p','Loading workflow studio…'));refreshStudio();
   }else if(state)render();
