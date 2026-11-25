@@ -86,10 +86,14 @@ function render(data){
   target.append(card);
 }
 access.onsubmit=e=>{e.preventDefault();run('list',{},access.elements.code.value);};
-clearAccess.onclick=()=>{
+function resetAccess(){
   const retired=activeRequest;
   activeRequest=undefined;
   retired?.abort();
-  code='';access.reset();access.hidden=false;clearAccess.hidden=true;target.replaceChildren();notice('Learner access cleared.');
+  code='';access.reset();access.hidden=false;clearAccess.hidden=true;target.replaceChildren();notice('');
+}
+clearAccess.onclick=()=>{
+  resetAccess();notice('Learner access cleared.');
   access.elements.code.focus();
 };
+window.addEventListener('pagehide',resetAccess);

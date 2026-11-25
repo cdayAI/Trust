@@ -10,7 +10,7 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { Worker } = require('node:worker_threads');
 const { createServer } = require('../server');
-const { openSqlite } = require('../durable-storage');
+const { openSqlite, backupDatabase, verifyBackup, migrateDemo } = require('../durable-storage');
 const { codeHash } = require('../workspace-access');
 const { openStore } = require('../store');
 const { openWorkflowHttp } = require('../workflow-http');
@@ -274,6 +274,40 @@ test('a register export takes its model and audit from the same SQLite read', as
     assert.equal(second.graph.revision,2);
     assert.deepEqual(second.audit.map(event=>event.entityId),second.graph.nodes.map(node=>node.id));
   }finally{writer.close();db.close();}
+});
+
+test('saved JSON and backup replay reject malformed UTF-8 that would decode to the original text', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'trust-storage-invalid-utf8-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const legacy=join(dir,'state.json'),sqlite=join(dir,'state.sqlite'),backup=join(dir,'backup.json');
+  const originalName='Fictional test \ufffd';
+  const workflowFile=legacy+'.workflows',workflow=openWorkflowHttp(workflowFile);
+  assert.equal(workflow.post(['definitions'],'publisher',{definition,expectedVersion:0}).status,200);
+  const started=workflow.post(['instances'],'analyst',{definitionId:definition.id,version:1,title:originalName});
+  assert.equal(started.status,200);
+  const store=openStore(legacy);
+  store.change(['projects'],'analyst',{name:originalName});
+  assert.equal(openStore(legacy).getState().projects.at(-1).name,originalName);
+  migrateDemo(legacy,sqlite);
+  backupDatabase(sqlite,backup);
+  assert.equal(verifyBackup(backup).documents[0].payload.projects.at(-1).name,originalName);
+
+  async function corruptEncoding(file){
+    const text=await readFile(file);
+    const marker=Buffer.from('\ufffd');
+    const at=text.indexOf(marker);
+    assert.ok(at>=0);
+    await writeFile(file,Buffer.concat([text.subarray(0,at),Buffer.from([0xff]),text.subarray(at+marker.length)]));
+  }
+  await corruptEncoding(legacy);
+  await corruptEncoding(backup);
+  await corruptEncoding(workflowFile);
+  assert.throws(()=>openStore(legacy),/UTF-8/i);
+  assert.throws(()=>verifyBackup(backup),/UTF-8/i);
+  assert.throws(()=>openWorkflowHttp(workflowFile).get(['audit']),/UTF-8/i);
+  const refused=join(dir,'invalid.sqlite');
+  assert.throws(()=>migrateDemo(legacy,refused),/UTF-8/i);
+  await assert.rejects(access(refused),{code:'ENOENT'});
 });
 
 test('explicit JSON migration preserves both snapshots and original bytes; isolated restores preserve tenant boundaries', async t => {

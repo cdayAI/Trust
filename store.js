@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {createHash,randomUUID} = require('node:crypto');
-const {hasLegacySnapshot}=require('./durable-storage');
+const {hasLegacySnapshot,parseJsonBytes}=require('./durable-storage');
 const operatorJobs = require('./operator-jobs');
 const modules = require('./modules');
 const reportRuns=require('./reporting-runs');
@@ -266,7 +266,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     });
   }else{
     let stored;
-    try{stored=JSON.parse(fs.readFileSync(file,'utf8'))}
+    try{stored=parseJsonBytes(fs.readFileSync(file))}
     catch(error){if(error.code!=='ENOENT')throw error;}
     initialize(stored);
   }

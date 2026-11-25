@@ -8,6 +8,7 @@ const {tmpdir} = require('node:os');
 const {dirname, join} = require('node:path');
 const {test} = require('node:test');
 const {createOperations} = require('../operational-health');
+const {openSqlite} = require('../durable-storage');
 
 async function scratch(t) {
   const dir = await mkdtemp(join(tmpdir(), 'trust-operations-test-'));
@@ -110,6 +111,31 @@ test('demo launcher reports storage loss and recovery while staying live', {time
     'listener_started', 'readiness_passed', 'readiness_failed', 'readiness_passed', 'request_failed', 'listener_stopped'
   ]);
   assert.deepEqual(workbench.events()[2].checks, storageUnavailable.checks);
+});
+
+test('SQLite readiness detects a missing or replaced database file', {
+  timeout: 10000,
+  skip: process.platform === 'win32' && 'Moving an open SQLite file requires Unix file semantics.',
+}, async t => {
+  const dir = await scratch(t);
+  const file = join(dir, 'state.sqlite');
+  const original = join(dir, 'original.sqlite');
+  const workbench = launch(t, 'server.js', dir, {TRUST_SQLITE_FILE: file});
+  const url = await workbench.started;
+  await assertHealth(url + '/health/ready', 200, ready);
+
+  await rename(file, original);
+  await assertHealth(url + '/health/live', 200, live);
+  await assertHealth(url + '/health/ready', 503, storageUnavailable);
+  const replacement = openSqlite(file);
+  try { replacement.requireMode('demo'); }
+  finally { replacement.close(); }
+  await assertHealth(url + '/health/ready', 503, storageUnavailable);
+
+  await rename(file, join(dir, 'replacement.sqlite'));
+  await rename(original, file);
+  await assertHealth(url + '/health/ready', 200, ready);
+  assert.deepEqual(await workbench.stop(), [0, null]);
 });
 
 test('isolated launcher probes each provisioned workspace before sign-in', {timeout: 10000}, async t => {

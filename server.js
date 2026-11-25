@@ -6,13 +6,12 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const {openStore} = require('./store');
 const {openWorkflowHttp} = require('./workflow-http');
-const {openSqlite} = require('./durable-storage');
+const {openSqlite,parseJsonBytes} = require('./durable-storage');
 const {view:workQueue,createPager:queuePager}=require('./work-queue');
 const {route:assessmentIncidentRoute}=require('./assessment-incident');
 const {dashboard:workspaceHome}=require('./workspace-home');
 const rightsViewHeader='X-MVW-Rights-View-Version';
 const wantsMinimal=prefer=>typeof prefer==='string'&&/^\s*return\s*=\s*(?:"minimal"|minimal)\s*$/iu.test(prefer);
-const jsonDecoder=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
 
 const {model:myWork,taskToken:myWorkToken}=require('./my-work');
 const myWorkRoute=new RegExp('^/api/my-work(?:/tasks/('+myWorkToken+'))?$');
@@ -106,7 +105,7 @@ async function readBoundedBytes(req,limit) {
 }
 async function readBody(req,limit=32768) {
   const bytes=await readBoundedBytes(req,limit);
-  try { return bytes.length?JSON.parse(jsonDecoder.decode(bytes)):{}; }
+  try { return bytes.length?parseJsonBytes(bytes):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false,reportWorkerWorkspace}={}) {

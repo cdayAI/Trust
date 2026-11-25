@@ -2,7 +2,7 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const {randomUUID}=require('node:crypto');
-const {hasLegacySnapshot}=require('./durable-storage');
+const {hasLegacySnapshot,parseJsonBytes}=require('./durable-storage');
 const {createWorkflowEngine,syntheticDefinition}=require('./workflow-engine');
 const actorFor={
   analyst:{id:'analyst',role:'initiator'},
@@ -43,7 +43,7 @@ function openWorkflowHttp(file,{storage}={}){
         if(state===undefined&&hasLegacySnapshot(file))throw Error('Legacy workflow state exists; migrate it explicitly before enabling SQLite.');
         return state;
       }
-      try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch(error){if(error.code!=='ENOENT')throw error}
+      try{return parseJsonBytes(fs.readFileSync(file))}catch(error){if(error.code!=='ENOENT')throw error}
     },
     save(snapshot){
       if(active)return active.save(snapshot);

@@ -20,6 +20,8 @@ const modeFor = scope => scope === 'demo' ? 'demo' : 'isolated';
 const basic = data => data && typeof data === 'object' && !Array.isArray(data);
 const positive = value => Number.isSafeInteger(value) && value > 0;
 const hash = text => createHash('sha256').update(text, 'utf8').digest('hex');
+const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+const parseJsonBytes = bytes => JSON.parse(utf8.decode(bytes));
 
 function validateScope(scope) {
   if (scope !== 'demo' && (typeof scope !== 'string' || !scopePattern.test(scope))) {
@@ -39,16 +41,16 @@ function validatePayload(kind, payload) {
   return payload;
 }
 
-function readRegularFile(file) {
+function readRegularBytes(file) {
   const info = fs.lstatSync(file);
   if (!info.isFile() || info.nlink !== 1 || info.size > maxFileBytes) {
     throw new Error('Expected a single-link regular file no larger than 128 MiB.');
   }
-  return fs.readFileSync(file, 'utf8');
+  return fs.readFileSync(file);
 }
 
 function parseFile(file) {
-  return JSON.parse(readRegularFile(file));
+  return parseJsonBytes(readRegularBytes(file));
 }
 
 function preparePath(file) {
@@ -63,15 +65,15 @@ function hasLegacySnapshot(file) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 
-function existing(file) {
+function sqliteFileInfo(file) {
   try {
-    const stat = fs.lstatSync(file);
-    if (!stat.isFile() || stat.nlink !== 1 || (process.platform !== 'win32' && (stat.mode & 0o077))) {
+    const stat = fs.lstatSync(file, { bigint: true });
+    if (!stat.isFile() || stat.nlink !== 1n || (process.platform !== 'win32' && (stat.mode & 0o077n))) {
       throw new Error('SQLite storage must be a single-link regular file with owner-only permissions (0600).');
     }
-    return true;
+    return stat;
   } catch (error) {
-    if (error.code === 'ENOENT') return false;
+    if (error.code === 'ENOENT') return null;
     throw error;
   }
 }
@@ -87,14 +89,17 @@ function rollbackBusy(error) {
 function openSqlite(file, { readOnly = false } = {}) {
   const filename = preparePath(file);
   const { DatabaseSync } = require('node:sqlite');
-  if (!existing(filename)) {
+  let original = sqliteFileInfo(filename);
+  if (!original) {
     if (readOnly) throw new Error('SQLite storage does not exist.');
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     try {
       fs.closeSync(fs.openSync(filename, 'wx', 0o600));
     } catch (error) {
-      if (error.code !== 'EEXIST' || !existing(filename)) throw error;
+      if (error.code !== 'EEXIST') throw error;
     }
+    original = sqliteFileInfo(filename);
+    if (!original) throw new Error('SQLite storage path disappeared during initialization.');
   }
   const db = new DatabaseSync(filename, { readOnly });
   const inTransaction = (start, callback) => {
@@ -117,7 +122,7 @@ function openSqlite(file, { readOnly = false } = {}) {
   try {
     db.exec('PRAGMA busy_timeout = 5000; PRAGMA trusted_schema = OFF;');
     if (!readOnly) db.exec('PRAGMA synchronous = FULL;');
-    if (!readOnly && fs.statSync(filename).size === 0) {
+    if (!readOnly && original.size === 0n) {
       // Another opener may finish initialization while this handle waits.
       // An interrupted first launch can also leave the empty owner-only file.
       inTransaction('BEGIN IMMEDIATE', () => {
@@ -160,7 +165,14 @@ function openSqlite(file, { readOnly = false } = {}) {
       ON CONFLICT (scope, kind) DO UPDATE SET generation = generation + 1, payload = excluded.payload
     `);
     return {
-      checkMode:verifyMode,
+      checkMode(mode) {
+        // A live handle can still read an unlinked or renamed database.
+        const current = sqliteFileInfo(filename);
+        if (!current || current.dev !== original.dev || current.ino !== original.ino) {
+          throw new Error('SQLite storage path changed while the database was open.');
+        }
+        verifyMode(mode);
+      },
       requireMode(mode) {
         if (!modes.has(mode) || readOnly) throw new Error('Invalid writable workbench mode.');
         return inTransaction('BEGIN IMMEDIATE', () => {
@@ -372,4 +384,4 @@ function migrateIsolated(root, dbFile) {
   return restoreDocuments('isolated',documents, dbFile);
 }
 
-module.exports = { openSqlite, backupDatabase, verifyBackup, restoreDatabase, migrateDemo, migrateIsolated, hasLegacySnapshot, publishNew, restoreDocuments, captureBackup, verifyBackupContent, maxFileBytes };
+module.exports = { openSqlite, backupDatabase, verifyBackup, restoreDatabase, migrateDemo, migrateIsolated, hasLegacySnapshot, publishNew, restoreDocuments, captureBackup, verifyBackupContent, maxFileBytes, parseJsonBytes };

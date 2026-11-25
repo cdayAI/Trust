@@ -1,10 +1,10 @@
 'use strict';
 const form=document.querySelector('#employee-code'),list=document.querySelector('#employee-list'),clear=document.querySelector('#employee-clear'),message=document.querySelector('#employee-message');
 const codeSubmit=form.querySelector('button');
-let localCode,operationId=0;
+let localCode,pending;
 function n(tag,text){const element=document.createElement(tag);if(text!==undefined)element.textContent=text;return element}
 function clearPage(){
-  operationId++;localCode=undefined;form.reset();codeSubmit.disabled=false;list.replaceChildren();clear.hidden=true;message.textContent='';
+  pending=undefined;localCode=undefined;form.reset();codeSubmit.disabled=false;list.replaceChildren();clear.hidden=true;message.textContent='';
 }
 async function send(action,fields){
   const r=await fetch('/api/employee/'+action,{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},
@@ -13,16 +13,25 @@ async function send(action,fields){
   if(!r.ok)throw Object.assign(Error(data.error||'Request failed.'),{status:r.status});
   return data;
 }
-async function run(action,fields,trigger){
-  const current=operationId;
-  trigger.disabled=true;message.textContent='';
-  try{const data=await send(action,fields);if(current===operationId)render(data)}
+async function run(action,fields){
+  if(pending)return;
+  const current={};
+  pending=current;
+  const submitters=[codeSubmit,...list.querySelectorAll('button')];
+  for(const submitter of submitters)submitter.disabled=true;
+  message.textContent='';
+  try{const data=await send(action,fields);if(pending===current)render(data)}
   catch(error){
-    if(current===operationId){
+    if(pending===current){
       if(error.status===401||error.status===429)clearPage();
       message.textContent=error.message;
     }
-  }finally{if(current===operationId)trigger.disabled=false}
+  }finally{
+    if(pending===current){
+      pending=undefined;
+      for(const submitter of submitters)submitter.disabled=false;
+    }
+  }
 }
 function render(data){
   const sections=[];
@@ -36,7 +45,7 @@ function render(data){
       check.type='checkbox';check.required=true;label.prepend(check);f.append(label,submit);section.append(f);
       f.onsubmit=event=>{
         event.preventDefault();if(submit.disabled||!check.checked)return;
-        run('attest',{assignment:row.assignment,edition:row.edition,hash:row.hash,confirm:true},submit);
+        run('attest',{assignment:row.assignment,edition:row.edition,hash:row.hash,confirm:true});
       };
     }
     sections.push(section);
@@ -46,8 +55,8 @@ function render(data){
 form.onsubmit=event=>{
   event.preventDefault();
   if(codeSubmit.disabled)return;
-  operationId++;localCode=form.elements.code.value;form.reset();list.replaceChildren();clear.hidden=false;
-  run('assignments',{},codeSubmit);
+  localCode=form.elements.code.value;form.reset();list.replaceChildren();clear.hidden=false;
+  run('assignments',{});
 };
 clear.onclick=()=>{clearPage();form.elements.code.focus()};
 window.addEventListener('pagehide',clearPage);

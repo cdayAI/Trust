@@ -3,9 +3,10 @@
 const { readFileSync } = require('node:fs');
 const { createServer } = require('./server');
 const { launchLocalServer } = require('./operational-health');
+const { parseJsonBytes } = require('./durable-storage');
 
 launchLocalServer(() => {
-  const config = JSON.parse(readFileSync(process.env.TRUST_OIDC_CONFIG, 'utf8'));
+  const config = parseJsonBytes(readFileSync(process.env.TRUST_OIDC_CONFIG));
   const { origin, issuer, clientId, loopbackFixture, root, workspaces, accounts, attachmentReviewWorkspaces } = config;
   const { protocol, port } = new URL(origin);
   if (Number(process.env.PORT ?? 4173) !== Number(port || (protocol === 'https:' ? 443 : 80))) {
