@@ -706,6 +706,59 @@ test('browser: all allowed formats multi-select with the real chooser and downlo
   assert.deepEqual(pageErrors,[]);assert.deepEqual(external,[]);
 });
 
+test('Chromium: a rapid series of attachment saves reaches the browser each time',{
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright installed',timeout:25_000
+},async t=>{
+  const {chromium}=require('playwright'),f=await fixture(t),author=await f.login(roles[0]);
+  const {data:draft}=await f.request(collection+'/records?workspace='+primary,200,{cookie:author,body:{...doc,expectedRevision:0}});
+  const record=draft.documents[0],version=record.revisions[0],path=collection+'/records/'+record.id+'/revisions/'+version.id+'/attachments';
+  const bytes=formatSamples.get('fictional.txt');
+  const {data:uploaded}=await f.request(path+'/batch?workspace='+primary,200,{cookie:author,body:{
+    expectedRevision:draft.revision,files:[formatPayload('fictional.txt',bytes)]
+  }});
+  const attachment=uploaded.documents[0].revisions[0].attachments[0];
+  const target=f.url+'/api/'+path+'/'+attachment.id+'/download?workspace='+primary;
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  t.after(()=>browser.close());
+  const page=await browser.newPage(),downloads=[];
+  let requests=0;
+  page.on('request',request=>{if(request.method()==='POST'&&request.url()===target)requests++;});
+  page.on('download',download=>downloads.push(download));
+  await page.context().addCookies([{url:f.url,name:author.split('=')[0],value:author.slice(author.indexOf('=')+1)}]);
+  await page.goto(f.url);
+  await page.getByRole('button',{name:'Policies and documents',exact:true}).click();
+  const save=page.getByRole('button',{name:'Download attachment fictional.txt',exact:true});
+  const attempts=18;
+  // Launch the next click as soon as the UI releases its busy state. Do not
+  // wait for a browser download event before issuing the next click, since
+  // doing so would hide the lost-save burst that this scenario is checking.
+  await save.evaluate(async (button,count)=>{
+    for(let i=0;i<count;i++){
+      await new Promise((resolve,reject)=>{
+        const timer=setTimeout(()=>{observer.disconnect();reject(new Error('Attachment remained busy'));},3000);
+        const observer=new MutationObserver(()=>{
+          if(!button.hasAttribute('aria-busy')){
+            clearTimeout(timer);observer.disconnect();resolve();
+          }
+        });
+        observer.observe(button,{attributes:true,attributeFilter:['aria-busy']});
+        button.click();
+      });
+    }
+  },attempts);
+  assert.equal(requests,attempts);
+  const deadline=Date.now()+2000;
+  while(downloads.length<attempts&&Date.now()<deadline)await new Promise(resolve=>setTimeout(resolve,20));
+  assert.equal(downloads.length,attempts,'every completed request must start a browser download');
+  for(const download of downloads){
+    assert.equal(download.suggestedFilename(),'fictional.txt');
+    assert.equal(await download.failure(),null);
+    const chunks=[];
+    for await(const chunk of await download.createReadStream())chunks.push(chunk);
+    assert.deepEqual(Buffer.concat(chunks),bytes);
+  }
+});
+
 test('Chromium: a slow attachment response does not drop a different download click', {
   skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright installed',timeout:30000
 },async t=>{

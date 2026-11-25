@@ -2,6 +2,7 @@
 const docsPane=$('#governance-docs-view'),docsPath='/api/governance-documents';
 let docsData,docsSeq=0;
 const activeAttachmentDownloads=new Map(),maxConcurrentAttachmentDownloads=2;
+const attachmentSaveStarts=[],attachmentSaveBurst=8,attachmentSaveWindowMs=1100;
 const docsHeaders=()=>({'Content-Type':'application/json','X-Demo-Actor':actor});
 async function refreshDocs(){
   const seq=++docsSeq;
@@ -64,6 +65,22 @@ function saveDocumentFile(blob,filename){
   link.href=url;link.download=filename;document.body.append(link);link.click();link.remove();
   setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
+async function saveAttachmentFile(blob,filename,current){
+  // Chromium can silently drop a burst of renderer-initiated downloads even
+  // after the server has returned the bytes. Leave room for other file saves.
+  while(current()){
+    const now=performance.now();
+    while(attachmentSaveStarts.length&&now-attachmentSaveStarts[0]>=attachmentSaveWindowMs)
+      attachmentSaveStarts.shift();
+    if(attachmentSaveStarts.length<attachmentSaveBurst){
+      attachmentSaveStarts.push(now);
+      saveDocumentFile(blob,filename);
+      return true;
+    }
+    await new Promise(resolve=>setTimeout(resolve,Math.ceil(attachmentSaveStarts[0]+attachmentSaveWindowMs-now)));
+  }
+  return false;
+}
 function downloadDocument(data){
   saveDocumentFile(new Blob([data.text],{type:'text/plain;charset=utf-8'}),data.filename);
 }
@@ -95,9 +112,8 @@ async function downloadAttachment(path,row,control){
     }
     if(response.headers.get('Content-Type')!=='application/octet-stream')throw new Error('Attachment response type is invalid.');
     const blob=await response.blob();
-    if(current()){
-      saveDocumentFile(blob,row.name);notice('Attachment download recorded.');
-    }
+    if(await saveAttachmentFile(blob,row.name,current)&&current())
+      notice('Attachment download recorded.');
   }catch(error){
     if(current())notice('Could not download '+row.name+'. '+error.message,true);
   }finally{
