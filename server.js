@@ -352,7 +352,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         configured:reviewerSeats.get(checked.space.id),roster:access.identityRoster(checked.space.id),at:access.identityTime()
       });
       const scopeContext=checked=>({
-        role:checked.actor,account:checked.account,generation:checked.generation,at:access.identityTime(),
+        role:checked.actor,account:checked.account,workspace:checked.space.id,generation:checked.generation,at:access.identityTime(),
         roster:access.identityRoster(checked.space.id),enabled:scopedDocuments.has(checked.space.id),
         rightsEnabled:scopedRights.has(checked.space.id),intakeEnabled:!!portal?.enabled(checked.space.id),
         ...(portal?.releaseEnabled(checked.space.id)&&!oidc?{activeReleaseBinding:id=>portal.activeBinding(id,checked.space.id)}:{})
@@ -541,6 +541,15 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       if(!access&&/^\/api\/rights\/cases\/[^/]+\/(?:request|approve|reject)-extension$/.test(pathname))
         return send(res,404,{error:'Not found.'});
+      const retrievalRoute=pathname.match(/^\/api\/rights\/cases\/([a-f0-9-]{36})\/retrieval(?:\/(retrieve|submit|return|approve))?$/);
+      if(retrievalRoute){
+        if(!selection||oidc||!portal?.releaseEnabled(selection.space.id)||searchParams.size)return send(res,404,{error:'Not found.'});
+        if(req.method==='GET'&&!retrievalRoute[2])return send(res,200,store.getRightsRetrieval(scopeContext(selection),retrievalRoute[1]));
+        if(req.method!=='POST'||!retrievalRoute[2])return send(res,404,{error:'Not found.'});
+        const body=await readBody(req),checked=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,checked.actor);
+        return send(res,200,store.changeRightsRetrieval(scopeContext(checked),retrievalRoute[1],retrievalRoute[2],body));
+      }
       const releaseRoute=pathname.match(/^\/api\/rights\/cases\/([a-f0-9-]{36})\/result\/(draft|submit|return|approve|release)$/);
       if(req.method==='POST'&&releaseRoute){
         if(!selection||oidc||!portal?.releaseEnabled(selection.space.id)||searchParams.size)return send(res,404,{error:'Not found.'});

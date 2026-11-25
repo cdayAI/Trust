@@ -13,6 +13,7 @@ const assessmentConfig=require('./assessment-config');
 const processingRegister=require('./processing-register');
 const rights = require('./rights-workflow');
 const requesterRelease=require('./requester-release');
+const rightsRetrieval=require('./rights-retrieval');
 const deadlines = require('./rights-deadline-policy');
 const requesterIntakeForm=require('./requester-intake-form');
 const incidents = require('./incident-workflow');
@@ -273,7 +274,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {fixtureMigrationReceipt,requesterReceipts,requesterReleases,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,directoryLifecycle:privateDirectory,groupGovernance:privateGroupGovernance,documentAccessScope,documentReviewerAssignments,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,reportScheduleBook:privateReportSchedules,discoveryRuns:privateDiscoveryRuns,auditRemediation:privateAuditRemediation,...safe}=state;
+    const {fixtureMigrationReceipt,requesterReceipts,requesterReleases,rightsRetrievals,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,directoryLifecycle:privateDirectory,groupGovernance:privateGroupGovernance,documentAccessScope,documentReviewerAssignments,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,reportScheduleBook:privateReportSchedules,discoveryRuns:privateDiscoveryRuns,auditRemediation:privateAuditRemediation,...safe}=state;
     if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,requesterIntake,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
@@ -414,6 +415,19 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       return requesterRelease.publicResult(state,grant).status==='available'?{...status,resultAvailable:true}:status;
     },
     portalResult:grant=>requesterRelease.publicResult(state,grant),
+    getRightsRetrieval(ctx,id){
+      requireCurrentOperatorSession(ctx);
+      return rightsRetrieval.inspect(state,id,ctx);
+    },
+    changeRightsRetrieval(ctx,id,action,body){
+      requireCurrentOperatorSession(ctx);
+      const next=structuredClone(state);
+      const outcome=rightsRetrieval.change(next,id,action,ctx,body,(snapshot,role,kind,project,entity,details)=>{
+        event(snapshot,role,kind,project,entity,details);snapshot.audit.at(-1).account=ctx.account;
+      });
+      persist(next);state=next;
+      return outcome;
+    },
     changeRequesterRelease(ctx,id,action,body){
       requireCurrentOperatorSession(ctx);
       const next=structuredClone(state);
@@ -660,7 +674,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['assignDocumentReviewer','directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRequesterIntakeForm','pinReportRun','createRightsIntake','changeReportSchedule','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['assignDocumentReviewer','directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRightsRetrieval','changeRequesterIntakeForm','pinReportRun','createRightsIntake','changeReportSchedule','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name==='getRightsIntake'){

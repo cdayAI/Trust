@@ -68,6 +68,9 @@ route('POST','(?:projects|vendors|assessments/'+key+'/(?:save|submit|approve|rej
 route('GET','rights/deadline-policy',operators);
 route('POST','rights/intake-form/(?:save|submit)',['analyst']);
 route('POST','rights/intake-form/(?:return|publish)',['reviewer']);
+route('GET','rights/cases/'+uuid+'/retrieval',operators);
+route('POST','rights/cases/'+uuid+'/retrieval/(?:retrieve|submit)',['analyst']);
+route('POST','rights/cases/'+uuid+'/retrieval/(?:return|approve)',['reviewer']);
 route('POST','rights/cases/'+uuid+'/result/(?:draft|submit)',['analyst']);
 route('POST','rights/cases/'+uuid+'/result/(?:return|approve|release)',['reviewer']);
 route('POST','rights/deadline-policy/(?:draft|submit)',['analyst']);
