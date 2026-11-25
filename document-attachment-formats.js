@@ -1,6 +1,7 @@
 'use strict';
 const {inflateRawSync,crc32}=require('node:zlib');
 const {posix}=require('node:path');
+const {odfTypes,checkOpenDocument}=require('./opendocument-attachment-profile');
 const KiB=1024, MiB=1024*KiB;
 const utf8=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
 const ascii=(buffer,start,end)=>buffer.toString('latin1',start,end);
@@ -221,9 +222,7 @@ const officeRules={
   '.xlsx':['xl/','xl/workbook.xml','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml','workbook',/spreadsheetml\/(?:20\d{2}\/)?main/u],
   '.pptx':['ppt/','ppt/presentation.xml','application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml','presentation',/presentationml\/(?:20\d{2}\/)?main/u]
 };
-function office(bytes,extension){
-  const [folder,main,mainMime,rootName,rootNamespace]=officeRules[extension];
-  const reject=()=>invalid('Office files require a bounded, macro-free DOCX, XLSX, or PPTX package without external links or embedded objects.');
+function boundedZip(bytes,reject,allowEntry){
   const finish=bytes.length-22;
   if(finish<30||bytes.readUInt32LE(finish)!==0x06054b50||!prefix(bytes,'PK\x03\x04')||
     bytes.readUInt32LE(finish+4)!==0||bytes.readUInt16LE(finish+20)!==0)reject();
@@ -255,14 +254,15 @@ function office(bytes,extension){
       size>ZIP_MAX_PART||(expanded+=size)>ZIP_MAX_EXPANDED||compressed>middle||loc+30>middle)reject();
     const name=ascii(bytes,nameAt,extraAt),directory=name.endsWith('/'),stem=directory?name.slice(0,-1):name;
     if(!/^[A-Za-z0-9 _.\[\]/-]+$/u.test(stem)||stem.split('/').some(p=>!p||p==='.'||p==='..'||p.endsWith('.')||p!==p.trim())||
-      forbiddenOffice.test(name)||folded.has(stem.toLowerCase())||/[\u0000-\u001f\u007f]/u.test(name)||
-      !(name==='[Content_Types].xml'||name==='_rels/.rels'||[folder,'docProps/','customXml/','_rels/'].some(p=>name.startsWith(p)))||
+      folded.has(stem.toLowerCase())||/[\u0000-\u001f\u007f]/u.test(name)||
       (directory?(size!==0||unixMode===0x8000):(!size||unixMode===0x4000)))reject();
     folded.add(stem.toLowerCase());
     if(bytes.readUInt32LE(loc)!==0x04034b50||bytes.readUInt16LE(loc+6)!==flags||bytes.readUInt16LE(loc+8)!==method||
       bytes.readUInt16LE(loc+26)!==nameBytes)reject();
-    const localName=loc+30,localExtra=localName+nameBytes,start=localExtra+bytes.readUInt16LE(loc+28),end=start+compressed;
-    if(end>middle||!extraOK(localExtra,start)||ascii(bytes,localName,localExtra)!==name)reject();
+    const localName=loc+30,localExtra=localName+nameBytes,localExtras=bytes.readUInt16LE(loc+28);
+    const start=localExtra+localExtras,end=start+compressed;
+    if(end>middle||!extraOK(localExtra,start)||ascii(bytes,localName,localExtra)!==name||
+      !allowEntry({name,directory,loc,method,flags,localExtras,centralExtras:extraBytes}))reject();
     for(const [off,val] of [[14,crc],[18,compressed],[22,size]]){
       const local=bytes.readUInt32LE(loc+off);
       if(local!==val&&(!((flags&8)&&local===0)))reject();
@@ -290,7 +290,15 @@ function office(bytes,extension){
   spans.sort((a,b)=>a[0]-b[0]);
   let covered=0;
   for(const [start,end] of spans){if(start!==covered)reject();covered=end;}
-  if(at!==finish||covered!==middle||!parts.has(main)||!parts.has('[Content_Types].xml')||!parts.has('_rels/.rels'))reject();
+  if(at!==finish||covered!==middle)reject();
+  return parts;
+}
+function office(bytes,extension){
+  const [folder,main,mainMime,rootName,rootNamespace]=officeRules[extension];
+  const reject=()=>invalid('Office files require a bounded, macro-free DOCX, XLSX, or PPTX package without external links or embedded objects.');
+  const parts=boundedZip(bytes,reject,({name})=>!forbiddenOffice.test(name)&&
+    (name==='[Content_Types].xml'||name==='_rels/.rels'||[folder,'docProps/','customXml/','_rels/'].some(p=>name.startsWith(p))));
+  if(!parts.has(main)||!parts.has('[Content_Types].xml')||!parts.has('_rels/.rels'))reject();
   const xmlParts=new Map();
   const raster={'.png':png,'.jpg':jpeg,'.jpeg':jpeg,'.gif':gif,'.webp':webp,'.bmp':bmp,'.tif':tiff,'.tiff':tiff};
   for(const [name,body] of parts){
@@ -419,6 +427,9 @@ for(const [extension,[,,,name]] of Object.entries(officeRules)){
   const kind={document:'Word',workbook:'Excel',presentation:'PowerPoint'}[name];
   const type={document:'wordprocessingml.document',workbook:'spreadsheetml.sheet',presentation:'presentationml.presentation'}[name];
   add([extension],'application/vnd.openxmlformats-officedocument.'+type,kind,bytes=>office(bytes,extension));
+}
+for(const [extension,{mediaType,label}] of Object.entries(odfTypes)){
+  add([extension],mediaType,label,bytes=>checkOpenDocument(bytes,extension,boundedZip,invalid),MiB);
 }
 add(['.png'],'image/png','PNG',png);
 add(['.jpg','.jpeg'],'image/jpeg','JPEG',jpeg);

@@ -79,6 +79,20 @@ restored contents before publishing the new file. It does not replace a
 running database or overwrite previous backups. The maximum accepted import
 or backup file size is 128 MiB.
 
+Governance evidence is checked before backup, verify, restore, and legacy
+JSON migration. The checker validates exact edition identities, text length
+and digest, supported typed links to existing records, attachment identity
+and byte budgets, recorded sizes and digests, and quarantine state. A valid
+draft may retain pending or rejected attachments; a reviewable or published
+edition may not. If any evidence check fails, the command leaves the source
+unchanged and does not publish a new file. Keep the original and diagnose the
+inconsistency rather than recalculating a checksum over broken evidence.
+
+These checks detect inconsistent data. They are not a signed backup, an
+authenticity proof against someone who can rewrite both bytes and metadata, a
+malware scan, or a replacement for a retention and hold policy. Backups can
+retain evidence that was later removed from a live draft.
+
 Checksums catch accidental corruption; they are not authentication or tamper
 protection. This format is plaintext, including when the database was running
 in isolated mode. Treat it accordingly. The operator still needs approved

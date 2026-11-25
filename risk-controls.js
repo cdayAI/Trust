@@ -46,7 +46,8 @@ const fields={
   links:{create:['riskId','controlId','likelihoodReduction','impactReduction','note'],unlink:['note'],verify:['note']},
   tests:{create:['controlId','outcome','evidenceReference','note'],accept:['note'],reject:['note']}
 };
-function change(state,parts,actor,body,event){
+function change(state,parts,actor,body,event,_startAssessments,account){
+  const identity=account??actor;
   const board=state.riskControls??=boardOf(state);
   const [,collection,id,rawAction]=parts, action=parts.length===2?'create':rawAction;
   if(!Object.hasOwn(fields,collection)||!Object.hasOwn(fields[collection],action)||
@@ -100,15 +101,15 @@ function change(state,parts,actor,body,event){
       if(typeof body.evidenceReference!=='string'||!/^SYN-[A-Z0-9]{3,24}$/.test(body.evidenceReference))
         error(422,'INVALID_EVIDENCE','Use a fictional evidence reference such as SYN-CHECK01.');
       row={id:randomUUID(),controlId:control.id,outcome:body.outcome,evidenceReference:body.evidenceReference,note:required(body.note,'Fictional test note'),
-        recordedBy:actor,recordedAt:now,reviewStatus:'pending',reviewedBy:null,reviewedAt:null,reviewNote:null};
+        recordedBy:actor,recordedByAccount:identity,recordedAt:now,reviewStatus:'pending',reviewedBy:null,reviewedAt:null,reviewNote:null};
       board.tests.push(row);details={...row};
     }else{
       row=find(board.tests,id,'Control test');
-      if(row.recordedBy===actor)error(403,'INDEPENDENT_REVIEW_REQUIRED','A separate reviewer must decide the result.');
+      if(row.recordedBy===actor||row.recordedByAccount===identity)error(403,'INDEPENDENT_REVIEW_REQUIRED','A separate reviewer must decide the result.');
       if(row.reviewStatus!=='pending')error(409,'TEST_IMMUTABLE','This test has already been reviewed.');
       if(board.tests.findLast(t=>t.controlId===row.controlId)?.id!==row.id)error(409,'SUPERSEDED_TEST','Review the current test; a newer test superseded this one.');
       const reviewNote=required(body.note,'Fictional review evidence note');
-      Object.assign(row,{reviewNote,reviewStatus:action==='accept'?'accepted':'rejected',reviewedBy:actor,reviewedAt:now});
+      Object.assign(row,{reviewNote,reviewStatus:action==='accept'?'accepted':'rejected',reviewedBy:actor,reviewedByAccount:identity,reviewedAt:now});
       details={...row};
     }
     board.revision++;

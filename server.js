@@ -8,6 +8,7 @@ const {openStore} = require('./store');
 const {openWorkflowHttp} = require('./workflow-http');
 const {openSqlite} = require('./durable-storage');
 const {view:workQueue}=require('./work-queue');
+const {route:assessmentIncidentRoute}=require('./assessment-incident');
 const {dashboard:workspaceHome}=require('./workspace-home');
 const {model:myWork,taskToken:myWorkToken}=require('./my-work');
 const myWorkRoute=new RegExp('^/api/my-work(?:/tasks/('+myWorkToken+'))?$');
@@ -47,6 +48,7 @@ const staticFiles = new Map([
   ['/work-queue-ui.js',['work-queue-ui.js','text/javascript; charset=utf-8']],
   ['/vendor-monitoring-ui.js',['vendor-monitoring-ui.js','text/javascript; charset=utf-8']],
   ['/ethics-ui.js',['ethics-ui.js','text/javascript; charset=utf-8']],
+  ['/audit-remediation-ui.js',['audit-remediation-ui.js','text/javascript; charset=utf-8']],
   ['/audit-management-ui.js',['audit-management-ui.js','text/javascript; charset=utf-8']],
   ['/risk-controls-ui.js',['risk-controls-ui.js','text/javascript; charset=utf-8']],
   ['/retention-ui.js',['retention-ui.js','text/javascript; charset=utf-8']],
@@ -250,7 +252,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         const body=await readBody(req);
         const grant=portal.allow(operation,body);
         const {store}=runtime(access.spaceForProvisionedGrant(grant.workspace));
-        const value=operation==='intake'?store.portalIntake(grant,body.kind):store.portalStatus(grant);
+        const value=operation==='intake'?store.portalIntake(grant,body):store.portalStatus(grant);
         return send(res,200,value);
       }
       if(pathname.startsWith('/api/employee/')){
@@ -321,7 +323,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       const scopeContext=checked=>({
         role:checked.actor,account:checked.account,generation:checked.generation,at:access.identityTime(),
         roster:access.identityRoster(checked.space.id),enabled:scopedDocuments.has(checked.space.id),
-        rightsEnabled:scopedRights.has(checked.space.id)
+        rightsEnabled:scopedRights.has(checked.space.id),intakeEnabled:!!portal?.enabled(checked.space.id)
       });
       if(pathname==='/api/document-access'){
         if(!scopedDocuments.has(selection?.space.id))return send(res,404,{error:'Not found.'});
@@ -420,6 +422,9 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if (req.method==='GET'&&pathname==='/api/vendor-monitoring') return send(res,200,store.getVendorMonitoring());
       if(pathname==='/api/audit-management'||pathname.startsWith('/api/audit-management/')){
         if(req.method==='GET'&&pathname==='/api/audit-management') return send(res,200,store.getAuditManagement());
+        const closure=pathname.match(/^\/api\/audit-management\/remediations\/([a-f0-9-]{36})\/report$/);
+        if(req.method==='GET'&&closure)return send(res,200,store.getRemediationReport(closure[1]),undefined,
+          {'Content-Disposition':'attachment; filename="synthetic-remediation-'+closure[1]+'.json"'});
         const report=pathname.match(/^\/api\/audit-management\/plans\/([a-f0-9-]{36})\/report$/);
         if(req.method==='GET'&&report)return send(res,200,store.getAuditReport(report[1]),undefined,
           {'Content-Disposition':'attachment; filename="synthetic-audit-'+report[1]+'.json"'});
@@ -452,6 +457,14 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       const lineagePath=pathname.match(/^\/api\/data-map\/nodes\/([0-9a-f-]{36})\/lineage$/);
       if (req.method==='GET'&&lineagePath) return send(res,200,store.getLineage(lineagePath[1]));
       if (req.method==='GET'&&pathname==='/api/incidents/cases') return send(res,200,store.getIncidents(actor,selection?.account));
+      if(pathname.startsWith('/api/rights/intake-form/')){
+        const op=pathname.slice('/api/rights/intake-form/'.length);
+        if(!portal?.enabled(selection?.space.id)||req.method!=='POST'||searchParams.size||
+          !['save','submit','return','publish'].includes(op))return send(res,404,{error:'Not found.'});
+        const body=await readBody(req),checked=access.context(req,expected);
+        policy.requirePermission(req.method,pathname,checked.actor);
+        return send(res,200,store.changeRequesterIntakeForm(scopeContext(checked),op,body));
+      }
       if(pathname==='/api/rights/deadline-policy'||pathname.startsWith('/api/rights/deadline-policy/')){
         if(!access||searchParams.size)return send(res,404,{error:'Not found.'});
         if(req.method==='GET'&&pathname==='/api/rights/deadline-policy')return send(res,200,store.getRightsDeadlinePolicy(selection.account));
@@ -497,6 +510,13 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
             return send(res,422,{error:'The isolated publisher does not participate in workflow execution.',code:'WORKFLOW_ROLE_UNAVAILABLE'});
           const r=workflow.post(workflowParts,actor,body,selection?.account);
           return send(res,r.status,r.value);
+        }
+        const assessmentLink=pathname.match(assessmentIncidentRoute);
+        if(assessmentLink){
+          if(!current)return send(res,404,{error:'Not found.'});
+          if(searchParams.size)return send(res,422,{error:'The assessment follow-up does not accept filters.'});
+          const result=store.openAssessmentIncident(assessmentLink[1],current,body);
+          return send(res,result.created?201:200,result);
         }
         if(pathname==='/api/data-map/discovery/preview')return send(res,200,store.previewDiscovery(actor,body,selection?.account));
         const parts=pathname.slice(5).split('/');

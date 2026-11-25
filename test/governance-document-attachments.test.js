@@ -251,7 +251,8 @@ const mediaTypes={
   bmp:'image/bmp',csv:'text/csv',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   gif:'image/gif',jpg:'image/jpeg',jpeg:'image/jpeg',json:'application/json',
   jsonl:'application/x-ndjson',ndjson:'application/x-ndjson',md:'text/markdown',markdown:'text/markdown',log:'text/plain',
-  pdf:'application/pdf',png:'image/png',
+  odt:'application/vnd.oasis.opendocument.text',ods:'application/vnd.oasis.opendocument.spreadsheet',
+  odp:'application/vnd.oasis.opendocument.presentation',pdf:'application/pdf',png:'image/png',
   pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',tif:'image/tiff',tiff:'image/tiff',
   tsv:'text/tab-separated-values',txt:'text/plain',webp:'image/webp',
   xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -314,7 +315,7 @@ test('everyday data and text formats reject non-documents, unsupported active co
   ])assert.throws(()=>save(filename,data),{code:'ATTACHMENT_CONTENT_INVALID'},filename);
   assert.throws(()=>save('fictional.json','{"pass":true}','application/pdf'),{code:'ATTACHMENT_TYPE_MISMATCH'});
   assert.throws(()=>save('fictional.json',formatSamples.get('fictional.pdf')),{code:'ATTACHMENT_CONTENT_INVALID'});
-  for(const name of ['fictional.rtf','fictional.odt','fictional.ods','fictional.odp','fictional.pages','fictional.numbers',
+  for(const name of ['fictional.rtf','fictional.odg','fictional.odf','fictional.odb','fictional.fodt','fictional.pages','fictional.numbers',
     'fictional.key','fictional.eml','fictional.xml','fictional.html','fictional.svg','fictional.json.js']){
     assert.throws(()=>save(name,'{"fictional":true}'),{code:'ATTACHMENT_TYPE_UNSUPPORTED'},name);
   }
@@ -324,7 +325,7 @@ function zip(rows,options={}){
   const local=[],central=[];
   let offset=0,centralSize=0;
   for(const [name,data] of rows){
-    const entry=Buffer.from(name),payload=Buffer.from(data),method=options.stored?0:8;
+    const entry=Buffer.from(name),payload=Buffer.from(data),method=options.stored||(options.storeMime&&name==='mimetype')?0:8;
     const compressed=method?deflateRawSync(payload):payload,length=options.claim?.[name]??payload.length,crc=crc32(payload);
     const desc=options.descriptor?Buffer.alloc(16):Buffer.alloc(0);
     if(desc.length){desc.writeUInt32LE(0x08074b50);desc.writeUInt32LE(crc,4);desc.writeUInt32LE(compressed.length,8);desc.writeUInt32LE(length,12);}
@@ -369,6 +370,67 @@ const relDoc=rows=>'<Relationships xmlns="http://schemas.openxmlformats.org/pack
 const wordDocument='<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p/></w:body></w:document>';
 const wordRows=[[typesName,baseTypes],[rootRels,relDoc(officeRel)],[wordMain,wordDocument]];
 const changePart=(name,value)=>wordRows.map(([part,data])=>[part,part===name?value:data]);
+
+test('static OpenDocument validates the stored MIME, matched manifest, well-formed XML and an exact passive family',()=>{
+  const rev={attachments:[]},book={documents:[{revisions:[rev]}]};
+  const save=(bytes,name='fictional.odt')=>attachmentPolicy.attachment(formatPayload(name,bytes),book,rev);
+  const ns='urn:oasis:names:tc:opendocument:xmlns:';
+  const odt=mediaTypes.odt;
+  const content=(markup,extra='',body='text')=>'<office:document-content xmlns:office="'+ns+'office:1.0" xmlns:text="'+ns+
+    'text:1.0" xmlns:table="'+ns+'table:1.0" xmlns:draw="'+ns+'drawing:1.0" office:version="1.3" '+extra+'>'+
+    '<office:body><office:'+body+'>'+markup+'</office:'+body+'></office:body></office:document-content>';
+  const entry=(path,mime)=>'<manifest:file-entry manifest:full-path="'+path+'" manifest:media-type="'+mime+'"/>';
+  const manifest=(files=entry('content.xml','text/xml'),root=entry('/',odt))=>'<manifest:manifest xmlns:manifest="'+ns+
+    'manifest:1.0" manifest:version="1.3">'+root+files+'</manifest:manifest>';
+  const simple=content('<text:p>Fictional text &amp; scope</text:p>');
+  const parts=(xml=simple,m=manifest(),type=odt,extras=[])=>[['mimetype',type],['content.xml',xml],['META-INF/manifest.xml',m],...extras];
+  const build=(rows=parts(),opts={})=>zip(rows,{storeMime:true,...opts});
+  assert.equal(save(build()).mediaType,odt);
+  assert.equal(save(build(parts(content('<text:p>No external resource.</text:p>','xmlns:notused="http://www.w3.org/1999/xlink"')))).mediaType,odt);
+  assert.deepEqual(attachmentPolicy.download(save(formatSamples.get('fictional.odp'),'fictional.odp')).bytes,formatSamples.get('fictional.odp'));
+  const refuse=[
+    ['compressed mimetype',build(parts(),{storeMime:false})],
+    ['descriptor on stored mimetype',build(parts(),{descriptor:true})],
+    ['encrypted ZIP members',build(parts(),{flags:1})],
+    ['mimetype not first',build(parts().slice(1).concat([parts()[0]]))],
+    ['ZIP containing an arbitrary text member',build([['readme.txt','Fictional file']])],
+    ['cross-format media',build(parts(simple,manifest(),mediaTypes.ods))],
+    ['cross-format body element',build(parts(content('<table:table/>','','spreadsheet')))],
+    ['cross-format manifest',build(parts(simple,manifest(entry('content.xml','text/xml'),entry('/',mediaTypes.ods))))],
+    ['missing manifest',build(parts().slice(0,2))],
+    ['missing content declaration',build(parts(simple,manifest('')))],
+    ['duplicate content declaration',build(parts(simple,manifest(entry('content.xml','text/xml').repeat(2))))],
+    ['unused manifest entry',build(parts(simple,manifest(entry('content.xml','text/xml')+entry('styles.xml','text/xml'))))],
+    ['unsupported member type',build(parts(simple,manifest(entry('content.xml','application/octet-stream'))))],
+    ['nested archive member',build(parts(simple,manifest(),odt,[['Object 1/child.zip','Fictional bytes']]))],
+    ['signature or package-private metadata',build(parts(simple,manifest(),odt,[['META-INF/documentsignatures.xml','Fictional bytes']]))],
+    ['embedded media member',build(parts(simple,manifest(),odt,[['Pictures/synthetic.png',formatSamples.get('fictional.png')]]))],
+    ['extra settings member',build(parts(simple,manifest(),odt,[['settings.xml','<fictional/>']]))],
+    ['encrypted manifest entry',build(parts(simple,manifest('<manifest:file-entry manifest:full-path="content.xml" manifest:media-type="text/xml"><manifest:encryption-data/></manifest:file-entry>')))],
+    ['script element in aliased namespace',build(parts(simple.replace('<office:body>','<office:scripts><script:script>fiction</script:script></office:scripts><office:body>')
+      .replace('office:version="1.3"','office:version="1.3" xmlns:script="'+ns+'script:1.0"')))],
+    ['embedded object',build(parts(content('<draw:object/>')))],
+    ['embedded base64 data',build(parts(content('<office:binary-data>ZmljdGlvbg==</office:binary-data>')))],
+    ['external link under alias',build(parts(content('<text:p link:href="https://example.invalid/">Fictional link</text:p>','xmlns:link="http://www.w3.org/1999/xlink"')))],
+    ['external document base',build(parts(content('<text:p xml:base="https://example.invalid/">Fictional</text:p>')))],
+    ['token encoded external resource',build(parts(content('<text:p text:style-name="u&#x72;l(https://example.invalid/)">Fictional</text:p>')))],
+    ['formula',build(parts(content('<table:table-row><table:table-cell table:formula="of:=1+1"/></table:table-row>')))],
+    ['excess virtual columns',build(parts(content('<table:table-column table:number-columns-repeated="1234567890"/>')))],
+    ['external entity declaration','<!DOCTYPE synthetic>'+simple],
+    ['processing instruction','<?xml-stylesheet href="https://example.invalid/synthetic.xsl"?>'+simple],
+    ['undefined entity',content('<text:p>&fakeEntity;</text:p>')],
+    ['malformed XML',content('<text:p>Fiction</text:h>')],
+    ['duplicate namespace alias attributes',content('<text:p text:style-name="one" other:style-name="two"/>','xmlns:other="'+ns+'text:1.0"')],
+    ['rebound namespace',content('<text:p xmlns:text="urn:fiction">Fiction</text:p>')],
+    ['second root',simple+simple],
+    ['wrong member CRC',(()=>{const damaged=build();damaged[40]^=1;return damaged;})()]
+  ];
+  for(const [label,fixture] of refuse)assert.throws(()=>save(typeof fixture==='string'?build(parts(fixture)):fixture),
+    {code:'ATTACHMENT_CONTENT_INVALID'},label);
+  assert.throws(()=>save(formatSamples.get('fictional.odt'),'fictional.ods'),{code:'ATTACHMENT_CONTENT_INVALID'});
+  assert.throws(()=>save(formatSamples.get('fictional.docx')),{code:'ATTACHMENT_CONTENT_INVALID'});
+  assert.throws(()=>save(formatSamples.get('fictional.odt'),'fictional.zip'),{code:'ATTACHMENT_TYPE_UNSUPPORTED'});
+});
 
 test('strict Office package inspection rejects unsupported active components, shape mismatches, and excess structure',()=>{
   const v={attachments:[]},book={documents:[{revisions:[v]}]};
@@ -597,16 +659,17 @@ test('Chromium drops multiple files and shows content refusals individually with
   await dropFiles([good,
     {name:'Fictional bad.md',type:'text/markdown',bytes:[...Buffer.from('# Fictional report\n<script>synthetic fixture</script>')]},
     {name:'Fictional bad.ndjson',type:'application/x-ndjson',bytes:[...Buffer.from('{"synthetic": true}\nnot-a-record\n')]},
-    {name:'Fictional bad.pdf',type:'application/pdf',bytes:[...Buffer.from('Fictional bad PDF')]}]);
+    {name:'Fictional wrong family.odt',type:'application/vnd.oasis.opendocument.text',bytes:[...formatSamples.get('fictional.ods')]}]);
   await page.getByText(/^4 selected/).waitFor();
   const button=page.getByRole('button',{name:'Upload attachments',exact:true});
   await button.click();
-  await page.getByText(/Fictional bad\.pdf.*file bytes do not match/).waitFor();
+  await page.getByText(/Fictional wrong family\.odt.*Use a static ODT/).waitFor();
   await page.getByText(/Fictional bad\.md.*cannot contain raw HTML/).waitFor();
   await page.getByText(/Fictional bad\.ndjson.*valid UTF-8 JSON object/).waitFor();
   await page.getByText('No attachments.',{exact:true}).waitFor();
   assert.equal(await page.getByRole('button',{name:'Download attachment Fictional drop.json',exact:true}).count(),0);
-  for(const ext of ['pdf','md','ndjson'])await page.getByRole('button',{name:'Remove selected file Fictional bad.'+ext,exact:true}).click();
+  for(const name of ['Fictional wrong family.odt','Fictional bad.md','Fictional bad.ndjson'])
+    await page.getByRole('button',{name:'Remove selected file '+name,exact:true}).click();
   await button.click();
   const [download]=await Promise.all([page.waitForEvent('download'),
     page.getByRole('button',{name:'Download attachment Fictional drop.json',exact:true}).click()]);

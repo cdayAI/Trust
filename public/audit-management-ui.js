@@ -39,7 +39,7 @@ function auditMgmtSelect(label,name,values){
   return add(el('label',label),select);
 }
 function renderAuditManagement(){
-  const {plans,controls,outcomes,severities}=auditMgmtData;
+  const {plans,controls,outcomes,severities,remediation}=auditMgmtData;
   const analyst=actor==='analyst', reviewer=actor==='reviewer';
   const intro=add(el('section'),heading('Audit management'),
     el('p','Plan a scoped audit, assess local synthetic evidence against registered controls, and send the results to a separate reviewer. Do not use real evidence or records.'));
@@ -118,6 +118,7 @@ function renderAuditManagement(){
       const link=el('a','Download finalized report JSON','button quiet');
       link.href=scopeUrl(auditMgmtPath+path+'/report');link.download='';
       card.append(el('p','Conclusion: '+result.conclusion),el('p','Report SHA-256: '+sha256,'hint'),link);
+      const followup=renderAuditRemediation(remediation[plan.id]??[]);if(followup)card.append(followup);
     }
     list.append(card);
   }

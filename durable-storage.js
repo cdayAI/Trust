@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
+const { verifyEvidenceSnapshot } = require('./governance-documents');
 
 // Application ID for the workbench; user_version is the SQLite schema version.
 // Domain documents retain their independent application/engine versions.
@@ -215,6 +216,7 @@ function openSqlite(file, { readOnly = false } = {}) {
           const documents = db.prepare('SELECT scope, kind, generation, payload FROM snapshots ORDER BY scope, kind').all()
             .map(row => ({ scope: validateScope(row.scope), kind: row.kind, generation: row.generation, payload: decode(row.kind, row) }));
           validateDocuments(mode, documents);
+          verifyEvidenceDocuments(documents);
           return { mode, documents };
         });
       },
@@ -222,6 +224,7 @@ function openSqlite(file, { readOnly = false } = {}) {
         if (readOnly) throw new Error('Storage is read-only.');
         verifyMode(mode);
         validateDocuments(mode, documents);
+        verifyEvidenceDocuments(documents);
         return inTransaction('BEGIN IMMEDIATE', () => {
           if (db.prepare('SELECT 1 FROM snapshots LIMIT 1').get()) throw new Error('Restore target is not empty.');
           const insert = db.prepare('INSERT INTO snapshots (scope, kind, generation, payload) VALUES (?, ?, ?, ?)');
@@ -252,6 +255,10 @@ function validateDocuments(mode, documents) {
   return documents;
 }
 
+function verifyEvidenceDocuments(documents) {
+  for (const { kind, payload } of documents) if (kind === 'workbench') verifyEvidenceSnapshot(payload);
+}
+
 function envelope(mode, documents) {
   validateDocuments(mode, documents);
   const content = { format, version: backupVersion, mode, documents };
@@ -266,6 +273,7 @@ function verifyBackup(file) {
   }
   const unsigned = envelope(content.mode, content.documents);
   if (unsigned.sha256 !== content.sha256) throw new Error('Backup checksum mismatch.');
+  verifyEvidenceDocuments(unsigned.documents);
   return unsigned;
 }
 
@@ -302,6 +310,7 @@ function backupDatabase(source, destination) {
 
 function restoreDocuments(mode, documents, destination) {
   validateDocuments(mode, documents);
+  verifyEvidenceDocuments(documents);
   publishNew(destination, temp => {
     const db = openSqlite(temp);
     try {

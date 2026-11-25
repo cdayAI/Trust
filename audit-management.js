@@ -1,5 +1,6 @@
 'use strict';
 const {randomUUID,createHash}=require('node:crypto');
+const remediation=require('./audit-remediation');
 const board=s=>s.auditManagement??{plans:[]};
 const outcomes=['effective','exception','inconclusive'];
 const severities=['low','moderate','high','critical'];
@@ -13,7 +14,7 @@ function lookup(s,id){
   return board(s).plans.find(x=>x.id===id)??error(404,'AUDIT_NOT_FOUND','Audit plan not found.');
 }
 function view(s){
-  return {plans:board(s).plans,controls:(s.riskControls?.controls??[]).map(({id,title,intent})=>({id,title,intent})),outcomes,severities};
+  return {plans:board(s).plans,remediation:remediation.view(s),controls:(s.riskControls?.controls??[]).map(({id,title,intent})=>({id,title,intent})),outcomes,severities};
 }
 function report(s,id){
   const plan=lookup(s,id);
@@ -25,6 +26,7 @@ const actions={
   submit:[], return:['note'], finalize:['note']
 };
 function change(state,parts,actor,body,event,_createAssessment,account=null){
+  if(parts[1]==='remediations')return remediation.change(state,parts,actor,body,event,_createAssessment,account);
   const [,collection,id,operation]=parts;
   const op=parts.length===2?'create':operation;
   if(collection!=='plans'||![2,4].includes(parts.length)||!Object.hasOwn(actions,op)||(parts.length===4&&op==='create'))
@@ -122,4 +124,4 @@ function change(state,parts,actor,body,event,_createAssessment,account=null){
     throw e;
   }
 }
-module.exports={view,change,report};
+module.exports={view,change,report,remediationReport:remediation.report};

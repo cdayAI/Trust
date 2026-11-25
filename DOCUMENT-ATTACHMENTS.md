@@ -11,6 +11,7 @@ a file contains real data.
 | --- | --- |
 | PDF documents | `.pdf` |
 | Modern Office | `.docx`, `.xlsx`, `.pptx` |
+| Static OpenDocument | `.odt`, `.ods`, `.odp` |
 | Printable UTF-8 text and logs | `.txt`, `.log` |
 | Tabular or structured UTF-8 data | `.csv`, `.tsv`, `.json`, `.jsonl`, `.ndjson` |
 | Plain Markdown | `.md`, `.markdown` |
@@ -38,13 +39,23 @@ array. JSON Lines must contain one object per line without blank records (up to
 HTML, embedded images and Markdown link syntax. Logs must be printable UTF-8
 without terminal control codes. No text type is rendered from attachments.
 
+The [OpenDocument package](https://docs.oasis-open.org/office/OpenDocument/v1.3/OpenDocument-v1.3-part2-packages.html)
+subset accepts styled prose, data-only sheets, and text and basic shapes on
+slides. It requires the fixed, uncompressed package media type, a matching
+manifest, and a matching ODF 1.2 or 1.3 content document. Only the content and
+optional passive styles and metadata can be present. Macros, hyperlinks,
+external references, formulas, forms, embedded media or other binary objects,
+thumbnails, settings, signatures, encryption, and unsupported XML elements or
+namespaces are not accepted. Some editor exports include unsupported parts even when they look
+simple. Export those files as PDF, use a supported macro-free Office format, or
+use CSV for static sheet values. Other OpenDocument formats are not accepted.
+
 WebP is limited to nonanimated images, BMP to supported uncompressed DIB
 variants, and TIFF to classic TIFF. Raster images are inspected structurally,
-never decoded or previewed. Legacy Office (`.doc`, `.xls`, `.ppt`), RTF,
-OpenDocument, Apple iWork, and saved email are not accepted: their containers or
-control formats can carry macros, nested resources, embedded objects or links
-that this validator does not inspect. Convert these to a supported file such
-as PDF, macro-free modern Office, or plain text. HTML, SVG, executables,
+never decoded or previewed. Legacy Office (`.doc`, `.xls`, `.ppt`), RTF, Apple
+iWork, and saved email are not accepted: these formats can carry macros, nested
+resources, embedded objects, or links this validator does not inspect. Convert
+these to PDF, macro-free modern Office, or plain text. HTML, SVG, executables,
 scripts, encrypted or macro-enabled Office, and arbitrary archives are also
 unsupported.
 PDF checks are structural and reject some visible active actions, but are not

@@ -2,6 +2,7 @@
 
 const {randomUUID}=require('node:crypto');
 const deadlines=require('./rights-deadline-policy');
+const intakeForm=require('./requester-intake-form');
 const {kinds}=deadlines;
 const ownerIds=['analyst','case-operator'];
 const backupActor={id:'case-operator',name:'Case Operator (demo)',role:'rights-operator'};
@@ -37,29 +38,31 @@ function view(state) {
     legacyRecords:(state.moduleRecords??[]).filter(r=>r.moduleId==='rights')
   };
 }
-function openCase(state,actor,{kind,owner,days,summary,source},event){
+function openCase(state,actor,{kind,owner,days,summary,source,intake},event){
   const now=new Date().toISOString();
   const row={id:randomUUID(),kind,owner,summary,createdBy:actor,
     receivedAt:now,...deadlines.pin(state,kind,now,days),
     identity:{status:'pending',reviewedBy:null,reviewedAt:null},
     completion:null,closedAt:null,status:'received',updatedAt:now,revision:1};
   if(source)row.source=source;
+  if(intake)row.requesterIntake=intake;
   (state.rightsCases??=[]).push(row);
   event(state,actor,'rights.case.opened',null,row.id,{
-    kind,owner,summary,dueDate:row.dueDate,clockPolicy:{...row.clockPolicy},revision:1,...(source?{source}:{})
+    kind,owner,summary,dueDate:row.dueDate,clockPolicy:{...row.clockPolicy},revision:1,...(source?{source}:{}),...(intake?{intakeFormVersion:intake.version}:{})
   });
   return row;
 }
-function portalModel(state,grant,event,kind){
+function portalModel(state,grant,event,request){
   const entries=state.requesterReceipts??[];
   const found=entries.find(x=>x.grantId===grant.id);
   let entry=found,row=entry?(state.rightsCases??[]).find(c=>c.id===entry.caseId):null,created=false;
   if(entry&&!row)throw Error('Unresolved synthetic receipt.');
-  if(kind!==undefined){
-    choice(kind,kinds,'request type');
+  if(request!==undefined){
+    const kind=choice(request.kind,kinds,'request type');
     if(row&&row.kind!==kind)fail(409,'PORTAL_ALREADY_SUBMITTED','This synthetic code already has a request. Each code can submit only one.');
+    const intake=intakeForm.pin(state,request,row?(row.requesterIntake??null):undefined);
     if(!row){
-      row=openCase(state,'synthetic-requester',{kind,owner:'analyst',
+      row=openCase(state,'synthetic-requester',{kind,owner:'analyst',intake,
         summary:'Synthetic portal intake for '+grant.alias+'. No contact details or documents.',source:'synthetic-portal'},event);
       entry={grantId:grant.id,caseId:row.id,receipt:randomUUID()};
       (state.requesterReceipts??=[]).push(entry);
@@ -67,10 +70,14 @@ function portalModel(state,grant,event,kind){
       created=true;
     }
   }
-  if(!row)return {created,value:{mode:'synthetic-requester',status:'not-submitted',requestTypes:kinds}};
+  if(!row){
+    const form=intakeForm.publicForm(state);
+    return {created,value:{mode:'synthetic-requester',status:'not-submitted',requestTypes:kinds,...(form?{form}:{})}};
+  }
   const publicStatus={received:'Received','in-progress':'In progress',fulfilled:'Simulation complete','closed-unverified':'Simulation closed without disclosure'};
   return {created,value:{mode:'synthetic-requester',status:publicStatus[row.status],requestType:row.kind,
-    receivedDate:row.receivedAt.slice(0,10),receipt:entry.receipt}};
+    receivedDate:row.receivedAt.slice(0,10),receipt:entry.receipt,
+    ...(row.requesterIntake?{intakeFormVersion:row.requesterIntake.version}:{})}};
 }
 function change(state,parts,actor,body,event,_assessments,account) {
   if(parts.length===3&&parts[1]==='deadline-policy')return deadlines.mutate(state,actor,account,parts[2],body,event);

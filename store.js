@@ -12,7 +12,9 @@ const assessmentConfig=require('./assessment-config');
 const processingRegister=require('./processing-register');
 const rights = require('./rights-workflow');
 const deadlines = require('./rights-deadline-policy');
+const requesterIntakeForm=require('./requester-intake-form');
 const incidents = require('./incident-workflow');
+const assessmentIncident=require('./assessment-incident');
 const dataMap = require('./data-map');
 const dictionary=require('./data-dictionary');
 const discovery = require('./discovery-import');
@@ -255,8 +257,8 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {fixtureMigrationReceipt,requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,...safe}=state;
-    if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,...row})=>row);
+    const {fixtureMigrationReceipt,requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,requesterIntakeForm:privateRequesterForm,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,reportRuns:privateReportRuns,auditRemediation:privateAuditRemediation,...safe}=state;
+    if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,requesterIntake,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
     delete safe.operatorJobs;
@@ -271,7 +273,9 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   function projectRights(snapshot,context){
     const model=rights.view(context?.role==='case-operator'?rightsCaseScope.viewState(snapshot,context):snapshot);
     const delegation=rightsCaseScope.settings(snapshot,context);
-    return delegation?{...model,delegation}:model;
+    const intakeSettings=requesterIntakeForm.settings(snapshot,context);
+    if(!['analyst','reviewer'].includes(context?.role))model.cases=model.cases.map(({requesterIntake,...row})=>row);
+    return {...model,...(delegation?{delegation}:{}),...(intakeSettings?{intakeSettings}:{})};
   }
   const documentCapabilities={largePdf:!!storage&&largePdf};
   const applyProgram = (snapshot, parts, actor, body, appendEvent, account) =>
@@ -358,10 +362,10 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     trustCenterView:path=>trustCenter.view(state,path),
     trustCenterVisitor:()=>trustCenter.visitor(state),
     portalStatus:grant=>rights.portalModel(state,grant,event).value,
-    portalIntake(grant,kind){
-      if(typeof kind!=='string')fail(422,'Select a synthetic request type.');
+    portalIntake(grant,request){
+      if(typeof request.kind!=='string')fail(422,'Select a synthetic request type.');
       const next=structuredClone(state);
-      const result=rights.portalModel(next,grant,event,kind);
+      const result=rights.portalModel(next,grant,event,request);
       if(result.created){persist(next);state=next;}
       return result.value;
     },
@@ -430,8 +434,28 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       persist(next);state=next;
       return projectRights(state,ctx);
     },
+    changeRequesterIntakeForm(ctx,action,body){
+      requireCurrentOperatorSession(ctx);
+      const next=structuredClone(state);
+      requesterIntakeForm.change(next,ctx,action,body,(target,actor,kind,project,id,details)=>{
+        event(target,actor,kind,project,id,details);
+        target.audit.at(-1).account=ctx.account;
+      });
+      persist(next);state=next;
+      return projectRights(state,ctx);
+    },
     getRightsDeadlinePolicy:account=>deadlines.view(state,account),
     getIncidents:(actor,account)=>incidents.view(state,actor,account),
+    openAssessmentIncident(id,context,body){
+      requireCurrentOperatorSession(context);
+      const next=structuredClone(state);
+      const result=assessmentIncident.open(next,context,id,body,(target,role,action,project,entity,details)=>{
+        event(target,role,action,project,entity,details);
+        target.audit.at(-1).account=context.account;
+      });
+      if(result.created){persist(next);state=next;}
+      return result;
+    },
     getDictionary:()=>dictionary.view(state),
     getProcessingRegister:()=>processingRegister.view(state),
     getProcessingExport:(id,version)=>processingRegister.approved(state,id,version),
@@ -442,6 +466,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     getRiskControls:()=>riskControls.view(state),
     getAuditManagement:()=>auditManagement.view(state),
     getAssessmentConfiguration:()=>assessmentConfig.view(state),
+    getRemediationReport:id=>auditManagement.remediationReport(state,id),
     getAuditReport:id=>auditManagement.report(state,id),
     getMaturityPlanning:()=>maturityPlanning.view(state),
     getMaturityReport:(id,version)=>maturityPlanning.report(state,id,version),
@@ -507,7 +532,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['pinReportRun','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['openAssessmentIncident','changeRequesterIntakeForm','pinReportRun','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name!=='identityMembership')state=storage.read(workbench)??fresh();

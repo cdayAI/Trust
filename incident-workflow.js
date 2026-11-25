@@ -42,20 +42,27 @@ const fields={
   triage:['severity','note','scopeClass'], containment:['note'], evidence:['reference','kind','note'], findings:['note'],
   'request-review':[], decide:['decision','note'], 'plan-notice':['reference','note'], close:['note']
 };
+function openCase(state,actor,body,event,account,assessmentOrigin){
+  if(actor!=='analyst')problem(403,'OWNER_REQUIRED','Only the incident analyst can log an incident.');
+  keys(body,['title','scope','scopeClass']);
+  const now=new Date().toISOString(),cases=state.incidentCases??=[];
+  const policyPin=incidentPolicy.pin(state),scopeClass=body.scopeClass===undefined?'unknown':select(body.scopeClass,scopeClasses,'scope classification');
+  const row={id:randomUUID(),title:text(body.title,'Fictional title',120),scope:text(body.scope,'Fictional affected scope'),
+    stage:'logged',owner:actor,ownerAccount:account??null,scopeClass,policyPin,policyRoute:null,
+    severity:null,branch:null,containment:null,evidence:[],findings:null,review:null,noticePlan:null,
+    closeNote:null,closedAt:null,openedAt:now,updatedAt:now,revision:1,lastInvestigationRevision:0,
+    ...(assessmentOrigin?{assessmentOrigin}: {})};
+  cases.push(row);
+  event(state,actor,'incident.case.opened',null,row.id,{title:row.title,scope:row.scope,stage:row.stage,revision:1,scopeClass,policyVersion:policyPin?.version??null,
+    ...(assessmentOrigin?{assessmentOrigin}: {})});
+  return row;
+}
 function change(state,parts,actor,body,event,_createVendorAssessments,account){
   const now=new Date().toISOString();
   if(parts[1]==='policy')return incidentPolicy.change(state,parts,actor,body,event,account,now);
   const cases=state.incidentCases??=[];
   if(parts.length===2&&parts[1]==='cases'){
-    if(actor!=='analyst')problem(403,'OWNER_REQUIRED','Only the incident analyst can log an incident.');
-    keys(body,['title','scope','scopeClass']);
-    const policyPin=incidentPolicy.pin(state),scopeClass=body.scopeClass===undefined?'unknown':select(body.scopeClass,scopeClasses,'scope classification');
-    const row={id:randomUUID(),title:text(body.title,'Fictional title',120),scope:text(body.scope,'Fictional affected scope'),
-      stage:'logged',owner:actor,ownerAccount:account??null,scopeClass,policyPin,policyRoute:null,
-      severity:null,branch:null,containment:null,evidence:[],findings:null,review:null,noticePlan:null,
-      closeNote:null,closedAt:null,openedAt:now,updatedAt:now,revision:1,lastInvestigationRevision:0};
-    cases.push(row);
-    event(state,actor,'incident.case.opened',null,row.id,{title:row.title,scope:row.scope,stage:row.stage,revision:1,scopeClass,policyVersion:policyPin?.version??null});
+    openCase(state,actor,body,event,account);
     return;
   }
   if(parts.length!==4||parts[1]!=='cases'||!Object.hasOwn(fields,parts[3]))problem(404,'NOT_FOUND','Incident action not found.');
@@ -164,4 +171,4 @@ function change(state,parts,actor,body,event,_createVendorAssessments,account){
   row.updatedAt=now;
   event(state,actor,'incident.case.'+action,null,row.id,{...details,from,to:row.stage,revision:row.revision});
 }
-module.exports={view,change};
+module.exports={view,change,openCase};

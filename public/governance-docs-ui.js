@@ -105,7 +105,7 @@ function attachmentForm(path,revision,rules,remaining){
   const drop=add(el('div',undefined,'attachment-drop-zone'),
     add(el('label','Fictional attachments'),picker),
     el('p','Choose files or drop them here. A new selection replaces the previous one.','hint'));
-  const form=add(el('form'),drop,el('p','PDF, Word, Excel, PowerPoint, TXT, CSV, TSV, JSON, JSON Lines, Markdown, LOG and common raster images. Up to '+
+  const form=add(el('form'),drop,el('p','PDF, Word, Excel, PowerPoint, static OpenDocument, TXT, CSV, TSV, JSON, JSON Lines, Markdown, LOG and common raster images. Up to '+
     attachmentSize(rules.maxFileBytes)+' per file (16 KiB for TXT'+
     (rules.largePdfMaxBytes?', '+attachmentSize(rules.largePdfMaxBytes)+' for PDF in this workspace':'')+'), '+
     attachmentSize(rules.maxBatchBytes)+' per upload. '+

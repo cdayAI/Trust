@@ -98,6 +98,36 @@ function renderAssessment(parent,a){
       f.onsubmit=(e)=>{e.preventDefault();const action=e.submitter?.textContent==='Return for changes'?'reject':'approve';write(root+'/'+action,assessmentInput(f,a),action==='approve'?'Assessment approved.':'Assessment returned for changes.')};card.append(f);
     }else if(a.status==='in_review')card.append(el('p','Waiting for the independent reviewer.','hint'));
   }
+  if(localSession?.authenticated&&localSession.capabilities.views.includes('incidents')&&
+    a.status==='approved'&&a.type==='privacy'&&(a.routing.form==='dpia'||a.questionnaire.id==='sensitive')){
+    const existing=state.assessmentIncidentLinks?.find(link=>link.assessmentId===a.id&&link.assessmentRevision===a.revision);
+    if(existing){
+      const open=button('Open linked incident','button','secondary');
+      open.onclick=()=>openWorkTask({view:'incidents',recordId:existing.incidentId});
+      card.append(open);
+    }else if(actor==='analyst'){
+      const details=add(el('details'),el('summary','Log an assessment-linked incident'),
+        el('p','Use only for a separately identified fictional issue. The new incident starts untriaged, and no questionnaire answers, vendor names or notices are copied or sent.'));
+      const form=el('form'),confirm=el('input'),submit=button('Log linked incident','submit');
+      confirm.type='checkbox';confirm.required=true;
+      form.append(add(el('label'),confirm,document.createTextNode(' Confirm this fictional follow-up for the approved assessment.')),submit);
+      form.onsubmit=async event=>{
+        event.preventDefault();
+        if(!confirm.checked||busy)return;
+        busy=true;submit.disabled=true;
+        try{
+          const linked=await read(root+'/linked-incident',{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({expectedRevision:a.revision})});
+          state.assessmentIncidentLinks??=[];
+          if(!state.assessmentIncidentLinks.some(link=>link.assessmentId===a.id&&link.assessmentRevision===a.revision))
+            state.assessmentIncidentLinks.push({assessmentId:a.id,assessmentRevision:a.revision,incidentId:linked.incidentId});
+          if(!$('#assessment-view').hidden)await openWorkTask({view:'incidents',recordId:linked.incidentId});
+        }catch(error){if(!$('#assessment-view').hidden)notice(error.message,true)}
+        finally{busy=false;submit.disabled=false}
+      };
+      details.append(form);card.append(details);
+    }
+  }
   parent.append(card);
 }
 function renderWorkspaceMetrics(){

@@ -55,8 +55,11 @@ route('GET','workflows/(?:studio|definitions/'+key+'(?:/[1-9][0-9]*)?)',studio);
 route('GET','workflows/(?:studio|instances)/'+key,operators);
 route('GET','workflows/audit',['reviewer']);
 
+route('POST','assessments/'+key+'/linked-incident',['analyst']);
 route('POST','(?:projects|vendors|assessments/'+key+'/(?:save|submit|approve|reject)|handoff/'+key+'/(?:send|retry))',operators);
 route('GET','rights/deadline-policy',operators);
+route('POST','rights/intake-form/(?:save|submit)',['analyst']);
+route('POST','rights/intake-form/(?:return|publish)',['reviewer']);
 route('POST','rights/deadline-policy/(?:draft|submit)',['analyst']);
 route('POST','rights/deadline-policy/(?:return|publish)',['reviewer']);
 route('POST','rights/cases/'+uuid+'/request-extension',['analyst','case-operator']);
@@ -70,6 +73,9 @@ route('POST','incidents/policy/(?:return|publish)',['reviewer']);
 route('POST','incidents/cases(?:/'+uuid+'/(?:triage|containment|evidence|findings|request-review|decide|plan-notice|close))?',operators);
 route('POST','vendor-monitoring/cases(?:/'+uuid+'/(?:score|evidence|submit|approve|return|change|renew))?',operators);
 route('POST','maturity-planning/plans(?:/'+uuid+'/(?:assess|submit|decide|return|approve|revise))?',operators);
+route('GET','audit-management/remediations/'+uuid+'/report',operators);
+route('POST','audit-management/remediations(?:/'+uuid+'/(?:plan|submit))?',['analyst']);
+route('POST','audit-management/remediations/'+uuid+'/(?:return|close|reopen)',['reviewer']);
 route('POST','audit-management/plans(?:/'+uuid+'/(?:begin|assess|submit|return|finalize))?',operators);
 route('POST','risk-controls/(?:risks(?:/'+uuid+'/score)?|controls|links(?:/'+uuid+'/(?:unlink|verify))?|tests(?:/'+uuid+'/(?:accept|reject))?)',operators);
 route('POST','retention/(?:schedules(?:/'+uuid+'/(?:edit|submit|activate|return))?|records|holds(?:/'+uuid+'/release)?|previews(?:/'+uuid+'/simulate)?)',operators);
@@ -115,7 +121,11 @@ function requirePermission(method,pathname,role){
 function operatorState(state,role){
   // Do not expose the workspace snapshot through /state or project/assessment mutation responses.
   const projectAccess=operators.includes(role);
+  const incidentLinks=projectAccess?(state.incidentCases??[]).flatMap(row=>row.assessmentOrigin?[{
+    assessmentId:row.assessmentOrigin.assessmentId,assessmentRevision:row.assessmentOrigin.assessmentRevision,incidentId:row.id
+  }]:[]):[];
   return {version:state.version,actors:[],projects:projectAccess?state.projects:[],vendors:projectAccess?state.vendors:[],
+    ...(incidentLinks.length?{assessmentIncidentLinks:incidentLinks}:{}),
     assessments:projectAccess?state.assessments:[],handoff:projectAccess?state.handoff:[],
     audit:projectAccess?state.audit.filter(event=>typeof event.projectId==='string'&&
       /^(?:project|vendor|assessment|handoff)\./.test(event.action)):[]};

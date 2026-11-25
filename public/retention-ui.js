@@ -91,6 +91,7 @@ function renderRetention(){
   }
   if(!records.length)recordPanel.append(el('p','No fictional records.'));
   const holdsByRecord=new Map(records.map(r=>[r.id,[]]));
+  const previewEditors=new Map();
   for(const h of holds)holdsByRecord.get(h.recordId)?.push(h);
   for(const row of records.slice().reverse()){
     const card=add(el('article',undefined,'module-record'),el('h3',row.reference),el('p',row.category+' · Created '+row.createdOn+(row.closedOn?' · Closed '+row.closedOn:''),'hint'));
@@ -109,20 +110,36 @@ function renderRetention(){
       retentionForm(hold,'/holds',[hidden(),rightsNote('Fictional hold rationale')],'Place hold',revision);
       const preview=add(el('details'),el('summary','Preview disposition'));
       retentionForm(preview,'/previews',[hidden(),retentionField('Simulation UTC date','asOf',new Date().toISOString().slice(0,10),'date')],'Save disposition preview',revision);
+      previewEditors.set(row.id,preview);
       card.append(hold,preview);
     }
     recordPanel.append(card);
   }
-  const labels=new Map(records.map(r=>[r.id,r.reference]));
+  const recordsById=new Map(records.map(row=>[row.id,row]));
   const previewPanel=add(el('section'),heading('Disposition previews and results'));
   if(!previews.length)previewPanel.append(el('p','No saved previews.'));
   for(const row of previews.slice().reverse()){
-    const card=add(el('article',undefined,'module-record'),el('h3',labels.get(row.recordId)),el('p','Simulated date: '+row.asOf),
+    const fixture=recordsById.get(row.recordId);
+    const card=add(el('article',undefined,'module-record'),el('h3',fixture.reference),el('p','Simulated date: '+row.asOf),
       el('p',retentionReason[row.reason]),el('p','Schedule: '+(row.scheduleVersion===null?'none':'v'+row.scheduleVersion)+' · Due: '+(row.dueOn??'not calculated')+
       ' · Active holds at preview: '+row.holdIds.length,'hint'));
     const run=runs.find(r=>r.previewId===row.id);
     if(run)card.append(el('p','Audit-only simulation recorded: '+run.disposition+'. No record changed.','success'));
-    else if(analyst&&row.eligible)retentionForm(card,'/previews/'+row.id+'/simulate',[],'Record audit-only simulation',revision);
+    else if(row.eligible&&current[fixture.category]!==row.scheduleId){
+      card.append(el('p','Historical preview: the active schedule has changed.','hint'));
+      const editor=previewEditors.get(row.recordId);
+      if(editor){
+        const recheck=button('Create updated preview','button','secondary');
+        recheck.onclick=()=>{
+          editor.open=true;
+          const field=editor.querySelector('input[name="asOf"]');
+          field.value=row.asOf;
+          field.focus({preventScroll:true});
+          editor.scrollIntoView({block:'center'});
+        };
+        card.append(recheck);
+      }
+    }else if(analyst&&row.eligible)retentionForm(card,'/previews/'+row.id+'/simulate',[],'Record audit-only simulation',revision);
     previewPanel.append(card);
   }
   const sections=[intro,schedulePanel,recordPanel,previewPanel];

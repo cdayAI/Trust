@@ -204,7 +204,8 @@ revisions. In-app viewing and downloads use local role checks and record an
 audit event without putting document text in the generic state or audit
 export. Demo identities are selectable; isolated mode uses signed-in local roles.
 The server is loopback-only. Scoped governance attachments support synthetic PDF,
-modern Office, text/logs, CSV/TSV, JSON/JSON Lines, plain Markdown, and common raster files as opaque downloads only.
+modern Office, static OpenDocument, text/logs, CSV/TSV, JSON/JSON Lines,
+plain Markdown, and common raster files as opaque downloads only.
 See [attachment types, limits and validation](DOCUMENT-ATTACHMENTS.md). No files
 are sent outside the local workspace.
 

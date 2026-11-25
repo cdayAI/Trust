@@ -78,8 +78,60 @@ function renderCaseDelegation(card,row,board){
       values=>({...values,operation:'revoke',expectedRevision:row.revision}),'Revoke case access');
   card.append(panel);
 }
+function requesterIntakePanel(model){
+  const section=add(el('section'),heading('Requester intake form'),el('p',
+    'Configure fixed fictional choices, counts and yes/no fields. No contact details or free text can be collected.'),
+    el('p',model.history.length?'Current published form: version '+model.history.at(-1).number:
+      'Legacy requester form is in use until the first independent approval.','hint'));
+  const {draft,allowed,revision}=model;
+  const formPath='/api/rights/intake-form/';
+  if(draft){
+    section.append(el('p','Version '+draft.number+' · '+(draft.status==='review'?'Awaiting independent review':'Draft')));
+    const selected=el('ul');
+    for(const field of draft.fields)selected.append(el('li',model.options.find(f=>f.key===field.key).label+
+      (field.required?' · Required':' · Optional')));
+    section.append(selected);
+    if(draft.returnReason)section.append(el('p','Returned: '+draft.returnReason.replaceAll('-',' '),'hint'));
+  }
+  if(allowed.includes('save')){
+    const groups=model.options.map(field=>{
+      const checks=el('fieldset'),use=el('input'),required=el('input');
+      use.type='checkbox';required.type='checkbox';use.name='intake-use-'+field.key;required.name='intake-required-'+field.key;
+      const assigned=draft?.fields.find(f=>f.key===field.key);
+      use.checked=!!assigned;required.checked=!!assigned?.required;required.disabled=!use.checked;
+      use.onchange=()=>{required.disabled=!use.checked;if(!use.checked)required.checked=false;};
+      return add(checks,el('legend',field.label),add(el('label'),use,document.createTextNode(' Include '+field.label)),
+        add(el('label'),required,document.createTextNode(' Require '+field.label)));
+    });
+    rightsForm(section,formPath+'save',groups,data=>({expectedRevision:revision,fields:model.options.flatMap(({key})=>
+      Object.hasOwn(data,'intake-use-'+key)?[{key,required:Object.hasOwn(data,'intake-required-'+key)}]:[])}),'Save intake form draft');
+  }
+  if(allowed.includes('submit'))rightsForm(section,formPath+'submit',[],()=>({expectedRevision:revision}),'Submit intake form for review');
+  if(allowed.includes('return')){
+    const reasons=model.returnReasons.map(value=>({value,label:value.replaceAll('-',' ')}));
+    rightsForm(section,formPath+'return',[rightsSelect('Reason to return intake form','reason',reasons)],
+      data=>({expectedRevision:revision,reason:data.reason}),'Return intake form');
+  }
+  if(allowed.includes('publish')){
+    const confirm=el('input');confirm.type='checkbox';confirm.required=true;
+    rightsForm(section,formPath+'publish',[add(el('label'),confirm,document.createTextNode(' Confirm publishing this exact fictional form.'))],
+      ()=>({expectedRevision:revision}),'Publish intake form');
+  }
+  if(model.history.length){
+    const history=add(el('ol',undefined,'log'));
+    for(const entry of model.history.slice().reverse()){
+      const row=el('li','Version '+entry.number+' · Published by '+entry.approvedBy);
+      const fields=el('ul');
+      for(const field of entry.fields)fields.append(el('li',model.options.find(x=>x.key===field.key).label+
+        (field.required?' · Required':' · Optional')));
+      history.append(add(row,fields));
+    }
+    section.append(add(el('details'),el('summary','Published form history'),history));
+  }
+  return section;
+}
 function renderRights(){
-  const {cases,kinds,owners,policy,legacyRecords,delegation}=rightsData;
+  const {cases,kinds,owners,policy,legacyRecords,delegation,intakeSettings}=rightsData;
   const ownerName=id=>state?.actors.find(o=>o.id===id)?.name??owners.find(o=>o.id===id)?.name??id;
   const ownerOptions=owners.map(o=>({value:o.id,label:o.name}));
   const intro=add(el('section'),heading('Privacy rights cases'),
@@ -103,6 +155,15 @@ function renderRights(){
       el('p','Identity: '+row.identity.status.replaceAll('-',' ')),el('p',row.summary));
     card.id='work-record-'+row.id;
     renderRightsDeadlineCase(card,row);
+    if(row.requesterIntake){
+      const pin=add(el('details'),el('summary','Requester form version '+row.requesterIntake.version));
+      const answers=el('dl');
+      for(const [key,value] of Object.entries(row.requesterIntake.answers)){
+        const label=intakeSettings?.options.find(f=>f.key===key)?.label??key;
+        add(answers,el('dt',label),el('dd',typeof value==='boolean'?(value?'Yes':'No'):String(value)));
+      }
+      pin.append(answers);card.append(pin);
+    }
     if(actor==='analyst')renderCaseDelegation(card,row,delegation);
     if(row.identity.reviewedBy)card.append(el('p','Identity reviewed by: '+ownerName(row.identity.reviewedBy),'hint'));
     if(row.completion)card.append(el('p','Mock fulfillment only. No data released. '+row.completion.note,'success'));
@@ -135,7 +196,7 @@ function renderRights(){
     card.append(add(el('details'),el('summary','Case history ('+row.history.length+')'),history));
     list.append(card);
   }
-  const parts=[intro,...(localSession?.authenticated&&['analyst','reviewer'].includes(actor)?[rightsDeadlinePanel()]:[]),list];
+  const parts=[intro,...(localSession?.authenticated&&['analyst','reviewer'].includes(actor)?[rightsDeadlinePanel()]:[]),...(intakeSettings?[requesterIntakePanel(intakeSettings)]:[]),list];
   if(legacyRecords.length){
     const archive=add(el('section'),heading('Legacy register entries'),
       el('p','These entries did not use the independent identity workflow and do not establish a verification or fulfillment outcome.'));

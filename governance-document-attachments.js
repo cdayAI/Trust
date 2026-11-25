@@ -46,7 +46,7 @@ function rawBytes(data,limit,binary=false){
 }
 function namedFormat(name){
   const format=formats.get(name.slice(name.lastIndexOf('.')));
-  if(!format)fail(415,'ATTACHMENT_TYPE_UNSUPPORTED','Choose a supported PDF, modern Office, text/data, or raster image file.');
+  if(!format)fail(415,'ATTACHMENT_TYPE_UNSUPPORTED','Choose a supported PDF, modern Office, static OpenDocument, text/data, or raster image file.');
   return format;
 }
 function prepare(body,binary=false){
@@ -111,7 +111,10 @@ function queryPolicy(book){
 function status(row,required){
   const q=row.quarantine;
   // Even when settings change, a staged row never acts like a legacy upload.
-  if(q===undefined)return required?'unavailable':null;
+  // Extended-size bytes were never accepted without manual review. A
+  // missing workspace flag and missing file review cannot make them legacy.
+  if(q===undefined)return required||row.payloadProfile!==undefined?'unavailable':null;
+  if(!required)return 'unavailable';
   if(!q||typeof q!=='object'||Array.isArray(q)||!isAccount(q.uploader)||!['pending','released','rejected'].includes(q.status))
     return 'unavailable';
   if(q.status!=='pending'&&(!isAccount(q.decidedBy)||q.decidedBy===q.uploader||
@@ -148,21 +151,35 @@ function metadata(row,required){
   const reviewStatus=status(row,required);
   return {id,name,mediaType,size,sha256,...(reviewStatus===null?{}:{reviewStatus})};
 }
+function verifiedBytes(row){
+  const name=cleanName(row.name),format=namedFormat(name);
+  if(typeof row.id!=='string'||!idPattern.test(row.id)||typeof row.sha256!=='string'||!shaPattern.test(row.sha256)||
+    row.mediaType!==format.mediaType||name!==row.name)
+    throw new Error('Stored metadata mismatch.');
+  if(row.payloadProfile!==undefined&&(row.payloadProfile!=='large-pdf-v1'||format.extension!=='.pdf'||
+    row.size<=format.maxFileBytes||row.size>largePdfMaxBytes))throw Error('Stored attachment profile mismatch.');
+  const bytes=rawBytes(row.data,row.payloadProfile==='large-pdf-v1'?largePdfMaxBytes:format.maxFileBytes);
+  if(bytes.length!==row.size||digest(bytes)!==row.sha256)throw new Error('Stored bytes mismatch.');
+  return {name,format,bytes};
+}
+function verifyStored(row,required,{draft=false}={}){
+  if(!row||typeof row!=='object'||Array.isArray(row))
+    fail(409,'ATTACHMENT_UNAVAILABLE','The stored attachment failed its integrity check.');
+  const disposition=status(row,required);
+  if(disposition==='unavailable'||(!draft&&disposition!==null&&disposition!=='released'))
+    fail(409,'ATTACHMENT_QUARANTINED','This attachment is not released for download.');
+  try{verifiedBytes(row);}
+  catch{fail(409,'ATTACHMENT_UNAVAILABLE','The stored attachment failed its integrity check.');}
+}
 function download(row){
   try{
-    const name=cleanName(row.name),format=namedFormat(name);
-    if(!idPattern.test(row.id)||!shaPattern.test(row.sha256)||row.mediaType!==format.mediaType||name!==row.name)
-      throw new Error('Stored metadata mismatch.');
-    if(row.payloadProfile!==undefined&&(row.payloadProfile!=='large-pdf-v1'||format.extension!=='.pdf'||
-      row.size<=format.maxFileBytes||row.size>largePdfMaxBytes))throw Error('Stored attachment profile mismatch.');
-    const bytes=rawBytes(row.data,row.payloadProfile==='large-pdf-v1'?largePdfMaxBytes:format.maxFileBytes);
-    if(bytes.length!==row.size||digest(bytes)!==row.sha256)throw new Error('Stored bytes mismatch.');
-    // Uploaded data is validated before persistence and immutable once published.
-    // Revalidate bounded opaque file structure before download, never open or render.
+    const {name,format,bytes}=verifiedBytes(row);
+    // On access apply current format structure rules. Backups verify byte
+    // integrity without treating today's upload format policy as a migration.
     format.check(bytes);
-    return {filename:row.name,bytes};
+    return {filename:name,bytes};
   }catch{
     fail(409,'ATTACHMENT_UNAVAILABLE','The stored attachment failed its integrity check.');
   }
 }
-module.exports={rules,uploadRequestBytes,batchUploadRequestBytes,attachment,batch,metadata,download,queryPolicy,reviewPolicy,stage,assertAvailable,decide};
+module.exports={rules,uploadRequestBytes,batchUploadRequestBytes,attachment,batch,metadata,download,queryPolicy,reviewPolicy,stage,assertAvailable,decide,verifyStored};

@@ -27,7 +27,7 @@ workspace and cross-workspace denial before announcing the URL. It starts
 with two empty fictional workspaces and enables local identity administration,
 group and document scope, account-scoped rights delegation, manual attachment
 review, the larger-PDF upload profile, and SQLite-backed operator jobs, along with the supported synthetic
-portals. Accounts expire after eight hours. It does not start corporate SSO,
+portals. Each launch automatically stops after eight hours. It does not start corporate SSO,
 send external communications, or deploy anything. The optional `--port 4173`
 selects a specific loopback port; otherwise a free port is chosen. Existing
 demo, isolated JSON/SQLite, and corporate sign-in launchers are unchanged.
@@ -37,14 +37,43 @@ OS temporary directory, never in the source tree. Use your system's private
 temporary directory rather than a shared directory or network drive. On Unix
 the directory and access file have owner-only permissions; Windows uses the
 private temp directory's inherited permissions. Ctrl+C stops the release
-and removes the access file on graceful shutdown, leaving the database for
-local backup or inspection. A fresh launch does not re-open a prior run.
-Forced termination may leave the access file behind; remove the run directory
-when finished. Back up the database first if you need the fictional data.
+and removes the access file on graceful shutdown, leaving the database and
+private release profile for resume. Forced termination may leave the access
+file behind. Never share the private profile: it can recreate synthetic access
+codes and signing keys. Remove the whole run directory after the exercise
+unless you intend to resume it.
 
 For an install-free preflight that starts the same app, checks it, and cleans
 up without leaving a server or access file, run
 `npm run start:release -- --check` or `node start-release.js --check`.
+
+## Resume a stopped synthetic release
+
+Run this from a current source or extracted package. Replace the placeholder
+with the exact `runDirectory` from the original startup result:
+
+```sh
+npm run start:release -- --resume "/path/to/mvw-trust-release-EXAMPLE"
+```
+
+For PowerShell, the equivalent is
+`node .\start-release.js --resume "C:\path\to\mvw-trust-release-EXAMPLE"`.
+A successful resume reopens the same private SQLite file with a new local
+port by default. Sign in again; old browser sessions are not preserved.
+Synthetic account codes and receipt-signing keys are regenerated from the
+original owner-only profile, so existing account-scoped approvals, requester
+receipts, and pending work remain usable. Treat the profile and any regenerated
+codes as credentials. A fresh launch without `--resume` still starts empty.
+
+Only a recognized directory made by a resume-capable release can be resumed.
+This mode rejects arbitrary SQLite files, mismatched profiles/databases,
+unsafe linkage/permissions, and attempts to open a running release again. An OS-released lease prevents two listeners from
+sharing the same run; you do not need to delete lock files after interruption.
+If startup is refused, existing saved work is not reset. Restore or verify
+standalone backups through [backup and recovery](DURABLE-STORAGE.md); a
+database-only backup does not carry the synthetic identity profile or migrate
+old launches without a profile. This is local restart recovery, not cross-host
+disaster recovery or production hosting.
 
 ## Other install-free launch modes
 

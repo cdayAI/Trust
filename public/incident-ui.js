@@ -110,6 +110,16 @@ function renderIncidents(){
     const card=add(el('article',undefined,'module-record'),add(el('div',undefined,'row'),el('h3',row.title),badge(capitalize(row.stage))),
       el('p','Incident ID: '+row.id,'hint'),el('p','Affected scope: '+row.scope));
     card.id='work-record-'+row.id;
+    if(row.assessmentOrigin){
+      const origin=row.assessmentOrigin;
+      card.append(el('p','Linked to independently approved assessment revision '+origin.assessmentRevision+
+        ' · Questionnaire v'+origin.questionnaireVersion+' · Workflow v'+origin.workflowDefinitionVersion,'hint'));
+      if(localSession?.authenticated&&localSession.capabilities.views.includes('assessments')){
+        const source=button('View approved source assessment','button','secondary');
+        source.onclick=()=>openWorkTask({view:'assessments',recordId:origin.assessmentId,projectId:origin.projectId});
+        card.append(source);
+      }
+    }
     card.append(el('p',row.policyPin?'Pinned policy version '+row.policyPin.version+' · '+capitalize(row.scopeClass)+' scope':'Built-in routing (no policy version)'));
     if(row.severity)card.append(el('p','Severity: '+capitalize(row.severity)+' · '+capitalize(row.branch)+' investigation'));
     if(row.windows){

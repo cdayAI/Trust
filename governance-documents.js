@@ -4,6 +4,9 @@ const {maxBytes:largePdfMaxBytes}=require('./attachment-binary-batch');
 const attachments=require('./governance-document-attachments');
 const docsOf=s=>s.governanceDocuments??{revision:0,documents:[]};
 const kinds=['policy','evidence'];
+const uuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u;
+const isId=value=>typeof value==='string'&&uuid.test(value);
+const object=value=>value&&typeof value==='object'&&!Array.isArray(value);
 const linkKinds={risk:'Risk',control:'Control','rights-case':'Rights case',incident:'Incident'};
 function issue(status,code,message){throw Object.assign(new Error(message),{status,code})}
 function required(x,label,max){
@@ -11,6 +14,11 @@ function required(x,label,max){
   return x.trim();
 }
 function digest(content){return createHash('sha256').update(content).digest('hex')}
+function verifyText(v){
+  if(typeof v.content!=='string'||!v.content.trim()||v.content.length>5000||v.content.includes('\0')||
+    Buffer.byteLength(v.content)!==v.contentLength||digest(v.content)!==v.contentHash)
+    issue(409,'EDITION_UNAVAILABLE','Document text failed its integrity check.');
+}
 function candidates(s){
   return [
     ...(s.riskControls?.risks??[]).map(x=>({type:'risk',id:x.id,label:x.title})),
@@ -45,18 +53,24 @@ function view(s,actor,capabilities){
   return {revision:administrator?book.revision:null,kinds,linkKinds,attachmentRules,documents,targets:administrator?candidates(s):[],
     legacyRecords:administrator?(s.moduleRecords??[]).filter(x=>x.moduleId==='policies'):[]};
 }
-function versionFields(s,kind,body){
-  const title=required(body.title,'Fictional title',120),content=required(body.content,'Fictional text',5000);
-  const links=body.links;
-  if(!Array.isArray(links)||links.length>10||kind==='evidence'&&links.length===0)issue(422,'LINKS_REQUIRED','Choose up to ten case links; evidence needs at least one.');
-  const valid=new Set(candidates(s).map(x=>x.type+':'+x.id));
+function verifyLinks(s,kind,links,allowed){
+  if(!Array.isArray(links)||links.length>10||kind==='evidence'&&links.length===0)
+    issue(422,'LINKS_REQUIRED','Choose up to ten case links; evidence needs at least one.');
+  if(!links.length)return;
+  const valid=allowed??new Set(candidates(s).map(x=>x.type+':'+x.id));
   const used=new Set();
   for(const x of links){
-    if(!x||typeof x!=='object'||Array.isArray(x)||Object.keys(x).length!==2||!Object.hasOwn(x,'type')||!Object.hasOwn(x,'id')||
-       typeof x.type!=='string'||typeof x.id!=='string'||!valid.has(x.type+':'+x.id))issue(422,'INVALID_LINK','Choose existing fictional records with their correct types.');
+    if(!object(x)||Object.keys(x).length!==2||!Object.hasOwn(x,'type')||!Object.hasOwn(x,'id')||
+      typeof x.type!=='string'||typeof x.id!=='string'||!valid.has(x.type+':'+x.id))
+      issue(422,'INVALID_LINK','Choose existing fictional records with their correct types.');
     if(used.has(x.type+':'+x.id))issue(409,'DUPLICATE_LINK','A linked record may appear only once.');
     used.add(x.type+':'+x.id);
   }
+}
+function versionFields(s,kind,body){
+  const title=required(body.title,'Fictional title',120),content=required(body.content,'Fictional text',5000);
+  const links=body.links;
+  verifyLinks(s,kind,links);
   return {title,content,contentHash:digest(content),contentLength:Buffer.byteLength(content),links:structuredClone(links)};
 }
 const actionKeys={
@@ -94,6 +108,7 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
         audit(action,doc,v,{attachmentId:row.id,version:v.number});
         return result;
       }
+      verifyText(v);
       audit(action,doc,v,{hash:v.contentHash,version:v.number});
       return {id:doc.id,kind:doc.kind,version:redactVersion(v,manualReview),text:v.content,filename:'synthetic-'+doc.kind+'-v'+v.number+'.txt'};
     }
@@ -150,7 +165,9 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
         return;
       }
       if(['submit','publish'].includes(action)){
-        for(const target of v.attachments??[])attachments.assertAvailable(target,manualReview);
+        verifyText(v);
+        verifyLinks(s,doc.kind,v.links);
+        for(const target of v.attachments??[])attachments.verifyStored(target,manualReview);
       }
       if(action==='submit'){v.status='review';v.reviewNote=null}
       if(review){
@@ -179,12 +196,50 @@ function policyEdition(state,document,edition){
   const doc=docsOf(state).documents.find(x=>x.kind==='policy'&&x.id===document);
   const v=doc?.revisions.find(x=>x.id===edition&&x.status==='published');
   if(!v)return null;
-  if(digest(v.content)!==v.contentHash)issue(409,'EDITION_UNAVAILABLE','Published policy integrity check failed.');
+  verifyText(v);
   return {document:doc.id,edition:v.id,number:v.number,hash:v.contentHash,title:v.title,text:v.content};
 }
 function listPolicyEditions(state){
   return docsOf(state).documents.flatMap(doc=>doc.kind==='policy'?
     doc.revisions.filter(x=>x.status==='published').map(v=>({document:doc.id,edition:v.id,number:v.number,hash:v.contentHash,title:v.title})):[]);
+}
+function verifyEvidenceSnapshot(s){
+  if(!Object.hasOwn(s,'governanceDocuments'))return;
+  const bad=part=>{throw Error('Governance evidence integrity check failed ('+part+').');};
+  const book=s.governanceDocuments;
+  if(!object(book)||!Number.isSafeInteger(book.revision)||book.revision<0||!Array.isArray(book.documents))bad('document book');
+  let manualReview;
+  try{manualReview=attachments.queryPolicy(book);}catch{bad('attachment policy');}
+  // Historical editions retain their original typed links. The linked domains
+  // retain records across closure/archival, so a missing target is not valid.
+  let targets;
+  const docIds=new Set(),editionIds=new Set(),fileIds=new Set();
+  let bytes=0;
+  for(const doc of book.documents){
+    if(!object(doc)||!isId(doc.id)||docIds.has(doc.id)||!kinds.includes(doc.kind)||
+      !Array.isArray(doc.revisions)||!doc.revisions.length)bad('document identity');
+    docIds.add(doc.id);
+    for(const [index,v] of doc.revisions.entries()){
+      if(!object(v)||!isId(v.id)||editionIds.has(v.id)||v.number!==index+1||
+        !['draft','review','published'].includes(v.status)||(index<doc.revisions.length-1&&v.status!=='published'))
+        bad('edition identity');
+      editionIds.add(v.id);
+      try{verifyText(v);}catch{bad('edition text');}
+      try{
+        if(v.links?.length&&!targets)targets=new Set(candidates(s).map(x=>x.type+':'+x.id));
+        verifyLinks(s,doc.kind,v.links,targets);
+      }catch{bad('typed links');}
+      if(v.attachments===undefined)continue; // pre-attachment editions
+      if(!Array.isArray(v.attachments)||v.attachments.length>attachments.rules.maxFilesPerRevision)bad('attachment count');
+      for(const row of v.attachments){
+        if(!object(row)||!isId(row.id)||fileIds.has(row.id)||!Number.isSafeInteger(row.size)||row.size<1)bad('attachment metadata');
+        fileIds.add(row.id);bytes+=row.size;
+        if(fileIds.size>attachments.rules.maxFilesPerWorkspace||bytes>attachments.rules.maxWorkspaceBytes)bad('attachment budget');
+        try{attachments.verifyStored(row,manualReview,{draft:v.status==='draft'});}
+        catch(error){bad(error.code==='ATTACHMENT_QUARANTINED'?'attachment quarantine':'attachment bytes');}
+      }
+    }
+  }
 }
 function enableManualReview(state){
   const book=docsOf(state);
@@ -211,4 +266,4 @@ function provisionReview(isolated){
   }
   return new Set(selection);
 }
-module.exports={view,change,stateView,policyEdition,listPolicyEditions,enableManualReview,provisionReview};
+module.exports={view,change,stateView,policyEdition,listPolicyEditions,enableManualReview,provisionReview,verifyEvidenceSnapshot};

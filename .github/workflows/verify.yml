@@ -61,3 +61,21 @@ jobs:
             TRUST_TEST_OIDC_TLS_CERT="$fixture_tls/cert.pem" \
             TRUST_TEST_OIDC_TLS_KEY="$fixture_tls/key.pem" \
             RUN_BROWSER_SMOKE=1 npm run test:corporate
+  windows-launch:
+    name: Windows PowerShell isolated launch
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238 # v6.2.0
+        with:
+          node-version: 24.22.3
+      - name: Verify Node SQLite and the documented PowerShell launch
+        shell: pwsh
+        run: |
+          node .\scripts\runtime-check.js --sqlite
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node .\start-release.js --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
