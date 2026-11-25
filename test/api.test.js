@@ -58,6 +58,18 @@ test('fresh synthetic seed contains two vendors and only the AI vendor receives 
   assert.equal(state.handoff[0].attempts, 0);
 });
 
+test('JSON rejects malformed UTF-8 without saving replacement characters', async t => {
+  const {get,post,request}=await harness(t);
+  const before=await get();
+  const options={method:'POST',headers:{'Content-Type':'application/json','X-Demo-Actor':'analyst'}};
+  const invalid=Buffer.concat([Buffer.from('{"name":"Fictional '),Buffer.from([0xc3,0x28]),Buffer.from('"}')]);
+  const rejected=await request('projects',400,{...options,body:invalid});
+  assert.deepEqual(rejected.body,{error:'Invalid JSON.'});
+  assert.deepEqual(await get(),before);
+  const valid=await post('projects','analyst',{name:'Fictional résumé \ufffd'});
+  assert.equal(valid.projects.at(-1).name,'Fictional résumé \ufffd');
+});
+
 test('fresh intake, independent decision, failed mock handoff, successful retry and durable export', async t => {
   const { get, post, request, restart } = await harness(t);
   const start = await get();

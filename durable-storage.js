@@ -87,16 +87,13 @@ function rollbackBusy(error) {
 function openSqlite(file, { readOnly = false } = {}) {
   const filename = preparePath(file);
   const { DatabaseSync } = require('node:sqlite');
-  let fresh = false;
   if (!existing(filename)) {
     if (readOnly) throw new Error('SQLite storage does not exist.');
     fs.mkdirSync(path.dirname(filename), { recursive: true, mode: 0o700 });
     try {
       fs.closeSync(fs.openSync(filename, 'wx', 0o600));
-      fresh = true;
     } catch (error) {
-      if (error.code !== 'EEXIST') throw error;
-      if (!existing(filename)) throw new Error('Storage path changed during initialization.');
+      if (error.code !== 'EEXIST' || !existing(filename)) throw error;
     }
   }
   const db = new DatabaseSync(filename, { readOnly });
@@ -120,8 +117,11 @@ function openSqlite(file, { readOnly = false } = {}) {
   try {
     db.exec('PRAGMA busy_timeout = 5000; PRAGMA trusted_schema = OFF;');
     if (!readOnly) db.exec('PRAGMA synchronous = FULL;');
-    if (fresh) {
+    if (!readOnly && fs.statSync(filename).size === 0) {
+      // Another opener may finish initialization while this handle waits.
+      // An interrupted first launch can also leave the empty owner-only file.
       inTransaction('BEGIN IMMEDIATE', () => {
+        if (fs.statSync(filename).size !== 0) return;
         db.exec(`
           CREATE TABLE storage_mode (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),

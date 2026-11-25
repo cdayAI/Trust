@@ -8,6 +8,7 @@ const ownerIds=['analyst','case-operator'];
 const backupActor={id:'case-operator',name:'Case Operator (demo)',role:'rights-operator'};
 const policy={version:1,unit:'UTC calendar days',min:1,max:365,defaultDays:30};
 const statuses=['received','in-progress','fulfilled','closed-unverified'];
+const pendingExtension=row=>row.extensionRequests?.find(request=>request.status==='pending');
 function fail(status,code,message){throw Object.assign(new Error(message),{status,code});}
 function choice(value,list,label){
   if(!list.includes(value))fail(422,'INVALID_CHOICE','Select a valid '+label+'.');
@@ -111,7 +112,7 @@ function change(state,parts,actor,body,event,_assessments,account) {
   let details;
   if(['request-extension','approve-extension','reject-extension'].includes(action)){
     if(!account)return refuse(404,'EXTENSION_UNAVAILABLE','Extension review requires an isolated staff session.');
-    const pending=row.extensionRequests?.find(request=>request.status==='pending');
+    const pending=pendingExtension(row);
     if(action==='request-extension'){
       if(actor!==row.owner)return refuse(403,'OWNER_REQUIRED','Only the assigned case owner can request an extension.');
       if(Object.keys(body).some(key=>!['expectedRevision','reason'].includes(key))||!deadlines.extensionReasons.includes(body.reason))
@@ -145,7 +146,7 @@ function change(state,parts,actor,body,event,_assessments,account) {
     event(state,actor,'rights.case.'+action,null,row.id,{...details,from,to:row.status,revision:row.revision});
     return;
   }
-  if(['fulfill','close-unverified'].includes(action)&&row.extensionRequests?.some(request=>request.status==='pending'))
+  if(['fulfill','close-unverified'].includes(action)&&pendingExtension(row))
     return refuse(409,'EXTENSION_PENDING','Resolve the pending extension before closing this case.');
   try {
     assertKeys(body,['expectedRevision','note',...(action==='assign'?['owner']:[])]);
@@ -192,4 +193,4 @@ function change(state,parts,actor,body,event,_assessments,account) {
   row.updatedAt=now;
   event(state,actor,'rights.case.'+action,null,row.id,{...details,from,to:row.status,revision:row.revision});
 }
-module.exports={view,change,backupActor,portalModel,openStaffCase};
+module.exports={view,change,backupActor,portalModel,openStaffCase,pendingExtension};
