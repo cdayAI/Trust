@@ -143,6 +143,8 @@ pre{background:var(--surface);border-radius:10px}
   .grid{grid-template-columns:minmax(140px,180px) minmax(0,1fr)}
 }
 @media(max-width:900px) and (min-width:761px){.grid{grid-template-columns:1fr}}
+/* Reserve the desktop sticky header area when the browser scrolls keyboard focus into view. */
+@media(min-width:761px){html{scroll-padding-block-start:90px}}
 @media(max-width:760px){
   .top{position:relative;align-items:center;padding:11px 14px;gap:8px}
   .mark{width:35px;height:35px}

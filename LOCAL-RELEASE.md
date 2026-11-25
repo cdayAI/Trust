@@ -105,7 +105,10 @@ test is skipped.
 
 ## Other install-free launch modes
 
-Use Node.js 22.13.0 or newer. Node 24.22.3 is the pinned CI toolchain.
+Use Node.js 22.13.0 or newer. CI uses Node 24.22.3 for the full suite and also
+checks startup and migration reconciliation on the minimum Node 22.13.0
+build. Older supported runtimes may print the Node SQLite experimental
+notice on stderr; it does not change the launcher’s structured stdout.
 The demo and isolated launchers run without `npm install`. The optional
 [corporate sign-in mode](CORPORATE-SIGNIN.md) uses its own locked dependencies.
 With Node and its normally bundled npm, open a terminal in the source or

@@ -17,7 +17,17 @@ const base=join(__dirname,'..'),cli=join(base,'storage-cli.js');
 const fixture=join(base,'fixtures','fictional-transfer-v1.json');
 const workspace='migration-receiving';
 const copy=()=>structuredClone(source);
-const call=async(...args)=>JSON.parse((await command(process.execPath,[cli,...args],{cwd:base})).stdout);
+// Older supported Node builds announce experimental SQLite on stderr. Keep that
+// notice intact in the command and reject every other diagnostic in this test.
+const sqliteRuntimeNotice=/^\(node:\d+\) ExperimentalWarning: SQLite is an experimental feature and might change at any time\r?\n\(Use `node --trace-warnings \.\.\.` to show where the warning was created\)\r?\n$/;
+function assertCliStderr(value){
+  if(value!=='')assert.match(value,sqliteRuntimeNotice,'Unexpected migration CLI stderr.');
+}
+const call=async(...args)=>{
+  const {stderr,stdout}=await command(process.execPath,[cli,...args],{cwd:base});
+  assertCliStderr(stderr);
+  return JSON.parse(stdout);
+};
 async function room(t){
   const dir=await mkdtemp(join(tmpdir(),'trust-fixture-transfer-'));
   t.after(()=>rm(dir,{recursive:true,force:true}));
@@ -177,7 +187,7 @@ async function reported(args,code){
     return result;
   }catch(error){
     if(error.code!==code)throw error;
-    assert.equal(error.stderr,'');
+    assertCliStderr(error.stderr);
     return JSON.parse(error.stdout);
   }
 }
