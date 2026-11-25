@@ -174,9 +174,33 @@ bytes. No purge/disposition endpoint or policy enforcement is provided, and
 this local mechanism does not apply to external stores, old backups, or any
 legal preservation obligation.
 
+## Evidence disposition rehearsal
+
+A signed-in analyst can preview a **fictional, creation-based retention rule**
+on an exact published edition. The rule must already have been
+activated by a reviewer in **Retention**. The preview records the selected rule version,
+creation date, synthetic UTC as-of date, and projected treatment. A separate
+signed-in reviewer can record the rehearsal receipt. A rule that requires a
+closure date is refused because published editions have no recorded closure
+trigger. Rules and dates are test fixtures, not legal advice or a conclusion
+about what an organization should retain.
+
+Current holds, including release requests awaiting review, block preview and
+rehearsal. A changed hold history, superseded rule, outdated workspace
+revision, mismatched evidence, or previously used preview is refused. A new
+preview supersedes an older pending one only for that edition; at most one
+rehearsal can be recorded for a given edition and rule version. The receipt
+and relevant audit event commit together and survive verified backup/restore,
+even after a newer rule is published.
+
+The receipt records `changedEvidence: false` and `deleted: false`. No
+deletion, anonymization, archive transfer, unpublishing, or changes to text
+and attachment bytes are performed. There is no automated scheduling or
+integration with live systems.
+
 Run focused HTTP and browser journeys:
 
 ```sh
-node --test test/governance-document-attachments.test.js test/attachment-binary-batch.test.js test/evidence-holds.test.js
+node --test test/governance-document-attachments.test.js test/attachment-binary-batch.test.js test/evidence-holds.test.js test/evidence-disposition.test.js
 RUN_BROWSER_SMOKE=1 CHROMIUM_PATH=/path/to/chromium npm test
 ```

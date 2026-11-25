@@ -101,6 +101,8 @@ route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachmen
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/attachments/'+uuid+'/review',['reviewer']);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/evidence-hold/(?:place|request-release)',['analyst']);
 route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/evidence-hold/(?:approve-release|return-release)',['reviewer']);
+route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/evidence-disposition/preview',['analyst']);
+route('POST','governance-documents/records/'+uuid+'/revisions/'+uuid+'/evidence-disposition/rehearse',['reviewer']);
 route('POST','trust-center/(?:privacy|rights|controls)/(?:draft|submit|approve|return|publish|withdraw)',operators);
 route('POST','employee-attestations',operators);
 route('POST','training/(?:create|edit|submit|return|publish|assign|reset)',operators);

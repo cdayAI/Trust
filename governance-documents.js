@@ -3,6 +3,7 @@ const {createHash,randomUUID}=require('node:crypto');
 const {maxBytes:largePdfMaxBytes}=require('./attachment-binary-batch');
 const attachments=require('./governance-document-attachments');
 const evidenceHolds=require('./evidence-holds');
+const evidenceDisposition=require('./evidence-disposition');
 const authorship=require('./document-provenance');
 const docsOf=s=>s.governanceDocuments??{revision:0,documents:[]};
 const kinds=['policy','evidence'];
@@ -45,11 +46,14 @@ function view(s,actor,capabilities,account){
   const manualReview=attachments.queryPolicy(book);
   const administrator=actor==='analyst'||actor==='reviewer';
   const holds=administrator?evidenceHolds.byEdition(book):undefined;
+  const rehearsals=administrator?evidenceDisposition.byEdition(s,book,account,holds):undefined;
   const documents=book.documents.map(doc=>{
     const revisions=doc.revisions.filter(v=>permitted(s,doc,v,actor)).map(v=>{
       const projection=redactVersion(v,manualReview),authority=authorship.reviewStatus(s,doc,v,actor,account);
-      const hold=holds?.get(evidenceHolds.key(doc.id,v.id));
-      return {...projection,...(hold?{evidenceHold:hold}:{}),...(authority?{publicationAuthority:authority}:{})};
+      const editionKey=evidenceHolds.key(doc.id,v.id);
+      const hold=holds?.get(editionKey),rehearsal=rehearsals?.get(editionKey);
+      return {...projection,...(hold?{evidenceHold:hold}:{}),...(rehearsal?{evidenceRehearsal:rehearsal}:{}),
+        ...(authority?{publicationAuthority:authority}:{})};
     });
     if(!revisions.length)return null;
     const currentRevisionId=revisions.findLast(v=>v.status==='published')?.id??null;
@@ -58,7 +62,8 @@ function view(s,actor,capabilities,account){
   const attachmentRules=manualReview?{...attachments.rules,manualReview:true,
     ...(capabilities?.largePdf===true&&actor==='analyst'?{largePdfMaxBytes}:{})}:attachments.rules;
   return {revision:administrator?book.revision:null,kinds,linkKinds,attachmentRules,documents,targets:administrator?candidates(s):[],
-    ...(administrator?{evidenceHoldReasons:{titles:evidenceHolds.titles,actions:evidenceHolds.actions}}:{}),
+    ...(administrator?{evidenceHoldReasons:{titles:evidenceHolds.titles,actions:evidenceHolds.actions},
+      evidenceRetentionRules:evidenceDisposition.choices(s)}:{}),
     legacyRecords:administrator?(s.moduleRecords??[]).filter(x=>x.moduleId==='policies'):[]};
 }
 function verifyLinks(s,kind,links,allowed){
@@ -85,6 +90,7 @@ const actionKeys={
   create:['kind','title','content','links'],revise:['title','content','links'],edit:['title','content','links'],
   submit:[],publish:['note'],return:['note'],read:[],download:[],
   'evidence-hold':['reason','holdId'],
+  'evidence-disposition-preview':['scheduleId','scheduleVersion','asOf'],'evidence-disposition-rehearse':['previewId'],
   'attachment-upload':['filename','mediaType','data'],'attachment-upload-batch':['files'],'attachment-upload-binary':['files'],'attachment-review':['operation','sha256'],'attachment-remove':[],'attachment-download':[]
 };
 function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities){
@@ -94,6 +100,8 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
   let action=parts.length===2?'create':parts.length===4&&part==='revise'?'revise':null;
   if(part==='revisions'){
     if(parts.length===6&&['edit','submit','publish','return','read','download'].includes(operation))action=operation;
+    if(operation==='evidence-disposition'&&parts.length===7&&['preview','rehearse'].includes(attachmentId))
+      action='evidence-disposition-'+attachmentId;
     if(operation==='evidence-hold'&&parts.length===7&&Object.hasOwn(evidenceHolds.actions,attachmentId))action='evidence-hold';
     if(operation==='attachments'&&parts.length===6)action='attachment-upload';
     if(operation==='attachments'&&parts.length===7&&attachmentId==='batch')action='attachment-upload-batch';
@@ -124,6 +132,17 @@ function change(s,parts,actor,body,event,_vendorAssessments,account,capabilities
     }
     if(!Number.isSafeInteger(body.expectedRevision)||body.expectedRevision<0)issue(422,'REVISION_REQUIRED','Provide the current document workspace revision.');
     if(body.expectedRevision!==book.revision)issue(409,'STALE_REVISION','The document workspace changed. Reload before retrying.');
+    if(action.startsWith('evidence-disposition-')){
+      if(!doc||!v)issue(404,'RECORD_NOT_FOUND','That document revision was not found.');
+      if(v.status!=='published')issue(409,'EVIDENCE_REHEARSAL_EDITION','Choose an exact published edition.');
+      verifyText(v);
+      verifyLinks(s,doc.kind,v.links);
+      for(const row of v.attachments??[])attachments.verifyStored(row,manualReview);
+      const auditDetails=evidenceDisposition.transition(s,book,doc,v,attachmentId,actor,account,body,new Date().toISOString());
+      book.revision++;
+      audit('evidence-disposition.'+attachmentId,doc,v,{...auditDetails,revision:book.revision});
+      return;
+    }
     if(action==='evidence-hold'){
       if(!doc||!v)issue(404,'RECORD_NOT_FOUND','That document revision was not found.');
       if(v.status!=='published')issue(409,'EVIDENCE_HOLD_EDITION','Holds can only be placed on an exact published edition.');
@@ -279,6 +298,7 @@ function verifyEvidenceSnapshot(s){
     }
   }
   evidenceHolds.verify(book);
+  evidenceDisposition.verify(s,book);
 }
 function enableManualReview(state){
   const book=docsOf(state);

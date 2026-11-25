@@ -99,6 +99,9 @@ work password. Starting an isolated launcher again generates fresh codes.
 Run the launchers directly if npm is unavailable: `node server.js` and
 `node start-isolated.js`. Set `PORT` for a different loopback port if needed;
 with `PORT=0` the launcher chooses a free port and prints the actual URL.
+Optional `TRUST_ENABLE_LOCAL_*` flags accept `1` to enable, `0` to disable,
+or no setting. Other values stop the isolated launcher before it opens a
+listener or creates any access codes.
 
 ## Verify startup and recovery
 

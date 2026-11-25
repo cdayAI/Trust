@@ -110,4 +110,4 @@ function transition(book,doc,edition,operation,role,actor,body,now){
   return {holdId:row.id,reason:body.reason,holdStatus:row.status};
 }
 
-module.exports={transition,verify,byEdition,titles,actions,key};
+module.exports={transition,verify,byEdition,titles,actions,key,editionBinding:binding};

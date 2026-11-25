@@ -45,6 +45,17 @@ function view(state){
   return {...book,categories,triggerTypes,dispositions,current,
     legacyRecords:(state.moduleRecords??[]).filter(r=>r.moduleId==='retention')};
 }
+// Evidence rehearsals use the same active-per-category selector as the
+// retention workbench. Historical activated rules stay addressable for
+// verification after a newer version becomes current.
+function evidenceSchedules(state){
+  const book=bookOf(state);
+  return categories.map(category=>activeSchedule(book,category)).filter(Boolean);
+}
+function historicalEvidenceSchedule(state,id){
+  const records=bookOf(state).schedules.filter(row=>row.id===id&&row.status==='active');
+  return records.length===1&&categories.includes(records[0].category)?records[0]:undefined;
+}
 function scheduleFields(body){
   if(!Number.isSafeInteger(body.days)||body.days<1||body.days>36500)issue(422,'INVALID_PERIOD','Enter 1–36,500 calendar days.');
   return {title:nonempty(body.title,'Schedule title',120),trigger:choose(body.trigger,triggerTypes,'trigger'),
@@ -140,4 +151,4 @@ function change(state,parts,actor,body,event){
     throw Object.assign(e,{persistRefusal:true});
   }
 }
-module.exports={view,change};
+module.exports={view,change,evidenceSchedules,historicalEvidenceSchedule,evidenceDate:value=>date(value,'Evidence rehearsal date'),afterDays};

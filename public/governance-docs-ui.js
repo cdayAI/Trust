@@ -264,6 +264,42 @@ function evidenceHoldControls(card,path,edition,revision,reasons){
   }
   card.append(region);
 }
+function evidenceRehearsalControls(card,path,edition,revision,rules){
+  if(!localSession?.authenticated||!rules||edition.status!=='published'||!['analyst','reviewer'].includes(actor))return;
+  const preview=edition.evidenceRehearsal,hold=edition.evidenceHold;
+  const blocked=!!hold&&hold.status!=='released';
+  const region=add(el('section',undefined,'document-attachments'),el('h4','Evidence disposition rehearsal'),
+    el('p','Fictional retention rules only. This rehearsal does not change or delete evidence.','hint'));
+  if(blocked)region.append(el('p','An outstanding hold blocks this rehearsal.','hint'));
+  if(preview){
+    const {scheduleVersion,disposition,asOf,dueOn}=preview;
+    region.append(el('p','Pinned rule v'+scheduleVersion+' · fictional '+disposition+' · due '+dueOn+' · as of '+asOf,'hint'));
+    if(preview.status==='rehearsed')region.append(el('p','Rehearsal recorded · evidence retained. Receipt '+preview.result.id,'hint'));
+    else region.append(el('p','Preview awaiting independent rehearsal.','hint'));
+  }
+  const usable=rules.filter(rule=>rule.trigger==='created');
+  if(!usable.length)region.append(el('p','Activate a fictional creation-based retention rule to preview this edition.','hint'));
+  if(!blocked&&actor==='analyst'&&usable.length){
+    const field=rightsSelect('Fictional retention rule','scheduleId',usable.map(rule=>({
+      value:rule.id,label:rule.title+' · '+rule.category+' · v'+rule.version
+    })));
+    field.querySelector('select').setAttribute('aria-label','Fictional retention rule');
+    const dateField=labelled('Fictional as-of date','asOf','','input'),dateInput=dateField.querySelector('input');
+    dateInput.type='date';dateInput.min='2000-01-01';dateInput.max='2200-12-31';
+    const panel=docsPanel(region,'Preview evidence disposition');
+    docsForm(panel,path+'/evidence-disposition/preview',[field,dateField],'Preview evidence disposition',f=>({
+      scheduleId:f.get('scheduleId'),scheduleVersion:usable.find(rule=>rule.id===f.get('scheduleId'))?.version,asOf:f.get('asOf')
+    }),revision);
+  }
+  if(actor==='reviewer'&&preview?.status==='requested'){
+    const current=usable.some(rule=>rule.id===preview.scheduleId&&rule.version===preview.scheduleVersion);
+    if(!blocked&&(!current||preview.needsNewPreview))region.append(el('p','The pinned rule or hold history changed. Request a new preview.','hint'));
+    if(!preview.canReview)region.append(el('p','A different account must record the rehearsal.','hint'));
+    if(!blocked&&current&&!preview.needsNewPreview&&preview.canReview)
+      docsForm(region,path+'/evidence-disposition/rehearse',[],'Record rehearsal only',()=>({previewId:preview.id}),revision);
+  }
+  card.append(region);
+}
 function renderDocs(){
   const {documents,revision,targets,legacyRecords,attachmentRules}=docsData;
   const intro=add(el('section'),heading('Policies and evidence documents'),el('p','Use only original fictional text and attachments. Documents are role-scoped; nothing is published outside the local workspace.'));
@@ -304,6 +340,7 @@ function renderDocs(){
       card.append(readButton,download,output);
       attachmentControls(card,path,v,revision,attachmentRules);
       evidenceHoldControls(card,path,v,revision,docsData.evidenceHoldReasons);
+      evidenceRehearsalControls(card,path,v,revision,docsData.evidenceRetentionRules);
       if(mayAct&&actor==='analyst'&&v.status==='draft'){
         const edit=docsPanel(card,'Edit draft');
         const fields=documentFields(targets);

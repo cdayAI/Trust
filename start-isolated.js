@@ -6,10 +6,16 @@ const {randomBytes}=require('node:crypto');
 const {createServer}=require('./server');
 const {launchLocalServer}=require('./operational-health');
 const {codeHash}=require('./workspace-access');
+function localFlag(name){
+  const value=process.env[name];
+  if(value===undefined||value==='0')return false;
+  if(value==='1')return true;
+  throw Error(name+' must be 1, 0, or unset.');
+}
 launchLocalServer(()=>{
-const enableIdentityAdmin=process.env.TRUST_ENABLE_LOCAL_IDENTITY_ADMIN==='1';
-const enableGroupGovernance=process.env.TRUST_ENABLE_LOCAL_GROUP_GOVERNANCE==='1';
-const enableDirectoryLifecycle=process.env.TRUST_ENABLE_LOCAL_DIRECTORY_LIFECYCLE==='1';
+const enableIdentityAdmin=localFlag('TRUST_ENABLE_LOCAL_IDENTITY_ADMIN');
+const enableGroupGovernance=localFlag('TRUST_ENABLE_LOCAL_GROUP_GOVERNANCE');
+const enableDirectoryLifecycle=localFlag('TRUST_ENABLE_LOCAL_DIRECTORY_LIFECYCLE');
 if(enableDirectoryLifecycle&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first for local directory reconciliation.');
 const attachmentReviewSetting=process.env.TRUST_ATTACHMENT_REVIEW;
 if(attachmentReviewSetting!==undefined&&attachmentReviewSetting!=='manual')throw Error('TRUST_ATTACHMENT_REVIEW must be manual or unset.');
@@ -20,9 +26,10 @@ if(largePdfSetting&&(!process.env.TRUST_SQLITE_FILE||attachmentReviewSetting!=='
 const discoveryRunSetting=process.env.TRUST_DISCOVERY_REHEARSAL;
 if(discoveryRunSetting!==undefined&&discoveryRunSetting!=='1')throw Error('TRUST_DISCOVERY_REHEARSAL must be 1 or unset.');
 if(discoveryRunSetting&&!process.env.TRUST_SQLITE_FILE)throw Error('Discovery rehearsals require TRUST_SQLITE_FILE.');
-const enableRecordScope=process.env.TRUST_ENABLE_LOCAL_RECORD_SCOPE==='1';
+const enableRecordScope=localFlag('TRUST_ENABLE_LOCAL_RECORD_SCOPE');
 if(enableRecordScope&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first to opt into local document access scope.');
 if(enableGroupGovernance&&!enableIdentityAdmin)throw Error('Enable TRUST_ENABLE_LOCAL_IDENTITY_ADMIN first to opt into local group governance.');
+const enableRightsScope=localFlag('TRUST_ENABLE_LOCAL_RIGHTS_CASE_SCOPE');
 const root=mkdtempSync(join(tmpdir(),'trust-synthetic-'));
 const codes=join(root,'local-access.json');
 const requesterCodes=join(root,'requester-access.json');
@@ -59,7 +66,7 @@ const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,operationalE
   ...(discoveryRunSetting?{discoveryRunWorkspaces:['harbor','orchard']}:{}),
   ...(largePdfSetting?{largePdfAttachmentWorkspaces:['harbor','orchard']}:{}),
   ...(attachmentReviewSetting?{attachmentReviewWorkspaces:['harbor','orchard']}:{}),
-  ...(process.env.TRUST_ENABLE_LOCAL_RIGHTS_CASE_SCOPE==='1'?{rightsCaseScopeWorkspaces:['harbor','orchard']}:{}),
+  ...(enableRightsScope?{rightsCaseScopeWorkspaces:['harbor','orchard']}:{}),
   ...(enableRecordScope?{documentScopeWorkspaces:['harbor','orchard']}:{}),
   ...(enableDirectoryLifecycle?{directoryLifecycleWorkspaces:['harbor','orchard']}:{}),
   ...(enableGroupGovernance?{groupApplications:['harbor','orchard'].map(workspace=>({workspace,applications:[

@@ -146,6 +146,23 @@ test('invalid launcher configuration reports a fixed event and exits before open
   assert.equal((await readdir(dir)).includes('data'), false);
 });
 
+test('misspelled isolated security flags fail closed before creating codes or storage', async t => {
+  const dir = await scratch(t);
+  for (const key of [
+    'TRUST_ENABLE_LOCAL_IDENTITY_ADMIN', 'TRUST_ENABLE_LOCAL_DIRECTORY_LIFECYCLE',
+    'TRUST_ENABLE_LOCAL_GROUP_GOVERNANCE', 'TRUST_ENABLE_LOCAL_RECORD_SCOPE',
+    'TRUST_ENABLE_LOCAL_RIGHTS_CASE_SCOPE',
+  ]) {
+    const workbench = launch(t, 'start-isolated.js', dir, {[key]: 'true'});
+    assert.deepEqual(await workbench.closed, [1, null], key);
+    assertEvents(workbench.events(), ['startup_failed']);
+    assert.deepEqual(await readdir(dir), [], key);
+  }
+  const workbench = launch(t, 'start-isolated.js', dir, {TRUST_ENABLE_LOCAL_RECORD_SCOPE: '0'});
+  await workbench.started;
+  assert.deepEqual(await workbench.stop(), [0, null]);
+});
+
 test('configuration readiness checks the loopback listener and readable workbench assets', async t => {
   const dir = await scratch(t);
   const asset = join(dir, 'asset');
