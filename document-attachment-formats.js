@@ -2,6 +2,7 @@
 const {inflateRawSync,crc32}=require('node:zlib');
 const {posix}=require('node:path');
 const {odfTypes,checkOpenDocument}=require('./opendocument-attachment-profile');
+const {checkSavedEmail,maxFileBytes:emlLimit}=require('./saved-email-profile');
 const KiB=1024, MiB=1024*KiB;
 const utf8=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
 const ascii=(buffer,start,end)=>buffer.toString('latin1',start,end);
@@ -422,6 +423,7 @@ add(['.json'],'application/json','JSON',json,MiB,['text/json','text/plain']);
 add(['.jsonl','.ndjson'],'application/x-ndjson','JSON Lines',jsonLines,MiB,['application/jsonl','application/json','application/ndjson','text/jsonl','text/plain']);
 add(['.md','.markdown'],'text/markdown','Markdown',markdown,MiB,['text/x-markdown','text/plain']);
 add(['.log'],'text/plain','Plain log',text,MiB,['text/x-log']);
+add(['.eml'],'message/rfc822','Plain fictional saved email',checkSavedEmail,emlLimit,['text/plain']);
 add(['.pdf'],'application/pdf','PDF',pdf);
 for(const [extension,[,,,name]] of Object.entries(officeRules)){
   const kind={document:'Word',workbook:'Excel',presentation:'PowerPoint'}[name];

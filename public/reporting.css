@@ -14,3 +14,12 @@
 .report-run-history ul{list-style:none;padding:0;display:grid;gap:.65rem}
 .report-run-history li{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.6rem;border:1px solid var(--line);border-radius:.85rem;padding:.75rem}
 .report-run-history li p{margin:.25rem 0}
+
+.report-range-error{grid-column:1/-1;margin:.25rem 0;font-weight:650}
+details.report-run-history>summary{
+  color:#14314d;background:#f5faff;border:1px solid var(--line);
+  border-radius:.85rem;padding:.65rem .75rem
+}
+@media(forced-colors:active){
+  details.report-run-history>summary{color:CanvasText;background:Canvas;border-color:CanvasText}
+}

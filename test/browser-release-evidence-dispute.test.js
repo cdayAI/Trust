@@ -143,7 +143,7 @@ test('composed release Chromium: evidence hold dispute blocks stale disposal, th
   }
   async function holdAction(p,name,route,reason,state){
     const form=await disclosure(hold(p),name);
-    await choose(form,'Fictional hold reason',reason);
+    await choose(form,'Fictional hold reason for '+name,reason);
     await post(p,form,name,'/evidence-hold/'+route,200,undefined,()=>see(hold(p),state));
   }
   async function previewCheck(asOf,status,code){
@@ -226,4 +226,127 @@ test('composed release Chromium: evidence hold dispute blocks stale disposal, th
   assert.equal(rehearsed[0].account,f.seats.reviewer.id);
   assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
   t.diagnostic(JSON.stringify({activated:out.length,out}));
+});
+
+test('composed release Chromium: populated evidence and reporting forms have scoped names, focus, range errors and contrast',{
+  skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Requires pinned axe-core and Playwright Chromium',timeout:55_000
+},async t=>{
+  const f=await setup(t),axe=require('axe-core'),{chromium}=require('playwright');
+  const tags=['wcag2a','wcag2aa','wcag21a','wcag21aa'],scans=[];
+  const editionPath=base+'/records/'+f.doc.id+'/revisions/'+f.edition.id;
+  async function hold(action,fields){
+    const book=(await f.api(base,f.a)).data;
+    return (await f.api(editionPath+'/evidence-hold/'+action,f.a,{...fields,expectedRevision:book.revision})).data.documents[0].revisions[0].evidenceHold;
+  }
+  const placed=await hold('place',{reason:'audit-review'});
+  await hold('request-release',{reason:'review-complete',holdId:placed.id});
+  const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
+  t.after(()=>browser.close());
+  const page=await browser.newPage({viewport:{width:1440,height:1000},reducedMotion:'reduce'});
+  const errors=[],external=[];
+  let liveReportRequests=0;
+  page.setDefaultTimeout(6500);page.on('pageerror',err=>errors.push(err.message));
+  await page.route('**/*',route=>{
+    const url=new URL(route.request().url());
+    if(url.origin!==f.url){external.push(url.origin);return route.abort();}
+    if(url.pathname==='/api/reporting'&&route.request().method()==='GET')liveReportRequests++;
+    return route.continue();
+  });
+  await page.context().addInitScript({content:axe.source});
+  async function solid(enabled){
+    const toggle=b(page,'Solid surfaces');
+    if((await toggle.getAttribute('aria-pressed')==='true')!==enabled)await toggle.press('Enter');
+    assert.equal(await toggle.getAttribute('aria-pressed'),String(enabled));
+  }
+  async function scan(selector,state,mode){
+    const result=await page.evaluate(async({selector,tags})=>{
+      const r=await axe.run(document.querySelector(selector),{runOnly:{type:'tag',values:tags}});
+      const issues=rules=>rules.map(rule=>({id:rule.id,nodes:rule.nodes.map(node=>({target:node.target,reason:node.failureSummary}))}));
+      return {violations:issues(r.violations),incomplete:issues(r.incomplete),passedRules:r.passes.map(rule=>rule.id)};
+    },{selector,tags});
+    scans.push({state,mode,...result});
+    assert.deepEqual(result.violations,[],state+' '+mode);
+    assert.deepEqual(result.incomplete,[],state+' '+mode+' undecided automatic checks');
+    assert.ok(result.passedRules.includes('color-contrast'),state+' '+mode+' contrast evaluated');
+  }
+  await page.goto(f.url);
+  const seat=f.seats.reviewer;
+  await page.getByLabel('Test account').fill(seat.id);
+  await page.getByLabel('Workspace ID').fill(workspace);
+  await page.getByLabel('Local access code').fill(seat.code);
+  await b(page,'Sign in').press('Enter');
+  await b(page,'Policies and documents').press('Enter');
+  const card=page.locator('#work-record-'+f.edition.id),holdPane=card.locator('section').filter({
+    has:page.getByRole('heading',{name:'Evidence preservation hold',exact:true})
+  });
+  const waiting='Hold active · release awaiting independent review';
+  await see(holdPane,waiting);
+  for(const action of ['Approve hold release','Keep evidence hold']){
+    await exact(holdPane,action).press('Space');
+    const form=holdPane.getByRole('form',{name:action+' for '+title+' · revision 1',exact:true});
+    const reason=holdPane.getByRole('combobox',{name:'Fictional hold reason for '+action,exact:true});
+    assert.equal(await reason.count(),1);
+    assert.equal(await form.getByRole('combobox',{name:'Fictional hold reason for '+action,exact:true}).count(),1);
+    assert.equal(await b(form,action).count(),1);
+  }
+  assert.equal(await holdPane.getByRole('combobox',{name:'Fictional hold reason',exact:true}).count(),0);
+  await solid(false);await scan('#work-record-'+f.edition.id,'Evidence hold: both decision forms expanded','glass');
+  await solid(true);await scan('#work-record-'+f.edition.id,'Evidence hold: both decision forms expanded','solid');
+
+  const keep=exact(holdPane,'Keep evidence hold'),reason=holdPane.getByRole('combobox',{name:'Fictional hold reason for Keep evidence hold',exact:true});
+  await keep.focus();await page.keyboard.press('Tab');
+  assert.equal(await reason.evaluate(el=>el===document.activeElement),true);
+  await page.keyboard.press('Tab');
+  assert.equal(await b(holdPane,'Keep evidence hold').evaluate(el=>el===document.activeElement),true);
+  await page.keyboard.press('Enter');
+  await see(holdPane,'Hold active');
+  const holdHeading=holdPane.getByRole('heading',{name:'Evidence preservation hold',exact:true});
+  assert.equal(await holdHeading.evaluate(el=>el===document.activeElement),true);
+  assert.equal(await holdHeading.evaluate(el=>document.getElementById(el.getAttribute('aria-describedby')).textContent),'Hold active');
+
+  await b(page,'Reporting').press('Enter');
+  const report=page.locator('#report-view');
+  await shown(report,'Report results');
+  const results=report.getByText('Matching workflow records',{exact:true}).locator('..').locator('strong');
+  assert.equal(await results.innerText(),'2');
+  for(const name of ['Report dataset','Report workflow','Report stage','Group report by'])
+    assert.equal(await report.getByRole('combobox',{name,exact:true}).count(),1);
+  const from=report.getByLabel('Start date (UTC)',{exact:true}),end=report.getByLabel('End date (UTC)',{exact:true});
+  assert.equal(await from.count(),1);assert.equal(await end.count(),1);
+  for(const mode of ['solid','glass']){
+    await solid(mode==='solid');
+    await scan('#report-view','Reporting: populated filters and result table',mode);
+    const ratio=await report.locator('summary').filter({hasText:'Local report scheduling'}).evaluate(node=>{
+      const style=getComputedStyle(node);
+      const luminance=rgb=>rgb.match(/\d+(?:\.\d+)?/g).slice(0,3).map(x=>Number(x)/255).map(c=>c<=.04045?c/12.92:((c+.055)/1.055)**2.4)
+        .reduce((total,c,i)=>total+c*[.2126,.7152,.0722][i],0);
+      const fg=luminance(style.color),bg=luminance(style.backgroundColor);
+      return (Math.max(fg,bg)+.05)/(Math.min(fg,bg)+.05);
+    });
+    assert.ok(ratio>=4.5,'Schedule summary text '+ratio.toFixed(2)+':1');
+  }
+  await from.fill('2199-12-31');await end.fill('2000-01-01');
+  const before=liveReportRequests;
+  await b(report,'Apply report filters').press('Enter');
+  const error=report.getByRole('alert');
+  await see(error,'The start date must be on or before the end date.');
+  assert.equal(await end.getAttribute('aria-invalid'),'true');
+  assert.equal(await end.getAttribute('aria-describedby'),await error.getAttribute('id'));
+  assert.equal(await end.evaluate(el=>el===document.activeElement),true);
+  assert.equal(liveReportRequests,before);
+  assert.equal(await results.innerText(),'2');
+  for(const mode of ['glass','solid']){
+    await solid(mode==='solid');
+    await scan('#report-view','Reporting: reversed date range error visible',mode);
+  }
+  await from.fill('2000-01-01');await end.fill('2199-12-31');
+  assert.equal(await end.getAttribute('aria-invalid'),null);
+  assert.equal(await end.getAttribute('aria-describedby'),null);
+  assert.equal(await error.count(),0);
+  await b(report,'Apply report filters').press('Enter');
+  await see(page,'Report updated. 2 matched.');
+  assert.equal(await b(report,'Apply report filters').evaluate(el=>el===document.activeElement),true);
+  assert.equal(liveReportRequests,before+1);
+  assert.deepEqual(errors,[]);assert.deepEqual(external,[]);
+  t.diagnostic(JSON.stringify({axeVersion:axe.version,tags,scans}));
 });

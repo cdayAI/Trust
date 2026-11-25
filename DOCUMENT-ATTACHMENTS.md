@@ -15,9 +15,10 @@ a file contains real data.
 | Printable UTF-8 text and logs | `.txt`, `.log` |
 | Tabular or structured UTF-8 data | `.csv`, `.tsv`, `.json`, `.jsonl`, `.ndjson` |
 | Plain Markdown | `.md`, `.markdown` |
+| Single-part fictional saved email | `.eml` |
 | Raster images | `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.bmp`, `.tif`, `.tiff` |
 
-Limits are 16 KiB per TXT, 1 MiB per other file, and up to four files and
+Limits are 16 KiB per TXT, 32 KiB per EML, 1 MiB per other file, and up to four files and
 4 MiB combined per upload. Each revision can hold four attachments. Each
 workspace can hold up to 256 files and 8 MiB of raw attachment data; old
 published revisions count toward these limits. Only the exact versioned
@@ -53,13 +54,51 @@ use CSV for static sheet values. Other OpenDocument formats are not accepted.
 WebP is limited to nonanimated images, BMP to supported uncompressed DIB
 variants, and TIFF to classic TIFF. Raster images are inspected structurally,
 never decoded or previewed. Legacy Office (`.doc`, `.xls`, `.ppt`), RTF, Apple
-iWork, and saved email are not accepted: these formats can carry macros, nested
-resources, embedded objects, or links this validator does not inspect. Convert
-these to PDF, macro-free modern Office, or plain text. HTML, SVG, executables,
+iWork, Outlook `.msg`, and mailbox archives are not accepted: these formats
+can carry macros, nested resources, embedded objects, or links this validator
+does not inspect. Convert unsupported files to PDF, macro-free modern Office,
+or plain text. HTML, SVG, executables,
 scripts, encrypted or macro-enabled Office, and arbitrary archives are also
 unsupported.
 PDF checks are structural and reject some visible active actions, but are not
 a sanitizer. **Format checks do not establish that a file is safe to open.**
+
+### Fictional EML profile
+
+The accepted subset of [Internet Message Format](https://www.rfc-editor.org/rfc/rfc5322)
+and [MIME](https://www.rfc-editor.org/rfc/rfc2045) is intentionally limited to
+single-part US-ASCII `text/plain` with literal `7bit` transfer encoding.
+Use one bare address each in `From` and `To`, under the reserved
+[`.invalid` domain](https://www.rfc-editor.org/rfc/rfc2606). The other
+required headers are `Date` (matching weekday and literal UTC offset
+`+0000`), `Subject`, `MIME-Version: 1.0`, `Content-Type` and
+`Content-Transfer-Encoding`. An optional `Message-ID` must also be fictional
+and under `.invalid`. The file uses consistently LF or CRLF line endings
+and a blank line before the body.
+
+```text
+From: analyst@fixture.invalid
+To: reviewer@fixture.invalid
+Date: Mon, 06 Apr 2026 14:30:00 +0000
+Subject: Fictional evidence note
+MIME-Version: 1.0
+Content-Type: text/plain; charset=us-ascii
+Content-Transfer-Encoding: 7bit
+
+Fictional evidence note.
+This saved message is for a local test.
+```
+
+Headers may not be folded or repeated. HTML, MIME multipart and embedded
+messages, attachments, quoted-printable/base64 email encodings, remote
+resource references, and routing/automatic mail/receipt headers are refused.
+Subject and body accept only simple ASCII prose, not explicit links,
+email addresses, paths, or markup. This is not a sanitizer for real mail
+and rejects many otherwise valid client exports. Use a trusted local editor
+to copy only fictional plain text to TXT or print to PDF if an export is
+unsupported. The app stores permitted EML bytes unchanged and provides only
+forced download. It does not preview, launch a mail client, fetch a link,
+or send mail.
 
 Uploads require the current document workspace revision. The batch endpoint
 validates every otherwise eligible file and commits the entire selection once

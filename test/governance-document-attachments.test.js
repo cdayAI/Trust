@@ -248,7 +248,7 @@ test('browser: governance file picker enforces limits and uploads, downloads, re
 });
 
 const mediaTypes={
-  bmp:'image/bmp',csv:'text/csv',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  eml:'message/rfc822',bmp:'image/bmp',csv:'text/csv',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   gif:'image/gif',jpg:'image/jpeg',jpeg:'image/jpeg',json:'application/json',
   jsonl:'application/x-ndjson',ndjson:'application/x-ndjson',md:'text/markdown',markdown:'text/markdown',log:'text/plain',
   odt:'application/vnd.oasis.opendocument.text',ods:'application/vnd.oasis.opendocument.spreadsheet',
@@ -271,6 +271,15 @@ formatSamples.set('fictional.ndjson',Buffer.from('{"id":"SYN-0001","state":"fict
 formatSamples.set('fictional.md',Buffer.from('# Fictional report\r\n\r\n- Review A\r\n- **Review B**\r\n'));
 formatSamples.set('fictional.markdown',Buffer.from('# Fictional acceptance\n\n| Evidence | Outcome |\n| --- | --- |\n| Test | Passed |\n'));
 formatSamples.set('fictional.log',Buffer.from('2026-11-25T05:01:00Z INFO synthetic checks completed\n'));
+
+const mailHeaders=[
+  'From: analyst@fixture.invalid','To: reviewer@fixture.invalid','Date: Mon, 06 Apr 2026 14:30:00 +0000',
+  'Subject: Fictional evidence note','MIME-Version: 1.0','Content-Type: text/plain; charset=us-ascii',
+  'Content-Transfer-Encoding: 7bit','Message-ID: <synthetic-note@fixture.invalid>'
+];
+const mailBody=['Fictional evidence note.','No email will be sent.',''];
+const eml=(headers=mailHeaders,body=mailBody,newline='\r\n')=>Buffer.from([...headers,'',...body].join(newline));
+formatSamples.set('fictional.eml',eml());
 
 function formatPayload(filename,bytes,mediaType=mediaTypes[filename.split('.').at(-1)]??''){
   return {filename,mediaType,data:bytes.toString('base64')};
@@ -296,6 +305,85 @@ test('attachment allowlist accepts real byte structures by extension with known 
   assert.throws(()=>attachmentPolicy.attachment(formatPayload('limit.csv',Buffer.concat([boundary,Buffer.from('a')])),book,version),{status:413});
 });
 
+test('synthetic saved email profile accepts only bounded literal plain-text messages',()=>{
+  const v={attachments:[]},book={documents:[{revisions:[v]}]};
+  const save=(bytes,mime)=>attachmentPolicy.attachment(formatPayload('fictional.eml',bytes,mime),book,v);
+  for(const bytes of [eml(),eml(mailHeaders.slice(0,-1),mailBody,'\n'),
+    eml(mailHeaders.map(row=>row.replace('charset=us-ascii','charset="US-ASCII"')))]){
+    for(const type of ['message/rfc822','text/plain','']){
+      const row=save(bytes,type);
+      assert.equal(row.mediaType,'message/rfc822');
+      assert.deepEqual(attachmentPolicy.download(row).bytes,bytes);
+    }
+  }
+  assert.equal(attachmentPolicy.rules.formats.find(f=>f.extension==='.eml').maxFileBytes,32*1024);
+  assert.throws(()=>save(eml(),'text/html'),{code:'ATTACHMENT_TYPE_MISMATCH'});
+  assert.throws(()=>save(Buffer.alloc(32*1024+1,65)),{code:'ATTACHMENT_TOO_LARGE'});
+  for(const extension of ['msg','mbox','oft'])
+    assert.throws(()=>attachmentPolicy.attachment(formatPayload('fictional.'+extension,eml()),book,v),{code:'ATTACHMENT_TYPE_UNSUPPORTED'});
+  const header=(prefix,value,body=mailBody)=>eml(mailHeaders.map(row=>row.startsWith(prefix+':')?prefix+': '+value:row),body);
+  const append=(line,body=mailBody)=>eml([...mailHeaders,line],body);
+  const refused=[
+    header('Content-Type','text/html; charset=us-ascii',['<p>Fictional markup</p>']),
+    header('Content-Type','multipart/mixed; boundary="fictional"',['--fictional','Example part']),
+    header('Content-Type','message/rfc822',['Nested example']),
+    header('Content-Type','text/plain; charset=us-ascii; format=flowed'),
+    header('Content-Type','text/plain; charset=utf-8'),
+    header('Content-Transfer-Encoding','base64',['RmljdGlvbmFs']),
+    header('Content-Transfer-Encoding','quoted-printable',['Fictional=20example']),
+    header('Content-Transfer-Encoding','8bit'),
+    header('From','real@example.com'),header('To','<reviewer@fixture.invalid>'),
+    header('To','reviewer@fixture.invalid, second@fixture.invalid'),header('From','Fictional Person <person@fixture.invalid>'),
+    header('Message-ID','<fixture@example.com>'),header('Message-ID','<one@fixture.invalid> <two@fixture.invalid>'),
+    header('Date','Tue, 06 Apr 2026 14:30:00 +0000'),header('Date','Mon, 06 Apr 2026 14:30:00 -0500'),
+    header('Date','Mon, 31 Apr 2026 14:30:00 +0000'),header('Date','Mon, 06 Apr 2026 24:00:00 +0000'),
+    header('Subject','=?US-ASCII?Q?Fictional?='),header('Subject','Fictional example.invalid'),
+    append('Content-Disposition: attachment; filename="fictional.txt"'),
+    append('Content-Location: https://example.invalid'),append('X-Unsent: 1'),append('Auto-Submitted: auto-replied'),
+    append('Disposition-Notification-To: reply@fixture.invalid'),append('Reply-To: reply@fixture.invalid'),
+    append('List-Unsubscribe: <mailto:list@fixture.invalid>'),append('Received: fictional'),
+    append('subject: Duplicate'),append(' content folded'),append('Cc: copy@fixture.invalid'),
+    eml(mailHeaders.slice(1)),eml(mailHeaders,['   ']),eml(mailHeaders,['No unsafe markup <em>in this fixture</em>']),
+    eml(mailHeaders,['See https://example.invalid']),eml(mailHeaders,['Visit example.invalid']),
+    eml(mailHeaders,['Send to reply@fixture.invalid']),eml(mailHeaders,['Call 123 456 7890']),
+    eml(mailHeaders,['\\fictional\path']),eml(mailHeaders,['--fictional']),
+    eml(mailHeaders,['Fictional non ASCII Café']),eml(mailHeaders,['Fictional NUL \0 injected']),
+    eml(mailHeaders,['x'.repeat(1000)]),eml(mailHeaders,Array(513).fill('Fictional')),
+    Buffer.from(eml().toString().replace('\r\n','\n')),Buffer.from(eml().toString().replace('\r\n','\r')),
+    Buffer.from(eml().toString().replace('From: ','From:')),Buffer.from(eml().toString().replace('\r\n\r\n','\r\n'))
+  ];
+  for(const [i,bytes] of refused.entries())assert.throws(()=>save(bytes),{code:'ATTACHMENT_CONTENT_INVALID'},'EML refusal '+i);
+});
+
+test('mixed EML batch refuses all files on bad mail, then returns allowed original bytes as opaque download',async t=>{
+  const f=await fixture(t,'sqlite'),author=await f.login(roles[0]),reviewer=await f.login(roles[1]);
+  const create=collection+'/records?workspace=alpha';
+  const {data:state}=await f.request(create,200,{cookie:author,body:{expectedRevision:0,...doc}});
+  const d=state.documents[0],v=d.revisions[0],prefix=collection+'/records/'+d.id+'/revisions/'+v.id+'/attachments';
+  const route=prefix+'/batch?workspace=alpha';
+  const allowed=eml(),blocked=eml(mailHeaders.map(line=>line.replace('7bit','base64')),['RmljdGlvbmFs']);
+  const note=formatPayload('fictional.txt',Buffer.from(original));
+  const post=(files,status)=>f.request(route,status,{cookie:author,body:{expectedRevision:state.revision,files}});
+  const refusal=(await post([note,formatPayload('fictional.eml',blocked),formatPayload('fictional-copy.eml',allowed)],415)).data;
+  assert.equal(refusal.code,'ATTACHMENT_BATCH_INVALID');
+  assert.deepEqual(refusal.fileErrors.map(({index,code})=>[index,code]),[[1,'ATTACHMENT_CONTENT_INVALID']]);
+  const rejected=(await f.request(collection+'?workspace=alpha',200,{cookie:author})).data;
+  assert.deepEqual(rejected.documents[0].revisions[0].attachments,[]);
+  assert.equal(rejected.revision,state.revision);
+  const saved=(await post([note,formatPayload('fictional.eml',allowed)],200)).data;
+  assert.equal(saved.revision,state.revision+1);
+  const [textRow,mail]=saved.documents[0].revisions[0].attachments;
+  assert.equal(textRow.name,'fictional.txt');
+  assert.equal(mail.mediaType,'message/rfc822');
+  assert.doesNotMatch(JSON.stringify(saved),/analyst@fixture|Fictional evidence note/);
+  const {response,data}=await f.request(prefix+'/'+mail.id+'/download?workspace=alpha',200,{cookie:reviewer,body:{}});
+  assert.deepEqual(data,allowed);
+  assert.equal(response.headers.get('content-disposition'),'attachment; filename="fictional.eml"');
+  assert.equal(response.headers.get('content-type'),'application/octet-stream');
+  assert.equal(response.headers.get('x-content-type-options'),'nosniff');
+  assert.match(response.headers.get('content-security-policy'),/^sandbox/);
+});
+
 test('everyday data and text formats reject non-documents, unsupported active content, malformed records, and misleading types',()=>{
   const version={attachments:[]},book={documents:[{revisions:[version]}]};
   const save=(name,data,mime)=>attachmentPolicy.attachment(formatPayload(name,
@@ -315,8 +403,9 @@ test('everyday data and text formats reject non-documents, unsupported active co
   ])assert.throws(()=>save(filename,data),{code:'ATTACHMENT_CONTENT_INVALID'},filename);
   assert.throws(()=>save('fictional.json','{"pass":true}','application/pdf'),{code:'ATTACHMENT_TYPE_MISMATCH'});
   assert.throws(()=>save('fictional.json',formatSamples.get('fictional.pdf')),{code:'ATTACHMENT_CONTENT_INVALID'});
+  assert.throws(()=>save('fictional.eml','{"fictional":true}'),{code:'ATTACHMENT_CONTENT_INVALID'});
   for(const name of ['fictional.rtf','fictional.odg','fictional.odf','fictional.odb','fictional.fodt','fictional.pages','fictional.numbers',
-    'fictional.key','fictional.eml','fictional.xml','fictional.html','fictional.svg','fictional.json.js']){
+    'fictional.key','fictional.xml','fictional.html','fictional.svg','fictional.json.js']){
     assert.throws(()=>save(name,'{"fictional":true}'),{code:'ATTACHMENT_TYPE_UNSUPPORTED'},name);
   }
 });

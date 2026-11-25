@@ -46,7 +46,7 @@ function rawBytes(data,limit,binary=false){
 }
 function namedFormat(name){
   const format=formats.get(name.slice(name.lastIndexOf('.')));
-  if(!format)fail(415,'ATTACHMENT_TYPE_UNSUPPORTED','Choose a supported PDF, modern Office, static OpenDocument, text/data, or raster image file.');
+  if(!format)fail(415,'ATTACHMENT_TYPE_UNSUPPORTED','Choose a supported PDF, modern Office, static OpenDocument, plain fictional EML, text/data, or raster image file.');
   return format;
 }
 function prepare(body,binary=false){

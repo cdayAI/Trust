@@ -196,7 +196,7 @@ test('Chromium shows exact-edition hold, analyst request and independent release
   async function act(label,reason){
     const panel=page.locator('details').filter({has:page.locator('summary').getByText(label,{exact:true})});
     await panel.locator('summary').click();
-    await panel.getByLabel('Fictional hold reason',{exact:true}).selectOption(reason);
+    await panel.getByLabel('Fictional hold reason for '+label,{exact:true}).selectOption(reason);
     await panel.getByRole('button',{name:label,exact:true}).click();
   }
   await login('alice');

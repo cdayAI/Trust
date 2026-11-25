@@ -32,13 +32,16 @@ async function docsPost(path,body,success,failure,binary=false){
 function docsPanel(parent,label){
   const panel=add(el('details'),el('summary',label));parent.append(panel);return panel;
 }
-function docsForm(parent,path,fields,caption,payload,revision){
+function docsForm(parent,path,fields,caption,payload,revision,afterRender){
   const form=add(el('form'),...fields,button(caption,'submit'));
   form.onsubmit=e=>{
     e.preventDefault();
-    docsPost(path,{...payload(new FormData(form)),expectedRevision:revision},data=>{docsData=data;renderDocs();notice('Document workspace updated.')});
+    docsPost(path,{...payload(new FormData(form)),expectedRevision:revision},data=>{
+      docsData=data;renderDocs();notice('Document workspace updated.');afterRender?.();
+    });
   };
   parent.append(form);
+  return form;
 }
 function documentFields(targets){
   const content=labelled('Original fictional text','content','');
@@ -105,8 +108,8 @@ function attachmentForm(path,revision,rules,remaining){
   const drop=add(el('div',undefined,'attachment-drop-zone'),
     add(el('label','Fictional attachments'),picker),
     el('p','Choose files or drop them here. A new selection replaces the previous one.','hint'));
-  const form=add(el('form'),drop,el('p','PDF, Word, Excel, PowerPoint, static OpenDocument, TXT, CSV, TSV, JSON, JSON Lines, Markdown, LOG and common raster images. Up to '+
-    attachmentSize(rules.maxFileBytes)+' per file (16 KiB for TXT'+
+  const form=add(el('form'),drop,el('p','PDF, Word, Excel, PowerPoint, static OpenDocument, TXT, CSV, TSV, JSON, JSON Lines, Markdown, LOG, plain fictional EML and common raster images. Up to '+
+    attachmentSize(rules.maxFileBytes)+' per file (16 KiB for TXT, 32 KiB for EML'+
     (rules.largePdfMaxBytes?', '+attachmentSize(rules.largePdfMaxBytes)+' for PDF in this workspace':'')+'), '+
     attachmentSize(rules.maxBatchBytes)+' per upload. '+
     'Four attachments per revision, 8 MiB and 256 files per workspace. Download only.','hint'),status,selection,submit);
@@ -244,17 +247,24 @@ function attachmentControls(card,path,version,revision,rules){
 function evidenceHoldControls(card,path,edition,revision,reasons){
   if(!localSession?.authenticated||!reasons||edition.status!=='published'||!['analyst','reviewer'].includes(actor))return;
   const hold=edition.evidenceHold, outstanding=!!hold&&hold.status!=='released';
-  const region=add(el('section',undefined,'document-attachments'),el('h4','Evidence preservation hold'));
-  region.append(el('p',hold?.status==='release-requested'?'Hold active · release awaiting independent review':
-    outstanding?'Hold active':hold?.status==='released'?'Last hold released · evidence retained':'No outstanding hold.','hint'));
+  const heading=el('h4','Evidence preservation hold');
+  heading.id='evidence-hold-heading-'+edition.id;
+  heading.tabIndex=-1;
+  const region=add(el('section',undefined,'document-attachments'),heading);
+  const stateLine=el('p',hold?.status==='release-requested'?'Hold active · release awaiting independent review':
+    outstanding?'Hold active':hold?.status==='released'?'Last hold released · evidence retained':'No outstanding hold.','hint');
+  stateLine.id='evidence-hold-status-'+edition.id;
+  heading.setAttribute('aria-describedby',stateLine.id);
+  region.append(stateLine);
   if(hold)region.append(el('p',reasons.titles[hold.reason]+' · placed '+hold.placedAt.slice(0,10)+
     ' · '+hold.historyCount+' recorded hold'+(hold.historyCount===1?'':'s'),'hint'));
   function form(action,caption){
     const field=rightsSelect('Fictional hold reason','reason',reasons.actions[action].map(value=>({value,label:reasons.titles[value]})));
-    field.querySelector('select').setAttribute('aria-label','Fictional hold reason');
-    docsForm(docsPanel(region,caption),path+'/evidence-hold/'+action,[field],caption,f=>({
+    field.querySelector('select').setAttribute('aria-label','Fictional hold reason for '+caption);
+    const decision=docsForm(docsPanel(region,caption),path+'/evidence-hold/'+action,[field],caption,f=>({
       reason:f.get('reason'),...(action==='place'?{}:{holdId:hold.id})
-    }),revision);
+    }),revision,()=>document.getElementById(heading.id)?.focus({preventScroll:true}));
+    decision.setAttribute('aria-label',caption+' for '+edition.title+' · revision '+edition.number);
   }
   if(actor==='analyst'&&!outstanding)form('place','Place evidence hold');
   if(actor==='analyst'&&hold?.status==='active')form('request-release','Request hold release');

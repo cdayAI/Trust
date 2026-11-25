@@ -183,7 +183,17 @@ function renderOperationalReport({filters,counts,rows,options,generatedAt,run},h
   const group=reportSelect('Group report by','group',{},'');
   const from=labelled('Start date (UTC)','from',filters.from??'','input',false);
   const to=labelled('End date (UTC)','to',filters.to??'','input',false);
-  from.querySelector('input').type='date';to.querySelector('input').type='date';
+  const fromInput=from.querySelector('input'),toInput=to.querySelector('input');
+  fromInput.type='date';toInput.type='date';
+  const rangeError=el('p',undefined,'error report-range-error');
+  rangeError.id='report-date-range-error';
+  rangeError.setAttribute('role','alert');
+  function clearRangeError(){
+    rangeError.hidden=true;rangeError.textContent='';
+    toInput.removeAttribute('aria-invalid');toInput.removeAttribute('aria-describedby');
+  }
+  clearRangeError();
+  for(const field of [fromInput,toInput])field.addEventListener('input',clearRangeError);
   const hint=el('p',undefined,'hint report-date-hint');
   function syncDataset(preferred){
     const dataset=data.querySelector('select').value,events=dataset==='activity';
@@ -202,8 +212,20 @@ function renderOperationalReport({filters,counts,rows,options,generatedAt,run},h
   apply.id='report-apply';reset.id='report-reset';
   reset.onclick=()=>{reportFilters={};notice('');refreshReporting(true)};
   const actions=add(el('div',undefined,'actions report-actions'),apply,reset);
-  form.append(data,area,stage,outcome,group,from,to,hint,actions);
-  form.onsubmit=e=>{e.preventDefault();reportFilters=Object.fromEntries(new FormData(form));notice('');refreshReporting(true)};
+  form.append(data,area,stage,outcome,group,from,to,rangeError,hint,actions);
+  form.onsubmit=e=>{
+    e.preventDefault();
+    if(fromInput.value&&toInput.value&&fromInput.valueAsNumber>toInput.valueAsNumber){
+      toInput.setAttribute('aria-invalid','true');
+      toInput.setAttribute('aria-describedby',rangeError.id);
+      rangeError.hidden=false;
+      rangeError.textContent='The start date must be on or before the end date.';
+      toInput.focus();
+      return;
+    }
+    clearRangeError();
+    reportFilters=Object.fromEntries(new FormData(form));notice('');refreshReporting(true);
+  };
   intro.append(form);
 
   const totals=el('div',undefined,'metrics report-metrics');
