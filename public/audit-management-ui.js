@@ -118,6 +118,20 @@ function renderAuditManagement(){
       const link=el('a','Download finalized report JSON','button quiet');
       link.href=scopeUrl(auditMgmtPath+path+'/report');link.download='';
       card.append(el('p','Conclusion: '+result.conclusion),el('p','Report SHA-256: '+sha256,'hint'),link);
+      const auditPackage=el('a','Download offline audit package','button quiet');
+      auditPackage.href=scopeUrl(auditMgmtPath+path+'/package');auditPackage.download='';
+      if(!localSession)auditPackage.onclick=async event=>{
+        // Links cannot send the demo-role header. Isolated links use the real local session cookie instead.
+        event.preventDefault();
+        try{
+          const response=await fetch(auditPackage.href,{headers:{'X-Demo-Actor':actor}});
+          if(!response.ok){const issue=await response.json();throw Error(issue.error??'The offline audit package could not be downloaded.')}
+          const url=URL.createObjectURL(await response.blob()),download=el('a');
+          download.href=url;download.download='synthetic-audit-package-'+plan.id+'.json';download.click();
+          setTimeout(()=>URL.revokeObjectURL(url),1000);
+        }catch(error){notice(error.message,true)}
+      };
+      card.append(auditPackage,el('p','Use the local verifier to check exact report and approved closure bytes. Checksums are not signatures.','hint'));
       const followup=renderAuditRemediation(remediation[plan.id]??[]);if(followup)card.append(followup);
     }
     list.append(card);

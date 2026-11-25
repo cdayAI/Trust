@@ -200,9 +200,13 @@ test('Chromium shows fictional rule pin, independent receipt and unchanged editi
   const browser=await chromium.launch({executablePath:process.env.CHROMIUM_PATH||'/usr/bin/chromium',args:['--no-sandbox']});
   t.after(()=>browser.close());
   const page=await browser.newPage();page.setDefaultTimeout(8500);
+  await page.goto(f.origin);
   async function signIn(name){
-    await page.goto(f.origin);
-    await page.getByLabel('Test account',{exact:true}).fill(name);
+    // Sign-out reloads the workbench. Wait for the real signed-out form;
+    // an extra navigation would compete with that reload.
+    const account=page.getByLabel('Test account',{exact:true});
+    await account.waitFor({state:'visible'});
+    await account.fill(name);
     await page.getByLabel('Workspace ID',{exact:true}).fill('alpha');
     await page.getByLabel('Local access code',{exact:true}).fill(f.code[name]);
     await page.getByRole('button',{name:'Sign in',exact:true}).click();

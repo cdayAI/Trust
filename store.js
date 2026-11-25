@@ -28,6 +28,7 @@ const preferences = require('./privacy-notices');
 const retention = require('./retention-workflow');
 const riskControls = require('./risk-controls');
 const auditManagement = require('./audit-management');
+const auditVerification=require('./audit-verification');
 const ethics = require('./ethics-cases');
 const maturityPlanning = require('./maturity-planning');
 const vendorMonitoring = require('./vendor-monitoring');
@@ -517,6 +518,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     getRiskControls:()=>riskControls.view(state),
     getAuditManagement:()=>auditManagement.view(state),
     getAssessmentConfiguration:()=>assessmentConfig.view(state),
+    getAuditVerificationPackage:(id,scope)=>auditVerification.create(state,id,scope),
     getRemediationReport:id=>auditManagement.remediationReport(state,id),
     getAuditReport:id=>auditManagement.report(state,id),
     getMaturityPlanning:()=>maturityPlanning.view(state),

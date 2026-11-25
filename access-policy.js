@@ -83,6 +83,7 @@ route('POST','incidents/policy/(?:return|publish)',['reviewer']);
 route('POST','incidents/cases(?:/'+uuid+'/(?:triage|containment|evidence|findings|request-review|decide|plan-notice|close))?',operators);
 route('POST','vendor-monitoring/cases(?:/'+uuid+'/(?:score|evidence|submit|approve|return|change|renew))?',operators);
 route('POST','maturity-planning/plans(?:/'+uuid+'/(?:assess|submit|decide|return|approve|revise))?',operators);
+route('GET','audit-management/plans/'+uuid+'/package',operators);
 route('GET','audit-management/remediations/'+uuid+'/report',operators);
 route('POST','audit-management/remediations(?:/'+uuid+'/(?:plan|submit))?',['analyst']);
 route('POST','audit-management/remediations/'+uuid+'/(?:return|close|reopen)',['reviewer']);

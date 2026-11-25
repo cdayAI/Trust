@@ -453,6 +453,14 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if (req.method==='GET'&&pathname==='/api/vendor-monitoring') return send(res,200,store.getVendorMonitoring());
       if(pathname==='/api/audit-management'||pathname.startsWith('/api/audit-management/')){
         if(req.method==='GET'&&pathname==='/api/audit-management') return send(res,200,store.getAuditManagement());
+        const auditPackage=pathname.match(/^\/api\/audit-management\/plans\/([a-f0-9-]{36})\/package$/);
+        if(req.method==='GET'&&auditPackage){
+          if(searchParams.size)return send(res,422,{error:'Audit packages do not accept query filters.'});
+          const role=actor??'analyst';
+          const scope={mode,workspace:selection?.space.id??null,actor:selection?.account??role,role};
+          return send(res,200,store.getAuditVerificationPackage(auditPackage[1],scope),undefined,
+            {'Content-Disposition':'attachment; filename="synthetic-audit-package-'+auditPackage[1]+'.json"'});
+        }
         const closure=pathname.match(/^\/api\/audit-management\/remediations\/([a-f0-9-]{36})\/report$/);
         if(req.method==='GET'&&closure)return send(res,200,store.getRemediationReport(closure[1]),undefined,
           {'Content-Disposition':'attachment; filename="synthetic-remediation-'+closure[1]+'.json"'});
