@@ -2,7 +2,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const {createHash,randomUUID} = require('node:crypto');
-const {hasLegacySnapshot}=require('./durable-storage');
+const {hasLegacySnapshot,parseJsonBytes}=require('./durable-storage');
 const operatorJobs = require('./operator-jobs');
 const modules = require('./modules');
 const reportRuns=require('./reporting-runs');
@@ -266,7 +266,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     });
   }else{
     let stored;
-    try{stored=JSON.parse(fs.readFileSync(file,'utf8'))}
+    try{stored=parseJsonBytes(fs.readFileSync(file))}
     catch(error){if(error.code!=='ENOENT')throw error;}
     initialize(stored);
   }
@@ -368,26 +368,29 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       return result;
     },
     identityAdminView:(seats,at)=>identityAdmin.view(state,seats,at),
-    identityAdminChange(seats,at,admin,body){
+    identityAdminChange(seats,at,caller,body){
+      requireCurrentOperatorSession(caller);
       const next=structuredClone(state);
-      const result=identityAdmin.change(next,seats,at,admin,body,event);
+      const result=identityAdmin.change(next,seats,at,caller.account,body,event);
       persist(next);
       state=next;
       return result;
     },
     getEthicsCases:(role,account)=>ethics.view(state,role,account),
     getEthicsExport:(id,role,account)=>ethics.redactedExport(state,id,role,account),
-    changeEthics(role,account,action,id,body){
+    changeEthics(caller,action,id,body){
+      requireCurrentOperatorSession(caller);
       const next=structuredClone(state);
-      const result=ethics.change(next,role,account,action,id,body);
+      const result=ethics.change(next,caller.actor,caller.account,action,id,body);
       persist(next);
       state=next;
       return result;
     },
     trainingOperatorView:learners=>training.operatorView(state,learners),
-    trainingAdmin(learners,actor,account,action,body){
+    trainingAdmin(learners,caller,action,body){
+      requireCurrentOperatorSession(caller);
       const next=structuredClone(state);
-      try{if(training.admin(next,learners,actor,account,action,body,event)){persist(next);state=next;}}
+      try{if(training.admin(next,learners,caller.actor,caller.account,action,body,event)){persist(next);state=next;}}
       catch(error){if(error.persistRefusal){persist(next);state=next;}throw error;}
       return training.operatorView(state,learners);
     },
@@ -400,9 +403,10 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       return view;
     },
     employeeOperatorView:staff=>employee.operatorView(state,staff),
-    employeeAssign(staff,actor,account,body){
+    employeeAssign(staff,caller,body){
+      requireCurrentOperatorSession(caller);
       const next=structuredClone(state);
-      try{if(employee.assign(next,staff,actor,account,body,event)){persist(next);state=next;}}
+      try{if(employee.assign(next,staff,caller.actor,caller.account,body,event)){persist(next);state=next;}}
       catch(error){if(error.persistRefusal){persist(next);state=next;}throw error;}
       return employee.operatorView(state,staff);
     },
@@ -601,7 +605,9 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     getMaturityPlanning:()=>maturityPlanning.view(state),
     getMaturityReport:(id,version)=>maturityPlanning.report(state,id,version),
     getVendorMonitoring:()=>vendorMonitoring.view(state),
-    getProgramAudit:prefix=>state.audit.filter(e=>e.action.startsWith(prefix+'.')),
+    getProgramExport(prefix,field){
+      return {[field]:programs.get(prefix).view(state),audit:state.audit.filter(e=>e.action.startsWith(prefix+'.'))};
+    },
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
     listReportSchedules(caller){
       requireCurrentOperatorSession(caller);
@@ -623,7 +629,8 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     },
     listReportRuns:()=>reportRuns.list(state),
     readReportRun:(id,format)=>reportRuns.read(state,id,format),
-    pinReportRun(body,mode){
+    pinReportRun(body,mode,caller){
+      if(caller)requireCurrentOperatorSession(caller);
       const next={...state};
       const bytes=reportRuns.create(next,state.audit.filter(e=>!excludedAudit(e)),body,mode);
       persist(next);state=next;
@@ -631,12 +638,8 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     },
     reportSnapshot:()=>({state,audit:state.audit.filter(e=>!excludedAudit(e))}),
     change(parts,actor,body,account,generation,rightsContext,docReview) {
-      if(rightsContext){
-        requireCurrentOperatorSession(rightsContext);
-        if(rightsContext.role==='case-operator')rightsCaseScope.verifyTarget(state,rightsContext,parts[2]);
-      }
-      if(generation!==undefined&&parts[0]==='governance-documents')
-        requireCurrentOperatorSession({account,generation});
+      if(generation!==undefined)requireCurrentOperatorSession({account,generation});
+      if(rightsContext?.role==='case-operator')rightsCaseScope.verifyTarget(state,rightsContext,parts[2]);
       documentReviewSeats.enforce(state,parts,docReview);
       if (!actors.some(a=>a.id===actor)) fail(403,'Select a valid demo identity.');
       if (actor===rights.backupActor.id&&!['rights','governance-documents'].includes(parts[0])) fail(403,'This identity is assigned to rights cases only.');

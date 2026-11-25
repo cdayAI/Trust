@@ -5,26 +5,38 @@ let reportFilters={},reportSequence=0;
 function reportingQuery(filters){
   return new URLSearchParams(Object.entries(filters).filter(([,value])=>value!==null&&value!==undefined&&value!==''));
 }
-async function refreshReporting(announce=false,runId=null){
+async function refreshReporting(announce=false,runId=null,{filters=reportFilters,focusResults=false}={}){
   const seq=++reportSequence;
   reportingPane.setAttribute('aria-busy','true');
   if(!reportingPane.children.length)reportingPane.append(el('p','Loading operational report…'));
   try{
     const [result,history]=await Promise.all([
-      read(runId?reportingPath+'/runs/'+encodeURIComponent(runId):reportingPath+'?'+reportingQuery(reportFilters)),
+      read(runId?reportingPath+'/runs/'+encodeURIComponent(runId):reportingPath+'?'+reportingQuery(filters)),
       read(reportingPath+'/runs')
     ]);
     if(!reportingPane.hidden&&seq===reportSequence){
       reportFilters=result.filters;
       renderOperationalReport(result,history);
       if(announce)notice((runId?'Pinned report opened. ':'Report updated. ')+result.counts.total+' matched.');
-      if(runId)$('#report-results-heading')?.focus();
+      if(runId||focusResults)$('#report-results-heading')?.focus();
       return true;
     }
   }catch(error){
     if(!reportingPane.hidden&&seq===reportSequence){
       if(error.status===403)reportingPane.replaceChildren(el('p','An analyst or reviewer is required for reporting.'));
-      else notice(error.message,true);
+      else {
+        notice(error.message,true);
+        if(!reportingPane.querySelector('#report-results-heading')){
+          const retry=button('Retry report','button','secondary');
+          retry.onclick=()=>{
+            retry.disabled=true;
+            notice('');
+            refreshReporting(announce,runId,{filters,focusResults:true});
+          };
+          reportingPane.replaceChildren(add(el('section'),heading('Reporting unavailable'),retry));
+          if(focusResults)retry.focus({preventScroll:true});
+        }
+      }
     }
   }finally{if(seq===reportSequence)reportingPane.setAttribute('aria-busy','false')}
 }
@@ -254,7 +266,7 @@ function renderOperationalReport({filters,counts,rows,options,generatedAt,run},h
   const apply=button('Apply report filters','submit');
   const reset=button('Reset report filters','button','secondary');
   apply.id='report-apply';reset.id='report-reset';
-  reset.onclick=()=>{reportFilters={};notice('');refreshReporting(true)};
+  reset.onclick=()=>{notice('');refreshReporting(true,null,{filters:{}})};
   const actions=add(el('div',undefined,'actions report-actions'),apply,reset);
   form.append(data,area,stage,outcome,group,from,to,rangeError,hint,actions);
   form.onsubmit=e=>{
@@ -268,7 +280,7 @@ function renderOperationalReport({filters,counts,rows,options,generatedAt,run},h
       return;
     }
     clearRangeError();
-    reportFilters=Object.fromEntries(new FormData(form));notice('');refreshReporting(true);
+    notice('');refreshReporting(true,null,{filters:Object.fromEntries(new FormData(form))});
   };
   intro.append(form);
 

@@ -1,6 +1,7 @@
 'use strict';
 const {createHash,createHmac,randomBytes,timingSafeEqual}=require('node:crypto');
 const {taskDate:incidentDueDate}=require('./incident-policy');
+const {pendingExtension}=require('./rights-workflow');
 const workflowLabels={
   assessments:'Assessments',rights:'Privacy rights',incidents:'Incidents','vendor-monitoring':'Vendor monitoring',
   preferences:'Privacy notices',retention:'Retention','risk-controls':'Risk and controls'
@@ -14,7 +15,7 @@ const incidentActions={
   review:['decide','Review simulated notice decision'],'notice-planning':['plan','Record mock notice plan'],'ready-to-close':['close','Close incident']
 };
 const workflows=Object.keys(workflowLabels);
-function view(state,params,today=new Date().toISOString().slice(0,10)){
+function view(state,params,today=new Date().toISOString().slice(0,10),mode='synthetic-demo'){
   const actors=state.actors.map(({id,name})=>({id,name:name??id}));
   for(const key of params.keys())if(!['owner','workflow','timing'].includes(key)||params.getAll(key).length!==1)
     invalid('Unsupported or repeated queue filter.');
@@ -45,10 +46,13 @@ function view(state,params,today=new Date().toISOString().slice(0,10)){
   }
   if(includes('rights'))for(const r of state.rightsCases??[]){
     if(r.closedAt)continue;
+    const pending=pendingExtension(r);
+    if(pending)task('rights',r,'review-extension','Review deadline extension','reviewer',r.kind+' request',r.dueDate);
     if(r.identity.status==='pending')task('rights',r,'verify','Review identity independently','reviewer',r.kind+' request',r.dueDate);
-    else if(r.identity.status==='not-verified')task('rights',r,'close-unverified','Decide no-disclosure closure',r.owner,r.kind+' request',r.dueDate);
-    else if(r.status==='received')task('rights',r,'begin','Begin mock fulfillment',r.owner,r.kind+' request',r.dueDate);
-    else if(r.status==='in-progress')task('rights',r,'fulfill','Document mock fulfillment',r.owner,r.kind+' request',r.dueDate);
+    else if(r.identity.status==='not-verified'){
+      if(!pending)task('rights',r,'close-unverified','Decide no-disclosure closure',r.owner,r.kind+' request',r.dueDate);
+    }else if(r.status==='received')task('rights',r,'begin','Begin mock fulfillment',r.owner,r.kind+' request',r.dueDate);
+    else if(r.status==='in-progress'&&!pending)task('rights',r,'fulfill','Document mock fulfillment',r.owner,r.kind+' request',r.dueDate);
   }
   if(includes('incidents'))for(const i of state.incidentCases??[]){
     const stage=Object.hasOwn(incidentActions,i.stage)?incidentActions[i.stage]:null;
@@ -84,7 +88,7 @@ function view(state,params,today=new Date().toISOString().slice(0,10)){
   }
   tasks.sort((a,b)=>(a.dueDate??'9999-12-31').localeCompare(b.dueDate??'9999-12-31')||
     a.workflow.localeCompare(b.workflow)||a.id.localeCompare(b.id));
-  return {mode:'synthetic-demo',asOf:today,filters,counts,workflowLabels,actors,tasks};
+  return {mode,asOf:today,filters,counts,workflowLabels,actors,tasks};
 }
 
 function invalid(message){throw Object.assign(new Error(message),{status:422,code:'INVALID_QUEUE_FILTER'})}
@@ -108,14 +112,14 @@ function createPager(){
       invalid('The queue cursor is malformed.');
     return payload;
   }
-  return function page(state,params,scope,today){
-    if(!params.has('limit')&&!params.has('cursor'))return view(state,params,today);
+  return function page(state,params,scope,today,mode){
+    if(!params.has('limit')&&!params.has('cursor'))return view(state,params,today,mode);
     if(params.getAll('limit').length!==1||params.getAll('cursor').length>1||
       !/^(?:[1-9][0-9]?|100)$/u.test(params.get('limit')))invalid('Use one queue page limit between 1 and 100.');
     const filters=new URLSearchParams(params),limit=Number(params.get('limit'));
     filters.delete('limit');filters.delete('cursor');
     const token=params.has('cursor')?unpack(params.get('cursor'),scope):null;
-    const model=view(state,filters,today),total=model.tasks.length;
+    const model=view(state,filters,today,mode),total=model.tasks.length;
     // Fingerprint exactly this filtered, ordered projection and UTC date.
     // Counts stay global to the filter and unrelated state changes do not
     // invalidate a cursor if they leave its visible projection unchanged.

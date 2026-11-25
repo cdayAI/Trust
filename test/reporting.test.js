@@ -142,10 +142,16 @@ test('Chromium: report filters, accessible table, applied-filter exports and mob
     const page=await browser.newPage({viewport:{width:390,height:844},acceptDownloads:true});
     page.setDefaultTimeout(5000);
     const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.route('**/api/reporting/runs',route=>route.fulfill({
+      status:503,json:{error:'Report history temporarily unavailable.'},
+    }),{times:1});
     await page.goto(url);
     await page.getByRole('button',{name:'Browse workspace'}).click();
     await page.getByRole('button',{name:'Reporting',exact:true}).click();
+    await page.getByText('Report history temporarily unavailable.').waitFor();
+    await page.getByRole('button',{name:'Retry report'}).press('Enter');
     await page.getByRole('heading',{name:'Operational reporting'}).waitFor();
+    assert.equal(await page.evaluate(()=>document.activeElement.id),'report-results-heading');
     await page.getByLabel('Report workflow').selectOption('rights');
     await page.getByLabel('Group report by').selectOption('stage');
     await page.getByRole('button',{name:'Apply report filters'}).click();

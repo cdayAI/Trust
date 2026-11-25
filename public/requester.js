@@ -7,7 +7,7 @@ async function call(operation,body){
   const response=await fetch('/api/requester/'+operation,{method:'POST',credentials:'omit',
     headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const data=await response.json();
-  if(!response.ok)throw Object.assign(new Error(data.error??'The request could not be completed.'),{code:data.code});
+  if(!response.ok)throw Object.assign(new Error(data.error??'The request could not be completed.'),{code:data.code,status:response.status});
   return data;
 }
 function questionnaireInput(field){
@@ -63,6 +63,7 @@ function show(data){
         if(current===epoch)show(next);
       }catch(error){
         if(current===epoch){
+          if(error.status===401||error.status===429){denyAccess(error);return;}
           const message=make('p',error.message);message.className='error';
           feedback.replaceChildren(message);
           if(error.code==='STALE_INTAKE_FORM'){

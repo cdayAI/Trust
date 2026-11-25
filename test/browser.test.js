@@ -43,6 +43,28 @@ test('browser smoke: synthetic intake to independent approval, mock retry and au
     assert.equal(await page.getByRole('heading', { name: 'AI-risk assessment', exact: true }).count(), 1);
     assert.equal(await page.getByRole('button', { name: 'Send mock handoff' }).isDisabled(), true);
 
+    const privacyDraft=page.locator('.assessment').first();
+    const aiDraft=page.locator('.assessment').filter({has:page.getByRole('heading',{name:'AI-risk assessment',exact:true})});
+    await privacyDraft.getByLabel('Summary').fill('Unsaved fictional privacy notes.');
+    await aiDraft.getByLabel('Summary').fill('Saved fictional AI notes.');
+    const accepted=Promise.withResolvers(),deliver=Promise.withResolvers();
+    await page.route('**/api/assessments/*/save',async route=>{
+      const response=await route.fetch();
+      accepted.resolve(await response.json());
+      await deliver.promise;
+      await route.fulfill({response});
+    },{times:1});
+    try{
+      await aiDraft.getByRole('button',{name:'Save draft'}).click();
+      const committed=(await accepted.promise).assessments.find(row=>row.type==='ai');
+      assert.equal(committed.answers.safeguards,'');
+      await aiDraft.getByLabel('Safeguards').fill('Unsaved safeguards entered while saving.');
+    }finally{deliver.resolve();}
+    await page.getByText('Draft saved.',{exact:true}).waitFor();
+    assert.equal(await privacyDraft.getByLabel('Summary').inputValue(),'Unsaved fictional privacy notes.');
+    assert.equal(await aiDraft.getByLabel('Summary').inputValue(),'Saved fictional AI notes.');
+    assert.equal(await aiDraft.getByLabel('Safeguards').inputValue(),'Unsaved safeguards entered while saving.');
+
     for (let i = 0; i < 3; i++) {
       const card = page.locator('.assessment').filter({ has: page.getByRole('button', { name: 'Submit for review' }) }).first();
       await card.getByLabel('Summary').fill('Synthetic support workflow only.');

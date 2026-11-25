@@ -21,13 +21,14 @@ const revisionCard=(page,root,name)=>root.locator('article > section[id^="work-r
 const article=(page,root,name)=>root.locator('article').filter({has:h(page,name)});
 const escape=s=>s.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 
-async function fixture(t){
+async function fixture(t,{now=Date.now}={}){
   const {chromium}=require('playwright');
   const dir=await mkdtemp(join(tmpdir(),'mvw-control-'));
-  const now=Date.now(), codes=Object.fromEntries(['analyst','reviewer','case-operator','requester-a','requester-b','employee-a','employee-b','learner-a','learner-b'].map(id=>[id,secret()]));
-  const grant=id=>({workspace:'alpha',codeHash:codeHash(codes[id]),expiresAt:now+3_600_000});
+  const codes=Object.fromEntries(['analyst','reviewer','case-operator','requester-a','requester-b','employee-a','employee-b','learner-a','learner-b'].map(id=>[id,secret()]));
+  const expiresAt=now()+3_600_000;
+  const grant=id=>({workspace:'alpha',codeHash:codeHash(codes[id]),expiresAt});
   const options={isolated:{
-    root:dir,workspaces:[{id:'alpha',label:'Fictional alpha'}],
+    root:dir,workspaces:[{id:'alpha',label:'Fictional alpha'}],now,
     accounts:['analyst','reviewer','case-operator'].map(id=>({id,codeHash:codeHash(codes[id]),memberships:{alpha:id}})),
     requesterGrants:['requester-a','requester-b'].map(id=>({id,alias:'sample-'+id,...grant(id)})),
     employeeGrants:['employee-a','employee-b'].map(id=>({alias:'sample-staff-'+id,...grant(id)})),
@@ -141,10 +142,12 @@ async function fixture(t){
   }
   async function publishFixturePolicy(title,text){
     const route='governance-documents/records';
-    const {documents:[doc]}=await api(route,'analyst',{kind:'policy',title,content:text,links:[],expectedRevision:0});
+    const {revision:expectedRevision}=await api('governance-documents','analyst');
+    const {documents}=await api(route,'analyst',{kind:'policy',title,content:text,links:[],expectedRevision});
+    const doc=documents.at(-1);
     const edition=doc.revisions[0],revision=`${route}/${doc.id}/revisions/${edition.id}`;
-    await api(revision+'/submit','analyst',{expectedRevision:1});
-    await api(revision+'/publish','reviewer',{expectedRevision:2,note:'Internal test reviewer note.'});
+    await api(revision+'/submit','analyst',{expectedRevision:expectedRevision+1});
+    await api(revision+'/publish','reviewer',{expectedRevision:expectedRevision+2,note:'Internal test reviewer note.'});
     return {document:doc.id,edition:edition.id,hash:edition.contentHash};
   }
   return {page,click,fill,select,file,check,disclosure,absent,activateLink,download,api,operator,publishFixturePolicy,codes,finish(){
@@ -214,6 +217,21 @@ test('browser portal: one fictional privacy request per code, all coarse outcome
   f.finish();
 });
 
+test('browser portal: an expired requester grant clears the intake form on submit',enabled,async t=>{
+  let time=Date.now();
+  const f=await fixture(t,{now:()=>time}),page=await f.page('/requester'),code='Synthetic access code';
+  await f.fill(page,code,f.codes['requester-a']);
+  await f.click(page,'Check my request','Requester opened intake',()=>seen(page,'No request submitted'));
+  time+=3_600_000;
+  await f.click(page,'Submit synthetic request','Expired grant returned to the access form',async()=>{
+    await seen(page,'A valid local synthetic access code is required.');
+    await gone(page,'No request submitted');
+    await f.absent(page,'button','Submit synthetic request');
+    assert.equal(await label(page,code).evaluate(input=>input===document.activeElement),true);
+  });
+  f.finish();
+});
+
 test('browser portal: employee can acknowledge exact published policy, clear access, and see zero assignments',enabled,async t=>{
   const f=await fixture(t),title='Fictional local employee privacy policy',text='Fictional edition content employees are asked to read.';
   await f.publishFixturePolicy(title,text);
@@ -258,6 +276,42 @@ test('browser portal: employee can acknowledge exact published policy, clear acc
   f.finish();
 });
 
+test('browser portal: employee acknowledgments wait for the current assignment refresh',enabled,async t=>{
+  const f=await fixture(t),titles=['First fictional policy','Second fictional policy'];
+  for(const title of titles){
+    const pin=await f.publishFixturePolicy(title,'Review this exact fictional edition.');
+    await f.api('employee-attestations','analyst',{employee:'sample-staff-employee-a',...pin});
+  }
+  const page=await f.page('/employee'),portal=page.locator('#employee-list');
+  const [first,second]=titles.map(title=>section(page,portal,title));
+  const confirm='I acknowledge this exact fictional policy edition.',submit='Record acknowledgment';
+  await f.fill(page,'Synthetic employee code',f.codes['employee-a']);
+  await f.click(page,'View my assignments','Employee loaded both independent assignments',()=>h(second,titles[1]).waitFor());
+  await f.check(first,confirm);
+  await f.check(second,confirm);
+  const saved=Promise.withResolvers(),deliver=Promise.withResolvers();
+  await page.route('**/api/employee/attest',async route=>{
+    try{
+      const response=await route.fetch();
+      assert.equal(response.status(),200);
+      saved.resolve();
+      await deliver.promise;
+      await route.fulfill({response});
+    }catch(error){saved.reject(error);}
+  },{times:1});
+  try{
+    await b(first,submit).click();
+    await saved.promise;
+    assert.equal(await b(second,submit).isDisabled(),true);
+    assert.equal(await b(page,'Clear access code').isEnabled(),true);
+  }finally{deliver.resolve();}
+  await seen(first,/^Acknowledged · receipt /);
+  await f.check(second,confirm);
+  await f.click(second,submit,'Second acknowledgment retained the first receipt',()=>seen(second,/^Acknowledged · receipt /));
+  assert.equal(await portal.getByText(/^Acknowledged · receipt /).count(),2);
+  f.finish();
+});
+
 test('browser portal: learner grant with no work cannot open peer training; assigned learner opens and clears',enabled,async t=>{
   const f=await fixture(t),title='Fictional restricted training',text='This policy is pinned to the training course.';
   const pin=await f.publishFixturePolicy('Fictional restricted policy',text);
@@ -288,6 +342,15 @@ test('browser portal: learner grant with no work cannot open peer training; assi
   await f.click(page,'View my assignments','After switching grant, prior course still hidden',()=>seen(page,'No training is assigned to this synthetic learner.'));
   await f.absent(page,'button',open);
   assert.equal(await h(page,title).count(),0);
+  await b(page,'Clear learner access').click();
+  await f.fill(page,code,f.codes['learner-a']);
+  await b(page,'View my assignments').click();
+  await b(page,open).click();
+  await b(page,'Start exercise').waitFor();
+  await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true})));
+  assert.equal(await label(page,code).isVisible(),true);
+  assert.equal(await label(page,code).inputValue(),'');
+  await f.absent(page,'button','Start exercise');
   f.finish();
 });
 

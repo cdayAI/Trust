@@ -114,11 +114,11 @@ function rightsDeadlinePanel(){
   panel.dataset.rightsDeadlinePolicy='';
   return section;
 }
-function renderRightsDeadlineCase(card,row){
+function renderRightsDeadlineCase(card,row,pending){
   const pin=row.clockPolicy;
   if(pin.source!=='published')return;
   card.append(el('p','Pinned rules: v'+pin.version+' · '+pin.days+' '+pin.unit+' · Original due '+row.originalDueDate,'hint'));
-  const requests=row.extensionRequests??[],pending=requests.find(x=>x.status==='pending');
+  const requests=row.extensionRequests??[];
   if(requests.length){
     const history=add(el('details'),el('summary','Extension requests ('+requests.length+')'),
       add(el('ul'),...requests.map(x=>el('li',rightsDeadlineReasons.find(reason=>reason.value===x.reason)?.label+

@@ -11,6 +11,7 @@ const labelled=(label,name,value,kind='textarea',required=true)=>{
   return add(l,field);
 };
 let state,selected,actor='analyst',busy=false,localSession;
+const unsavedAssessmentAnswers=new Map();
 function scopeUrl(url){
   if(!localSession?.authenticated||url.startsWith('/api/session'))return url;
   const target=new URL(url,location.origin);
@@ -61,6 +62,9 @@ function renderAssessment(parent,a){
     const save=button('Save draft','button','secondary');
     const submit=button('Submit for review','submit');
     const inputs=new Map();
+    const cached=unsavedAssessmentAnswers.get(a.id);
+    const draft=cached?.revision===a.revision?cached.answers:undefined;
+    if(cached&&!draft)unsavedAssessmentAnswers.delete(a.id);
     for(const question of q.questions){
       const label=el('label',question.label+(question.required?' *':''));
       const field=el(question.kind==='choice'?'select':question.kind==='integer'?'input':'textarea');
@@ -70,7 +74,7 @@ function renderAssessment(parent,a){
         for(const choice of question.options){const opt=el('option',choice);opt.value=choice;field.append(opt)}
       }else if(question.kind==='integer'){field.inputMode='numeric';field.maxLength=10;field.pattern='(?:0|-?[1-9][0-9]{0,8})'}
       else{field.rows=2;field.maxLength=2000}
-      field.value=a.answers[question.id]??'';
+      field.value=draft?.[question.id]??a.answers[question.id]??'';
       inputs.set(question.id,{label,field,question});f.append(add(label,field));
     }
     function refreshBranches(){
@@ -81,10 +85,25 @@ function renderAssessment(parent,a){
         if(!active)field.value='';
       }
     }
-    f.onchange=refreshBranches;refreshBranches();
-    function payload(){return {expectedRevision:a.revision,answers:Object.fromEntries(new FormData(f))}}
-    save.onclick=()=>write(root+'/save',payload(),'Draft saved.');
-    f.onsubmit=(e)=>{e.preventDefault();write(root+'/submit',payload(),'Sent for independent review.')};
+    const answers=()=>Object.fromEntries(new FormData(f));
+    const remember=()=>unsavedAssessmentAnswers.set(a.id,{revision:a.revision,answers:answers()});
+    f.oninput=event=>{if(event.target.tagName!=='SELECT')remember();};
+    f.onchange=event=>{
+      if(event.target.tagName!=='SELECT')return;
+      refreshBranches();remember();
+    };
+    refreshBranches();
+    function saveAnswers(action,message){
+      const submitted=unsavedAssessmentAnswers.get(a.id);
+      write(root+'/'+action,{expectedRevision:a.revision,answers:answers()},message,next=>{
+        const latest=unsavedAssessmentAnswers.get(a.id),committed=next.assessments.find(row=>row.id===a.id);
+        if(action==='save'&&committed&&latest?.revision===a.revision&&latest!==submitted)
+          unsavedAssessmentAnswers.set(a.id,{revision:committed.revision,answers:latest.answers});
+        else unsavedAssessmentAnswers.delete(a.id);
+      });
+    }
+    save.onclick=()=>saveAnswers('save','Draft saved.');
+    f.onsubmit=e=>{e.preventDefault();saveAnswers('submit','Sent for independent review.');};
     add(f,add(actions,save,submit));card.append(f);
   }else{
     for(const question of q.questions){

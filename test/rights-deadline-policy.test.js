@@ -112,8 +112,19 @@ test('HTTP/SQLite preserves pinned staff and portal deadlines across independent
   await req(extension+'/verify',200,r,{expectedRevision:4,note:'Synthetic verified'});
   await req(extension+'/begin',200,o,{expectedRevision:5,note:'Synthetic fulfillment started'});
   await req(extension+'/fulfill',409,o,{expectedRevision:6,note:'Must decide the pending extension'});
+  const queued=await req('/api/work-queue',200,r);
+  assert.equal(queued.mode,'local-isolated');
+  const actions=queued.tasks.filter(task=>task.sourceId===ownerCase.id);
+  assert.deepEqual(actions.map(({action,owner,dueDate})=>({action,owner,dueDate})),
+    [{action:'review-extension',owner:'reviewer',dueDate:original}]);
+  const personal=await req('/api/my-work',200,r);
+  const task=personal.tasks.find(item=>item.actionLabel==='Review deadline extension');
+  assert.deepEqual((await req('/api/my-work/tasks/'+task.key,200,r)).destination,{view:'rights',recordId:ownerCase.id});
+  assert.equal((await req('/api/my-work',200,o)).tasks.some(item=>item.actionLabel==='Document mock fulfillment'),false);
   const approved=(await req(extension+'/approve-extension',200,r,{expectedRevision:6})).cases.find(x=>x.id===ownerCase.id);
   assert.equal(approved.dueDate,extended);
+  assert.equal((await req('/api/my-work',200,o)).tasks.some(item=>item.actionLabel==='Document mock fulfillment'),true);
+  await req('/api/my-work/tasks/'+task.key,404,r);
   await req(extension+'/request-extension',409,o,{expectedRevision:7,reason:'fixture-volume'});
   await req(extension+'/fulfill',200,o,{expectedRevision:7,note:'Synthetic closed'});
   await req(policy+'/draft',200,a,{expectedRevision:5,rules:fixture(17),closedDates:[]});
@@ -205,11 +216,22 @@ test('browser: analyst and reviewer configure and publish policy, then resolve a
     };
     const decide=async caption=>{
       await navigate(r,'Work queue');
-      await navigate(r,'Privacy rights');
+      await r.getByRole('button',{name:'Open record: access request · Review deadline extension'}).click();
       await r.getByRole('button',{name:caption}).click();
       await r.getByText('Privacy rights case updated.').waitFor();
     };
     await request();
+    const [analyst,reviewer]=await Promise.all([live.login(0),live.login(1)]);
+    const {data}=await live.call(cases,200,{cookie:reviewer,workspace:'alpha'});
+    const row=data.cases.find(item=>item.summary==='Browser-only fictional case');
+    await live.call(cases+'/'+row.id+'/verify',200,{cookie:reviewer,workspace:'alpha',
+      body:{expectedRevision:row.revision,note:'Fictional identity verified'}});
+    await live.call(cases+'/'+row.id+'/begin',200,{cookie:analyst,workspace:'alpha',
+      body:{expectedRevision:row.revision+1,note:'Fictional fulfillment started'}});
+    await navigate(a,'Work queue');
+    await navigate(a,'Privacy rights');
+    await a.getByText('Closure is available after independent review of the deadline extension.').waitFor();
+    assert.equal(await a.getByText('Document mock fulfillment',{exact:true}).count(),0);
     await decide('Reject deadline extension');
     await navigate(a,'Work queue');
     await navigate(a,'Privacy rights');

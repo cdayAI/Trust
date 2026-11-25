@@ -2,7 +2,7 @@
 const fs=require('node:fs');
 const path=require('node:path');
 const {randomUUID}=require('node:crypto');
-const {hasLegacySnapshot}=require('./durable-storage');
+const {hasLegacySnapshot,parseJsonBytes}=require('./durable-storage');
 const {createWorkflowEngine,syntheticDefinition}=require('./workflow-engine');
 const actorFor={
   analyst:{id:'analyst',role:'initiator'},
@@ -24,9 +24,10 @@ function workflowActor(key,account){
 }
 function openWorkflowHttp(file,{storage}={}){
   let active;
-  function command(apply){
+  function command(apply,checkSession){
     if(!storage)return apply();
     return storage.write('workflow',(snapshot,save)=>{
+      checkSession?.();
       if(snapshot===undefined&&hasLegacySnapshot(file))throw Error('Legacy workflow state exists; migrate it explicitly before enabling SQLite.');
       active={snapshot,save};
       try{return apply()}finally{active=undefined;}
@@ -42,7 +43,7 @@ function openWorkflowHttp(file,{storage}={}){
         if(state===undefined&&hasLegacySnapshot(file))throw Error('Legacy workflow state exists; migrate it explicitly before enabling SQLite.');
         return state;
       }
-      try{return JSON.parse(fs.readFileSync(file,'utf8'))}catch(error){if(error.code!=='ENOENT')throw error}
+      try{return parseJsonBytes(fs.readFileSync(file))}catch(error){if(error.code!=='ENOENT')throw error}
     },
     save(snapshot){
       if(active)return active.save(snapshot);
@@ -69,14 +70,14 @@ function openWorkflowHttp(file,{storage}={}){
     }else if(p[0]==='instances'&&p.length===2)record=engine.getInstance(p[1]);
     return record?{status:200,value:record}:{status:404,value:{error:'Workflow resource not found.'}};
   };
-  const post=(p,key,body,account)=>{
+  const post=(p,key,body,account,checkSession)=>{
     const actor=workflowActor(key,account);
     if(!actor)return {status:403,value:{error:'A permitted local workflow identity is required.'}};
     if(!body||typeof body!=='object'||Array.isArray(body))return {status:400,value:{error:'Send an object.'}};
     let value;
-    if(p.length===1&&p[0]==='definitions')value=command(()=>engine.publish({actor,definition:body.definition,expectedVersion:body.expectedVersion}));
-    else if(p.length===1&&p[0]==='instances')value=command(()=>engine.start({actor,definitionId:body.definitionId,version:body.version,title:body.title}));
-    else if(p.length===3&&p[0]==='instances'&&p[2]==='transitions')value=command(()=>engine.advance({actor,instanceId:p[1],transitionId:body.transitionId,expectedRevision:body.expectedRevision,fields:body.fields}));
+    if(p.length===1&&p[0]==='definitions')value=command(()=>engine.publish({actor,definition:body.definition,expectedVersion:body.expectedVersion}),checkSession);
+    else if(p.length===1&&p[0]==='instances')value=command(()=>engine.start({actor,definitionId:body.definitionId,version:body.version,title:body.title}),checkSession);
+    else if(p.length===3&&p[0]==='instances'&&p[2]==='transitions')value=command(()=>engine.advance({actor,instanceId:p[1],transitionId:body.transitionId,expectedRevision:body.expectedRevision,fields:body.fields}),checkSession);
     else return {status:404,value:{error:'Workflow route not found.'}};
     const statuses={
       INVALID_ACTOR:403, ROLE_REQUIRED:403, INDEPENDENCE_REQUIRED:403,

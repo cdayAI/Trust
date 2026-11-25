@@ -8,9 +8,12 @@ const { mkdtemp, rm, readFile, writeFile, stat, mkdir, symlink, access } = requi
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
+const { Worker } = require('node:worker_threads');
 const { createServer } = require('../server');
-const { openSqlite } = require('../durable-storage');
+const { openSqlite, backupDatabase, verifyBackup, migrateDemo } = require('../durable-storage');
 const { codeHash } = require('../workspace-access');
+const { openStore } = require('../store');
+const { openWorkflowHttp } = require('../workflow-http');
 
 const source = resolve(__dirname, '..');
 const states = { draft: 'Draft', approved: 'Approved' };
@@ -160,6 +163,151 @@ test('two process writers preserve all changes; engine state and audit survive r
   assert.match(cli(['verify', corrupt], 1), /checksum/);
   assert.match(cli(['restore', corrupt, noFile], 1), /checksum/);
   await assert.rejects(access(noFile), { code: 'ENOENT' });
+});
+
+test('two first-time SQLite openers never observe a partially initialized database', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'trust-storage-first-open-'));
+  const file=join(dir,'trust.sqlite');
+  const gate=new Int32Array(new SharedArrayBuffer(4));
+  const worker=new Worker(`
+    const fs=require('node:fs');
+    const {parentPort,workerData}=require('node:worker_threads');
+    const {openSqlite}=require(workerData.module);
+    const open=fs.openSync;
+    fs.openSync=(...args)=>{
+      const fd=open(...args);
+      if(args[1]==='wx'){
+        fs.openSync=open;
+        parentPort.postMessage('allocated');
+        if(Atomics.wait(workerData.gate,0,0,10000)==='timed-out')throw Error('Timed out waiting for second opener.');
+      }
+      return fd;
+    };
+    const db=openSqlite(workerData.file);
+    try{
+      db.requireMode('demo');
+      db.scope('demo').write('workflow',(_previous,save)=>save(workerData.workflow));
+    }finally{db.close();}
+  `,{eval:true,workerData:{module:require.resolve('../durable-storage'),file,gate,workflow:policy()}});
+  const exit=once(worker,'exit');
+  exit.catch(()=>{});
+  t.after(async()=>{await worker.terminate();await rm(dir,{recursive:true,force:true});});
+  assert.deepEqual(await once(worker,'message'),['allocated']);
+  try{
+    const second=openSqlite(file);
+    try{second.requireMode('demo');assert.deepEqual(second.snapshot(),{mode:'demo',documents:[]});}
+    finally{second.close();}
+  }finally{
+    Atomics.store(gate,0,1);
+    Atomics.notify(gate,0);
+  }
+  assert.deepEqual(await exit,[0]);
+  const reopened=openSqlite(file,{readOnly:true});
+  try{assert.deepEqual(reopened.scope('demo').read('workflow'),policy());}
+  finally{reopened.close();}
+});
+
+test('staff writes reject a session generation superseded by another SQLite connection', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'trust-storage-session-generation-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const file=join(dir,'trust.sqlite'),db=openSqlite(file);
+  try{
+    db.requireMode('isolated');
+    const storage=db.scope('workspace:alpha');
+    const store=openStore(join(dir,'workbench.json'),{empty:true,storage});
+    const workflow=openWorkflowHttp(join(dir,'workflow.json'),{storage});
+    const analyst={actor:'analyst',account:'fixture-analyst',generation:0};
+    const author={actor:'publisher',account:'fixture-publisher',generation:0};
+    const existing=store.change(['projects'],analyst.actor,{name:'Existing fictional project'},analyst.account,analyst.generation);
+    const revoke=openSqlite(file);
+    try{
+      revoke.scope('workspace:alpha').write('workbench',(snapshot,save)=>save({
+        ...snapshot,identityAdministration:{schemaVersion:1,members:[analyst,author].map(({account})=>({
+          id:account,revision:1,disabled:false,
+        }))},
+      }));
+    }finally{revoke.close();}
+
+    const body={name:'Fictional project'};
+    assert.throws(()=>store.change(['projects'],analyst.actor,body,analyst.account,analyst.generation),{status:401});
+    assert.throws(()=>store.pinReportRun({filters:{}},'local-isolated',analyst),{status:401});
+    assert.deepEqual(store.getState().projects,existing.projects);
+    assert.deepEqual(store.listReportRuns().runs,[]);
+    const assertCurrent=caller=>{
+      assert.equal(store.identityMembership(caller.account).revision,caller.generation);
+    };
+    const publish={definition,expectedVersion:0};
+    assert.throws(()=>workflow.post(['definitions'],author.actor,publish,author.account,()=>assertCurrent(author)),
+      {code:'ERR_ASSERTION'});
+    assert.equal(workflow.get(['definitions',definition.id]).status,404);
+    assert.equal(workflow.post(['definitions'],author.actor,publish,author.account,
+      ()=>assertCurrent({...author,generation:1})).status,200);
+    assert.equal(store.change(['projects'],analyst.actor,body,analyst.account,1).projects.at(-1).name,body.name);
+  }finally{db.close();}
+});
+
+test('a register export takes its model and audit from the same SQLite read', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'trust-storage-export-snapshot-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const file=join(dir,'trust.sqlite'),db=openSqlite(file),writer=openSqlite(file);
+  try{
+    db.requireMode('isolated');
+    const scope=db.scope('workspace:alpha');
+    const legacy=join(dir,'unmigrated.json');
+    const editing=openStore(legacy,{empty:true,storage:writer.scope('workspace:alpha')});
+    const createNode=(name,expectedRevision)=>editing.change(['data-map','nodes'],'analyst',{
+      type:'system',name,owner:'Fictional operator',detail:'Local fixture',expectedRevision,
+    });
+    createNode('First fictional node',0);
+    let reads=0;
+    const reading=openStore(legacy,{empty:true,storage:{...scope,read(kind){
+      const snapshot=scope.read(kind);
+      if(++reads===1)createNode('Second fictional node',1);
+      return snapshot;
+    }}});
+
+    const first=reading.getProgramExport('data-map','graph');
+    assert.equal(reads,1);
+    assert.equal(first.graph.revision,1);
+    assert.deepEqual(first.audit.map(event=>event.entityId),first.graph.nodes.map(node=>node.id));
+    const second=reading.getProgramExport('data-map','graph');
+    assert.equal(second.graph.revision,2);
+    assert.deepEqual(second.audit.map(event=>event.entityId),second.graph.nodes.map(node=>node.id));
+  }finally{writer.close();db.close();}
+});
+
+test('saved JSON and backup replay reject malformed UTF-8 that would decode to the original text', async t => {
+  const dir=await mkdtemp(join(tmpdir(),'trust-storage-invalid-utf8-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const legacy=join(dir,'state.json'),sqlite=join(dir,'state.sqlite'),backup=join(dir,'backup.json');
+  const originalName='Fictional test \ufffd';
+  const workflowFile=legacy+'.workflows',workflow=openWorkflowHttp(workflowFile);
+  assert.equal(workflow.post(['definitions'],'publisher',{definition,expectedVersion:0}).status,200);
+  const started=workflow.post(['instances'],'analyst',{definitionId:definition.id,version:1,title:originalName});
+  assert.equal(started.status,200);
+  const store=openStore(legacy);
+  store.change(['projects'],'analyst',{name:originalName});
+  assert.equal(openStore(legacy).getState().projects.at(-1).name,originalName);
+  migrateDemo(legacy,sqlite);
+  backupDatabase(sqlite,backup);
+  assert.equal(verifyBackup(backup).documents[0].payload.projects.at(-1).name,originalName);
+
+  async function corruptEncoding(file){
+    const text=await readFile(file);
+    const marker=Buffer.from('\ufffd');
+    const at=text.indexOf(marker);
+    assert.ok(at>=0);
+    await writeFile(file,Buffer.concat([text.subarray(0,at),Buffer.from([0xff]),text.subarray(at+marker.length)]));
+  }
+  await corruptEncoding(legacy);
+  await corruptEncoding(backup);
+  await corruptEncoding(workflowFile);
+  assert.throws(()=>openStore(legacy),/UTF-8/i);
+  assert.throws(()=>verifyBackup(backup),/UTF-8/i);
+  assert.throws(()=>openWorkflowHttp(workflowFile).get(['audit']),/UTF-8/i);
+  const refused=join(dir,'invalid.sqlite');
+  assert.throws(()=>migrateDemo(legacy,refused),/UTF-8/i);
+  await assert.rejects(access(refused),{code:'ENOENT'});
 });
 
 test('explicit JSON migration preserves both snapshots and original bytes; isolated restores preserve tenant boundaries', async t => {

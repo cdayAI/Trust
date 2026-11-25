@@ -309,7 +309,8 @@ function renderRightsCase(row){
     el('p','Due: '+row.dueDate+' (UTC)'+(row.overdue?' · overdue':''),row.overdue?'error':'hint'),
     el('p','Identity: '+row.identity.status.replaceAll('-',' ')),el('p',row.summary));
   card.id='work-record-'+row.id;
-  renderRightsDeadlineCase(card,row);
+  const pendingExtension=row.extensionRequests?.find(request=>request.status==='pending');
+  renderRightsDeadlineCase(card,row,pendingExtension);
   renderRequesterResult(card,row);
   renderRightsRetrieval(card,row);
   if(row.requesterIntake){
@@ -340,8 +341,11 @@ function renderRightsCase(row){
       if(row.identity.status==='pending')action('deny-verification');
     }
     if(actor===row.owner){
-      if(row.identity.status==='verified')action(row.status==='received'?'begin':'fulfill');
-      if(row.identity.status==='not-verified')action('close-unverified');
+      if(row.identity.status==='verified'&&row.status==='received')action('begin');
+      else if(pendingExtension&&row.identity.status!=='pending')
+        card.append(el('p','Closure is available after independent review of the deadline extension.','hint'));
+      else if(row.identity.status==='verified')action('fulfill');
+      else if(row.identity.status==='not-verified')action('close-unverified');
     }
   }
   const history=el('ol',undefined,'log');

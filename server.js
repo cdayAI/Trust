@@ -6,7 +6,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const {openStore} = require('./store');
 const {openWorkflowHttp} = require('./workflow-http');
-const {openSqlite} = require('./durable-storage');
+const {openSqlite,parseJsonBytes} = require('./durable-storage');
 const {view:workQueue,createPager:queuePager}=require('./work-queue');
 const {route:assessmentIncidentRoute}=require('./assessment-incident');
 const {dashboard:workspaceHome}=require('./workspace-home');
@@ -105,7 +105,7 @@ async function readBoundedBytes(req,limit) {
 }
 async function readBody(req,limit=32768) {
   const bytes=await readBoundedBytes(req,limit);
-  try { return bytes.length?JSON.parse(bytes.toString('utf8')):{}; }
+  try { return bytes.length?parseJsonBytes(bytes):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false,reportWorkerWorkspace}={}) {
@@ -326,7 +326,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         const body=await readBody(req);
         const checked=access.context(req,expected);
         policy.requirePermission(req.method,pathname,checked.actor);
-        return send(res,200,store.identityAdminChange(roster(),access.identityTime(),checked.account,body));
+        return send(res,200,store.identityAdminChange(roster(),access.identityTime(),checked,body));
       }
       if(pathname==='/api/directory-lifecycle'){
         if(!directoryScopes.has(selection?.space.id))return send(res,404,{error:'Not found.'});
@@ -393,8 +393,8 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         const mutation=pathname.match(/^\/api\/ethics\/cases(?:\/([a-f0-9-]{36})\/(triage|begin|finding|submit|return|close))?$/);
         if(req.method==='POST'&&mutation){
           const body=await readBody(req);
-          access.context(req,expected);
-          return send(res,200,store.changeEthics(actor,selection.account,mutation[2]??'open',mutation[1],body));
+          const current=access.context(req,expected);
+          return send(res,200,store.changeEthics(current,mutation[2]??'open',mutation[1],body));
         }
         return send(res,404,{error:'Not found.'});
       }
@@ -440,7 +440,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
             const body=await readBody(req);
             const current=access?.context(req,expected);
             if(!reporting.canReport(current?.actor??actor))return send(res,403,{error:'An analyst or reviewer is required to pin a report.'});
-            const pinned=store.pinReportRun(body,mode);
+            const pinned=store.pinReportRun(body,mode,current);
             return send(res,201,pinned);
           }
           if(req.method!=='GET')return send(res,404,{error:'Not found.'});
@@ -466,7 +466,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if (req.method==='GET'&&['/api/work-queue','/api/work-queue/export'].includes(pathname)){
         const exporting=pathname.endsWith('/export'),snapshot=store.getState();
         const scope=selection?['isolated',selection.space.id,selection.account,selection.actor,selection.generation]:['demo',actor??'analyst'];
-        const queue=exporting?workQueue(snapshot,searchParams):pageWorkQueue(snapshot,searchParams,scope);
+        const queue=exporting?workQueue(snapshot,searchParams,undefined,mode):pageWorkQueue(snapshot,searchParams,scope,undefined,mode);
         return exporting?send(res,200,{schemaVersion:1,...queue},undefined,
           {'Content-Disposition':'attachment; filename="privacy-workbench-queue.json"'}):send(res,200,queue);
       }
@@ -504,13 +504,13 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         {'Content-Disposition':'attachment; filename="mvw-trust-plan-v'+maturityReport[2]+'.json"'});
       if (req.method==='GET'&&pathname==='/api/risk-controls') return send(res,200,store.getRiskControls());
       if (req.method==='GET'&&pathname==='/api/risk-controls/export') return send(res,200,{schemaVersion:1,mode,
-        program:store.getRiskControls(),audit:store.getProgramAudit('risk-controls')},undefined,
+        ...store.getProgramExport('risk-controls','program')},undefined,
         {'Content-Disposition':'attachment; filename="privacy-workbench-risk-controls.json"'});
       if (req.method==='GET'&&pathname==='/api/retention') return send(res,200,store.getRetention());
       if (req.method==='GET'&&pathname==='/api/privacy-notices') return send(res,200,store.getPreferences());
       if (req.method==='GET'&&pathname==='/api/dictionary')return send(res,200,store.getDictionary());
       if (req.method==='GET'&&pathname==='/api/dictionary/export')return send(res,200,{schemaVersion:1,mode,
-        dictionary:store.getDictionary(),audit:store.getProgramAudit('dictionary')},undefined,
+        ...store.getProgramExport('dictionary','dictionary')},undefined,
         {'Content-Disposition':'attachment; filename="privacy-workbench-dictionary.json"'});
       const runPath=pathname.match(discoveryRuns.pattern);
       if(runPath){
@@ -533,7 +533,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         return send(res,200,map);
       }
       if (req.method==='GET'&&pathname==='/api/data-map/export') return send(res,200,{schemaVersion:1,mode,
-        graph:store.getDataMap(),audit:store.getState().audit.filter(e=>e.action.startsWith('data-map.'))},undefined,
+        ...store.getProgramExport('data-map','graph')},undefined,
         {'Content-Disposition':'attachment; filename="privacy-workbench-data-map.json"'});
       const lineagePath=pathname.match(/^\/api\/data-map\/nodes\/([0-9a-f-]{36})\/lineage$/);
       if (req.method==='GET'&&lineagePath) return send(res,200,store.getLineage(lineagePath[1]));
@@ -609,7 +609,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           if(access&&workflowParts[0]==='definitions'&&Array.isArray(body?.definition?.transitions)&&
             body.definition.transitions.some(t=>Array.isArray(t?.roles)&&t.roles.includes('publisher')))
             return send(res,422,{error:'The isolated publisher does not participate in workflow execution.',code:'WORKFLOW_ROLE_UNAVAILABLE'});
-          const r=workflow.post(workflowParts,actor,body,selection?.account);
+          const r=workflow.post(workflowParts,actor,body,current?.account,current&&(()=>access.context(req,expected)));
           return send(res,r.status,r.value);
         }
         const assessmentLink=pathname.match(assessmentIncidentRoute);
@@ -638,15 +638,15 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         }
         if(parts[0]==='training'&&parts.length===2){
           if(!trainingEnabled)return send(res,404,{error:'Policy training is not provisioned for this workspace.'});
-          return send(res,200,store.trainingAdmin(enrolled,actor,selection.account,parts[1],body));
+          return send(res,200,store.trainingAdmin(enrolled,current,parts[1],body));
         }
         if(pathname==='/api/employee-attestations'){
           if(!employeeEnabled)return send(res,404,{error:'Employee attestations are not provisioned for this workspace.'});
-          return send(res,200,store.employeeAssign(assignedStaff,actor,selection.account,body));
+          return send(res,200,store.employeeAssign(assignedStaff,current,body));
         }
         if(parts[0]==='trust-center'){
           if(!centerPath)return send(res,404,{error:'Trust center is not configured for this workspace.'});
-          store.change(parts,actor,body,selection?.account);
+          store.change(parts,actor,body,current.account,current.generation);
           return send(res,200,store.trustCenterView(centerPath));
         }
         const docReview=parts[0]==='governance-documents'&&current?documentReviewContext(current):undefined;
