@@ -10,6 +10,9 @@ const {openSqlite} = require('./durable-storage');
 const {view:workQueue}=require('./work-queue');
 const {route:assessmentIncidentRoute}=require('./assessment-incident');
 const {dashboard:workspaceHome}=require('./workspace-home');
+const rightsViewHeader='X-MVW-Rights-View-Version';
+const wantsMinimal=prefer=>typeof prefer==='string'&&/^\s*return\s*=\s*(?:"minimal"|minimal)\s*$/iu.test(prefer);
+
 const {model:myWork,taskToken:myWorkToken}=require('./my-work');
 const myWorkRoute=new RegExp('^/api/my-work(?:/tasks/('+myWorkToken+'))?$');
 const {createAccess}=require('./workspace-access');
@@ -536,6 +539,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         return send(res,200,store.changeRequesterRelease(scopeContext(checked),releaseRoute[1],releaseRoute[2],body));
       }
       if (req.method==='GET'&&pathname==='/api/rights/cases'){
+        if(selection?.actor==='analyst'&&!searchParams.size){
+          const {model,version}=store.getRightsIntake(scopeContext(selection));
+          return send(res,200,model,undefined,version?{[rightsViewHeader]:version}:undefined);
+        }
         const rights=store.getRights(selection?scopeContext(selection):undefined);
         return send(res,200,caseOperator?policy.caseOperatorView(rights):rights);
       }
@@ -585,6 +592,15 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         if(pathname==='/api/data-map/discovery/preview')return send(res,200,store.previewDiscovery(actor,body,selection?.account));
         const parts=pathname.slice(5).split('/');
         const rightsContext=current&&parts[0]==='rights'&&parts[1]==='cases'?scopeContext(current):undefined;
+        if(pathname==='/api/rights/cases'&&current?.actor==='analyst'&&!searchParams.size){
+          const preference={preferMinimal:wantsMinimal(req.headers.prefer),clientVersion:req.headers[rightsViewHeader.toLowerCase()]};
+          const {model,version,minimal}=store.createRightsIntake(rightsContext,body,preference);
+          return send(res,minimal?201:200,model,undefined,{
+            Vary:'Prefer, '+rightsViewHeader,
+            ...(version?{[rightsViewHeader]:version}:{}),
+            ...(minimal?{'Preference-Applied':'return=minimal'}:{})
+          });
+        }
         if(parts[0]==='rights'&&parts[1]==='cases'&&parts[3]==='delegation'&&parts.length===4){
           if(!rightsContext?.rightsEnabled)return send(res,404,{error:'Rights case not found.'});
           if(searchParams.size)return send(res,422,{error:'Rights delegation does not accept query filters.'});

@@ -91,6 +91,14 @@ function settings(state,ctx){
         status:status(state,ctx,row,record,owners),canDelegate:!row.closedAt};
     })};
 }
+// The snapshot revision already covers assignments/membership. Record only the
+// delegation decisions that can change without a write as the clock advances.
+function intakeTimeMarker(state,ctx){
+  if(!ctx.rightsEnabled)return null;
+  const member=eligible(state,ctx);
+  const expired=Array.from(book(state).values()).filter(row=>ctx.at>=row.expiresAt).map(row=>row.id);
+  return [member?.seat.id??null,member?.seat.provisioning??null,member?.identityRevision??null,expired];
+}
 function write(state,ctx,id,body,event){
   if(!ctx.rightsEnabled||ctx.role!=='analyst')missing();
   const op=body?.operation;
@@ -125,4 +133,4 @@ function write(state,ctx,id,body,event){
     delegate:grants.get(id).account,reason:body.reason,revision:row.revision
   });
 }
-module.exports={provision,empty,viewState,verifyTarget,settings,write};
+module.exports={provision,empty,viewState,verifyTarget,settings,intakeTimeMarker,write};

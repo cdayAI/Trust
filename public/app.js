@@ -19,7 +19,7 @@ function scopeUrl(url){
   return target.pathname+target.search;
 }
 function notice(s,error=false){const n=$('#notice');n.textContent=s;n.className=error?'error':'success'}
-async function read(url,options){
+async function read(url,options,receive){
   const headers=new Headers(options?.headers);
   if(localSession)headers.delete('X-Demo-Actor');
   const r=await fetch(scopeUrl(url),{...options,headers}), data=await r.json();
@@ -28,7 +28,7 @@ async function read(url,options){
     await checkContext();
   }
   if(!r.ok)throw Object.assign(Error(data.error||data.message||'Request failed.'),{status:r.status,fileErrors:Array.isArray(data.fileErrors)?data.fileErrors:undefined});
-  return data;
+  return receive?receive(data,r):data;
 }
 async function write(url,body,message,after){
   if(busy)return;

@@ -197,10 +197,11 @@ function openSqlite(file, { readOnly = false } = {}) {
             return inTransaction('BEGIN IMMEDIATE', () => {
               let active = true;
               try {
-                return callback(decode(kind, read.get(scope, kind)), payload => {
+                const row=read.get(scope,kind);
+                return callback(decode(kind,row), payload => {
                   if (!active) throw new Error('Storage transaction is closed.');
                   save.run(scope, kind, JSON.stringify(validatePayload(kind, payload)));
-                });
+                }, row?.generation??0);
               } finally { active = false; }
             });
           },

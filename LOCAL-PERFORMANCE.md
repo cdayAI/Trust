@@ -43,3 +43,31 @@ and HTTP framing.
 The repeatable result is the eliminated startup fetch. Browser timings are
 illustrative, depend on scheduling, and are not production or comparative
 vendor measurements.
+
+## Signed-in staff rights intake
+
+The existing `POST /api/rights/cases` request still returns the complete scoped
+queue by default. An authenticated analyst can opt into
+[`Prefer: return=minimal`](https://www.rfc-editor.org/rfc/rfc7240.html#section-4.2);
+a successful compact request returns `201`, `Preference-Applied: return=minimal`,
+and only the new case and its applicable delegation summary.
+
+Where safe, a fresh analyst queue response provides an opaque
+`X-MVW-Rights-View-Version` header. The browser sends this with its intake
+preference. The server checks the token against the write transaction's
+snapshot and the currently applicable UTC and delegation visibility. If it
+does not match, the normal full authorized queue comes back in the same
+response. A valid delta updates one card and needs no follow-up request.
+Workspaces with dynamic requester result bindings use the full queue for the
+browser. If a network fault makes a submission ambiguous, reload the list
+before resubmitting rather than retrying the write automatically.
+
+One interleaved localhost Chromium comparison used separate, identical SQLite
+fixtures initially containing 500 projects and 500 rights cases. The first
+intake response was 912,649 bytes before and 1,477 bytes after; neither
+version added a queue GET after opening the Rights view. Across 13 measured
+intakes per version after four per-version warm-ups, median click-to-card
+time was 915.5 ms before and 178.0 ms after; p95 was 1760.2 ms and 311.2 ms,
+respectively. Payload sizes exclude HTTP framing. Click-to-card includes
+browser work and local scheduling; these are illustrative fixture timings,
+not production or vendor benchmarks.

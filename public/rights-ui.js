@@ -1,6 +1,7 @@
 'use strict';
 
-let rightsData,rightsSequence=0;
+let rightsData,rightsViewVersion,rightsSequence=0;
+const rightsViewHeader='X-MVW-Rights-View-Version';
 const rightsPath='/api/rights/cases';
 const rightsPane=$('#rights-view');
 const kindLabel=k=>({access:'Access',deletion:'Deletion',correction:'Correction',portability:'Portability','opt-out':'Opt-out'}[k]??k);
@@ -20,14 +21,45 @@ function rightsNote(text){
   label.querySelector('textarea').maxLength=1000;
   return label;
 }
+const readRights=(path,options)=>read(path,options,(model,response)=>({
+  model,version:response.headers.get(rightsViewHeader),minimal:response.headers.get('Preference-Applied')==='return=minimal'
+}));
+function fullRights({model,version}){
+  rightsData=model;rightsViewVersion=version;
+}
+function offerRightsReload(message,resultCase){
+  notice(message,true);
+  const retry=button('Reload cases','button','secondary');
+  retry.onclick=async()=>{notice('');await refreshRights();restoreRequesterResultFocus(resultCase);};
+  $('#notice').append(document.createTextNode(' '),retry);
+  if(resultCase)retry.focus();
+}
 async function refreshRights(){
   const sequence=++rightsSequence;
   try{
-    const next=await read(rightsPath);
-    if(sequence===rightsSequence&&!rightsPane.hidden){rightsData=next;renderRights();}
+    const next=await readRights(rightsPath);
+    if(sequence===rightsSequence&&!rightsPane.hidden){fullRights(next);renderRights();return true;}
   }catch(e){
-    if(sequence===rightsSequence&&!rightsPane.hidden){rightsPane.replaceChildren(el('p','Privacy rights cases could not be loaded.'));notice(e.message,true)}
+    if(sequence===rightsSequence&&!rightsPane.hidden){
+      rightsViewVersion=null;
+      rightsPane.replaceChildren(el('p','Privacy rights cases could not be loaded.'));
+      offerRightsReload(e.message);
+    }
   }
+  return false;
+}
+function appendRightsIntake(response,knownVersion){
+  const {case:row,delegation,baseVersion}=response.model;
+  const listing=$('#rights-case-list'),visibleCases=rightsData?.cases;
+  if(!knownVersion||!response.version||knownVersion!==baseVersion||rightsViewVersion!==knownVersion||
+    !row?.id||!listing||!Array.isArray(visibleCases)||visibleCases.some(x=>x.id===row.id)||
+    (delegation&&(!rightsData.delegation||delegation.id!==row.id)))return false;
+  visibleCases.push(row);
+  if(delegation)rightsData.delegation.cases.push(delegation);
+  rightsViewVersion=response.version;
+  $('#rights-case-empty')?.remove();
+  listing.querySelector('h2').after(renderRightsCase(row));
+  return true;
 }
 function restoreRequesterResultFocus(caseId){
   if(!caseId||rightsPane.hidden)return;
@@ -47,23 +79,40 @@ function rightsForm(target,path,fields,requestBody,caption){
   form.onsubmit=async e=>{
     e.preventDefault();
     if(busy)return;
-    busy=true;++rightsSequence;const submit=form.querySelector('button');submit.disabled=true;
+    busy=true;
+    const attempt=++rightsSequence,submit=form.querySelector('button'),intake=path===rightsPath;
+    const knownVersion=intake&&localSession?.authenticated?rightsViewVersion:null;
+    let requireReload=false;
+    submit.disabled=true;
     try {
       const values=Object.fromEntries(new FormData(form));
-      rightsData=await read(path,{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Actor':actor},
-        body:JSON.stringify(requestBody(values))});
-      if(!rightsPane.hidden){renderRights();notice('Privacy rights case updated.');restoreRequesterResultFocus(resultCase);}
+      const response=await readRights(path,{method:'POST',headers:{'Content-Type':'application/json','X-Demo-Actor':actor,
+        ...(knownVersion?{Prefer:'return=minimal',[rightsViewHeader]:knownVersion}:{})},body:JSON.stringify(requestBody(values))});
+      if(!intake){
+        fullRights(response);
+        if(!rightsPane.hidden){renderRights();notice('Privacy rights case updated.');restoreRequesterResultFocus(resultCase);}
+        return;
+      }
+      if(rightsPane.hidden)return;
+      if(attempt===rightsSequence&&response.minimal&&appendRightsIntake(response,knownVersion)){
+        form.reset();notice('Privacy rights case updated.');
+      }else if(attempt===rightsSequence&&!response.minimal&&Array.isArray(response.model?.cases)){
+        fullRights(response);renderRights();notice('Privacy rights case updated.');
+      }else{
+        // A committed intake is never posted again to recover its UI. Refresh
+        // the currently authorized list if the local view moved while it ran.
+        if(await refreshRights())notice('Privacy rights case updated.');
+        else if(!rightsPane.hidden)offerRightsReload('Case opened. Reload cases before continuing.');
+      }
     }catch(err){
       if(!rightsPane.hidden){
-        notice(err.message,true);
-        if(err.status===409&&err.message.includes('Reload')){
-          const reload=button('Reload cases','button','secondary');
-          reload.onclick=async()=>{notice('');await refreshRights();restoreRequesterResultFocus(resultCase);};
-          $('#notice').append(document.createTextNode(' '),reload);
-          if(resultCase)reload.focus();
-        }
+        if(intake&&(!err.status||err.status>=500)){
+          rightsViewVersion=null;requireReload=true;
+          offerRightsReload('The intake result could not be confirmed. Reload cases before submitting again.');
+        }else if(err.status===409&&err.message.includes('Reload'))offerRightsReload(err.message,resultCase);
+        else notice(err.message,true);
       }
-    }finally{busy=false;submit.disabled=false}
+    }finally{busy=false;submit.disabled=requireReload;}
   };
   target.append(form);
 }
@@ -170,9 +219,60 @@ function renderRequesterResult(card,row){
   }
   card.append(panel);
 }
-function renderRights(){
-  const {cases,kinds,owners,policy,legacyRecords,delegation,intakeSettings}=rightsData;
+function renderRightsCase(row){
+  const {owners,delegation,intakeSettings}=rightsData;
   const ownerName=id=>state?.actors.find(o=>o.id===id)?.name??owners.find(o=>o.id===id)?.name??id;
+  const ownerOptions=owners.map(o=>({value:o.id,label:o.name}));
+  const card=add(el('article',undefined,'module-record'),add(el('div',undefined,'row'),el('h3',kindLabel(row.kind)+' case'),badge(row.status.replaceAll('-',' '))),
+    el('p','Case ID: '+row.id,'hint'),el('p','Assigned owner: '+ownerName(row.owner)),
+    el('p','Due: '+row.dueDate+' (UTC)'+(row.overdue?' · overdue':''),row.overdue?'error':'hint'),
+    el('p','Identity: '+row.identity.status.replaceAll('-',' ')),el('p',row.summary));
+  card.id='work-record-'+row.id;
+  renderRightsDeadlineCase(card,row);
+  renderRequesterResult(card,row);
+  if(row.requesterIntake){
+    const pin=add(el('details'),el('summary','Requester form version '+row.requesterIntake.version));
+    const answers=el('dl');
+    for(const [key,value] of Object.entries(row.requesterIntake.answers)){
+      const label=intakeSettings?.options.find(f=>f.key===key)?.label??key;
+      add(answers,el('dt',label),el('dd',typeof value==='boolean'?(value?'Yes':'No'):String(value)));
+    }
+    pin.append(answers);card.append(pin);
+  }
+  if(actor==='analyst')renderCaseDelegation(card,row,delegation);
+  if(row.identity.reviewedBy)card.append(el('p','Identity reviewed by: '+ownerName(row.identity.reviewedBy),'hint'));
+  if(row.completion)card.append(el('p','Mock fulfillment only. No data released. '+row.completion.note,'success'));
+  if(row.status==='closed-unverified')card.append(el('p','Closed without disclosure.'));
+  function action(name){
+    const panel=add(el('details'),el('summary',rightActionLabel[name]));
+    const fields=[];
+    if(name==='assign')fields.push(rightsSelect('New owner','owner',ownerOptions.filter(o=>o.value!==row.owner)));
+    fields.push(rightsNote('Fictional action note'));
+    rightsForm(panel,rightsPath+'/'+encodeURIComponent(row.id)+'/'+name,fields,values=>({...values,expectedRevision:row.revision}),rightActionLabel[name]);
+    card.append(panel);
+  }
+  if(!row.closedAt){
+    if(actor==='analyst')action('assign');
+    if(actor==='reviewer'&&row.status==='received'&&row.identity.status!=='verified'){
+      action('verify');
+      if(row.identity.status==='pending')action('deny-verification');
+    }
+    if(actor===row.owner){
+      if(row.identity.status==='verified')action(row.status==='received'?'begin':'fulfill');
+      if(row.identity.status==='not-verified')action('close-unverified');
+    }
+  }
+  const history=el('ol',undefined,'log');
+  for(const entry of row.history.slice().reverse()){
+    const what=entry.action.replace('rights.case.','').replaceAll('-',' ');
+    const detail=entry.details.note??entry.details.code??'';
+    history.append(el('li',what+' · '+ownerName(entry.actor)+' · '+entry.at+(detail?' · '+detail:'')));
+  }
+  card.append(add(el('details'),el('summary','Case history ('+row.history.length+')'),history));
+  return card;
+}
+function renderRights(){
+  const {cases,kinds,owners,policy,legacyRecords,intakeSettings}=rightsData;
   const ownerOptions=owners.map(o=>({value:o.id,label:o.name}));
   const intro=add(el('section'),heading('Privacy rights cases'),
     el('p','Use fictional notes only. Identity review is simulated and no information is delivered.'),
@@ -180,63 +280,16 @@ function renderRights(){
   if(actor==='analyst'){
     const days=labelled('Days to respond','days',String(policy.defaultDays),'input');
     const field=days.querySelector('input');
-    field.type='number';field.min=policy.min;field.max=policy.max;field.step='1';
+    field.type='number';field.min=policy.min;field.max=policy.max;field.step='1';field.defaultValue=String(policy.defaultDays);
     rightsForm(intro,rightsPath,[
       rightsSelect('Request type','kind',kinds.map(value=>({value,label:kindLabel(value)}))),
       rightsSelect('Assigned owner','owner',ownerOptions),...(policy.activeVersion===1?[days]:[]),rightsNote('Fictional intake note')
     ],v=>Object.hasOwn(v,'days')?({...v,days:Number(v.days)}):v,'Open rights case');
   }
   const list=add(el('section'),heading('Case queue'));
-  if(!cases.length)list.append(el('p','No rights cases yet.'));
-  for(const row of cases.slice().reverse()){
-    const card=add(el('article',undefined,'module-record'),add(el('div',undefined,'row'),el('h3',kindLabel(row.kind)+' case'),badge(row.status.replaceAll('-',' '))),
-      el('p','Case ID: '+row.id,'hint'),el('p','Assigned owner: '+ownerName(row.owner)),
-      el('p','Due: '+row.dueDate+' (UTC)'+(row.overdue?' · overdue':''),row.overdue?'error':'hint'),
-      el('p','Identity: '+row.identity.status.replaceAll('-',' ')),el('p',row.summary));
-    card.id='work-record-'+row.id;
-    renderRightsDeadlineCase(card,row);
-    renderRequesterResult(card,row);
-    if(row.requesterIntake){
-      const pin=add(el('details'),el('summary','Requester form version '+row.requesterIntake.version));
-      const answers=el('dl');
-      for(const [key,value] of Object.entries(row.requesterIntake.answers)){
-        const label=intakeSettings?.options.find(f=>f.key===key)?.label??key;
-        add(answers,el('dt',label),el('dd',typeof value==='boolean'?(value?'Yes':'No'):String(value)));
-      }
-      pin.append(answers);card.append(pin);
-    }
-    if(actor==='analyst')renderCaseDelegation(card,row,delegation);
-    if(row.identity.reviewedBy)card.append(el('p','Identity reviewed by: '+ownerName(row.identity.reviewedBy),'hint'));
-    if(row.completion)card.append(el('p','Mock fulfillment only. No data released. '+row.completion.note,'success'));
-    if(row.status==='closed-unverified')card.append(el('p','Closed without disclosure.'));
-    function action(name){
-      const panel=add(el('details'),el('summary',rightActionLabel[name]));
-      const fields=[];
-      if(name==='assign')fields.push(rightsSelect('New owner','owner',ownerOptions.filter(o=>o.value!==row.owner)));
-      fields.push(rightsNote('Fictional action note'));
-      rightsForm(panel,rightsPath+'/'+encodeURIComponent(row.id)+'/'+name,fields,values=>({...values,expectedRevision:row.revision}),rightActionLabel[name]);
-      card.append(panel);
-    }
-    if(!row.closedAt){
-      if(actor==='analyst')action('assign');
-      if(actor==='reviewer'&&row.status==='received'&&row.identity.status!=='verified'){
-        action('verify');
-        if(row.identity.status==='pending')action('deny-verification');
-      }
-      if(actor===row.owner){
-        if(row.identity.status==='verified')action(row.status==='received'?'begin':'fulfill');
-        if(row.identity.status==='not-verified')action('close-unverified');
-      }
-    }
-    const history=el('ol',undefined,'log');
-    for(const entry of row.history.slice().reverse()){
-      const what=entry.action.replace('rights.case.','').replaceAll('-',' ');
-      const detail=entry.details.note??entry.details.code??'';
-      history.append(el('li',what+' · '+ownerName(entry.actor)+' · '+entry.at+(detail?' · '+detail:'')));
-    }
-    card.append(add(el('details'),el('summary','Case history ('+row.history.length+')'),history));
-    list.append(card);
-  }
+  list.id='rights-case-list';
+  if(!cases.length){const empty=el('p','No rights cases yet.');empty.id='rights-case-empty';list.append(empty);}
+  for(const row of cases.slice().reverse())list.append(renderRightsCase(row));
   const parts=[intro,...(localSession?.authenticated&&['analyst','reviewer'].includes(actor)?[rightsDeadlinePanel()]:[]),...(intakeSettings?[requesterIntakePanel(intakeSettings)]:[]),list];
   if(legacyRecords.length){
     const archive=add(el('section'),heading('Legacy register entries'),

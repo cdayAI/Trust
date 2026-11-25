@@ -79,16 +79,19 @@ function portalModel(state,grant,event,request){
     receivedDate:row.receivedAt.slice(0,10),receipt:entry.receipt,
     ...(row.requesterIntake?{intakeFormVersion:row.requesterIntake.version}:{})}};
 }
+function openStaffCase(state,actor,body,event){
+  if(actor!=='analyst')fail(403,'INTAKE_REQUIRED','Only the intake analyst can open a case.');
+  assertKeys(body,['kind','owner','days','note']);
+  const kind=choice(body.kind,kinds,'request type'),owner=choice(body.owner,ownerIds,'case owner');
+  if(body.days!==undefined&&(!Number.isSafeInteger(body.days)||body.days<policy.min||body.days>policy.max))fail(422,'INVALID_DEADLINE','Set a synthetic deadline of 1–365 calendar days.');
+  return openCase(state,actor,{kind,owner,days:body.days,summary:note(body.note)},event);
+}
 function change(state,parts,actor,body,event,_assessments,account) {
   if(parts.length===3&&parts[1]==='deadline-policy')return deadlines.mutate(state,actor,account,parts[2],body,event);
   const now=new Date().toISOString();
   const cases=state.rightsCases??[];
   if(parts.length===2&&parts[1]==='cases') {
-    if(actor!=='analyst')fail(403,'INTAKE_REQUIRED','Only the intake analyst can open a case.');
-    assertKeys(body,['kind','owner','days','note']);
-    const kind=choice(body.kind,kinds,'request type'),owner=choice(body.owner,ownerIds,'case owner');
-    if(body.days!==undefined&&(!Number.isSafeInteger(body.days)||body.days<policy.min||body.days>policy.max))fail(422,'INVALID_DEADLINE','Set a synthetic deadline of 1–365 calendar days.');
-    openCase(state,actor,{kind,owner,days:body.days,summary:note(body.note)},event);
+    openStaffCase(state,actor,body,event);
     return;
   }
   if(parts.length!==4||parts[1]!=='cases')fail(404,'NOT_FOUND','Rights endpoint not found.');
@@ -189,4 +192,4 @@ function change(state,parts,actor,body,event,_assessments,account) {
   row.updatedAt=now;
   event(state,actor,'rights.case.'+action,null,row.id,{...details,from,to:row.status,revision:row.revision});
 }
-module.exports={view,change,backupActor,portalModel};
+module.exports={view,change,backupActor,portalModel,openStaffCase};

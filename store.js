@@ -179,7 +179,8 @@ function seed() {
   return state;
 }
 function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false,largePdf=false}={}) {
-  let saveSnapshot;
+  let saveSnapshot,localSnapshotGeneration=0;
+  const intakeViewInstance=randomUUID();
   function persist(next) {
     if(storage){
       if(!saveSnapshot)throw Error('Write outside storage transaction.');
@@ -191,6 +192,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     try {
       fs.writeFileSync(temp,JSON.stringify(next,null,2)+'\n',{flag:'wx',mode:0o600});
       fs.renameSync(temp,file);
+      localSnapshotGeneration++;
     } finally {
       fs.rmSync(temp,{force:true});
     }
@@ -293,6 +295,22 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       return resultDelivery?{...row,resultDelivery}:row;
     });
     return {...model,...(delegation?{delegation}:{}),...(intakeSettings?{intakeSettings}:{})};
+  }
+  function intakeViewBasis(snapshot,ctx){
+    // Requester result grants can expire independently while their server-side
+    // closures are being read. Conservatively keep the full response for any
+    // modeled requester result bindings rather than applying a stale delta.
+    if(ctx.role!=='analyst'||(ctx.activeReleaseBinding&&snapshot.requesterReceipts?.length))return null;
+    return JSON.stringify([ctx.account,ctx.generation,!!ctx.rightsEnabled,!!ctx.intakeEnabled,
+      new Date().toISOString().slice(0,10),rightsCaseScope.intakeTimeMarker(snapshot,ctx)]);
+  }
+  function intakeVersion(generation,basis){
+    return basis===null?null:createHash('sha256').update(JSON.stringify([intakeViewInstance,generation,basis])).digest('hex');
+  }
+  function readVersionedRights(snapshot,ctx,generation){
+    const before=intakeViewBasis(snapshot,ctx),model=projectRights(snapshot,ctx);
+    const after=intakeViewBasis(snapshot,ctx);
+    return {model,version:before===after?intakeVersion(generation,after):null};
   }
   const documentCapabilities={largePdf:!!storage&&largePdf};
   const applyProgram = (snapshot, parts, actor, body, appendEvent, account) =>
@@ -476,6 +494,32 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       if(ctx)requireCurrentOperatorSession(ctx);
       return projectRights(state,ctx);
     },
+    getRightsIntake(ctx,generation=localSnapshotGeneration){
+      requireCurrentOperatorSession(ctx);
+      return readVersionedRights(state,ctx,generation);
+    },
+    createRightsIntake(ctx,body,{preferMinimal,clientVersion},generation=localSnapshotGeneration){
+      requireCurrentOperatorSession(ctx);
+      if(!body||typeof body!=='object'||Array.isArray(body))fail(400,'Expected a JSON object.');
+      const before=intakeViewBasis(state,ctx),baseVersion=intakeVersion(generation,before);
+      const next={...state,rightsCases:(state.rightsCases??[]).slice(),audit:state.audit.slice()};
+      const row=rights.openStaffCase(next,ctx.role,body,(target,role,action,project,entity,details)=>{
+        event(target,role,action,project,entity,details);
+        target.audit.at(-1).account=ctx.account;
+      });
+      const after=intakeViewBasis(next,ctx);
+      // The version check and persistence run under the same SQLite write
+      // transaction (or synchronously with the single-process JSON store).
+      const useDelta=baseVersion&&clientVersion===baseVersion&&before===after;
+      let outcome;
+      if(preferMinimal&&(clientVersion===undefined||useDelta)){
+        const only=projectRights({...next,rightsCases:[row],audit:next.audit.slice(state.audit.length)},ctx);
+        outcome={minimal:true,version:useDelta?intakeVersion(generation+1,after):null,
+          model:{case:only.cases[0],delegation:only.delegation?.cases[0]??null,baseVersion:useDelta?baseVersion:null}};
+      }else outcome=readVersionedRights(next,ctx,generation+1);
+      persist(next);state=next;
+      return outcome;
+    },
     delegateRightsCase(id,ctx,body){
       requireCurrentOperatorSession(ctx);
       const next=structuredClone(state);
@@ -597,17 +641,22 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRequesterIntakeForm','pinReportRun','changeReportSchedule','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRequesterIntakeForm','pinReportRun','createRightsIntake','changeReportSchedule','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
+      if(name==='getRightsIntake'){
+        const {generation,payload}=storage.readSince(workbench,-1);
+        state=payload??fresh();
+        return fn(...args,generation);
+      }
       if(name!=='identityMembership')state=storage.read(workbench)??fresh();
       return fn(...args);
     }
     let refusal;
-    const result=storage.write(workbench,(snapshot,save)=>{
+    const result=storage.write(workbench,(snapshot,save,generation)=>{
       state=snapshot??fresh();
       saveSnapshot=save;
-      try{return fn(...args);}
+      try{return name==='createRightsIntake'?fn(...args,generation):fn(...args);}
       catch(error){
         // Domain refusals whose audit entries were explicitly saved still
         // commit. Other exceptions roll back the whole storage transaction.
