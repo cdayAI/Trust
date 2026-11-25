@@ -1,0 +1,7 @@
+{
+  "name": "mvw-trust-oidc",
+  "private": true,
+  "dependencies": {
+    "openid-client": "6.8.4"
+  }
+}

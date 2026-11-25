@@ -27,6 +27,7 @@ const maturityPlanning = require('./maturity-planning');
 const vendorMonitoring = require('./vendor-monitoring');
 const documents = require('./governance-documents');
 const documentScope = require('./document-scope');
+const rightsCaseScope=require('./rights-case-scope');
 const programs=new Map([
   ['assessment-config',assessmentConfig],['processing-register',processingRegister],
   ['dictionary',dictionary],['trust-center',trustCenter],['rights',rights],['incidents',incidents],['data-map',dataMap],
@@ -162,7 +163,7 @@ function seed() {
   createVendor(state,'system',{projectId:p.id,name:'Northstar Assist',description:'Fictional service that drafts support replies with AI. Humans review before messages are sent.',usesAI:true},'northstar');
   return state;
 }
-function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false}={}) {
+function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false}={}) {
   let saveSnapshot;
   function persist(next) {
     if(storage){
@@ -193,6 +194,11 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     if(manualAttachmentReview){
       const next=structuredClone(state);
       if(documents.enableManualReview(next)){persist(next);state=next;}
+    }
+    if(scopeRights&&state.rightsCaseAccountScope===undefined){
+      const next=structuredClone(state);
+      next.rightsCaseAccountScope=rightsCaseScope.empty();
+      persist(next);state=next;
     }
     if(scopeDocuments&&state.documentAccessScope===undefined){
       const next=structuredClone(state);
@@ -248,7 +254,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const excludedAudit=e=>!e.action.includes('.')||e.action.startsWith('consent.')||e.action.startsWith('cookies.')||
     (e.action.startsWith('privacy-preferences.')&&!e.action.startsWith('privacy-preferences.notice.'));
   const publicState=()=>{
-    const {fixtureMigrationReceipt,requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,ethicsCases,rightsDeadlinePolicy,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,...safe}=state;
+    const {fixtureMigrationReceipt,requesterReceipts,trustCenter:privateCenter,employeeAttestations,training:privateTraining,privacyPreferences,identityAdministration,groupGovernance:privateGroupGovernance,documentAccessScope,rightsCaseAccountScope,ethicsCases,rightsDeadlinePolicy,maturityPlanning:privatePlanning,assessmentConfiguration:privateAssessmentConfig,processingRegister:privateProcessingRegister,incidentPolicyBook:privateIncidentPolicy,...safe}=state;
     if(safe.rightsCases)safe.rightsCases=safe.rightsCases.map(({extensionRequester,...row})=>row);
     if(safe.moduleRecords)safe.moduleRecords=modules.model(state).records;
     if(safe.incidentCases)safe.incidentCases=safe.incidentCases.map(({ownerAccount,reviewRequestedByAccount,...row})=>row);
@@ -259,6 +265,11 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   function requireCurrentOperatorSession(caller) {
     const membership = identityAdmin.record(state, caller.account);
     if (membership.disabled || membership.revision !== caller.generation) fail(401, 'Sign in to a local workspace.');
+  }
+  function projectRights(snapshot,context){
+    const model=rights.view(context?.role==='case-operator'?rightsCaseScope.viewState(snapshot,context):snapshot);
+    const delegation=rightsCaseScope.settings(snapshot,context);
+    return delegation?{...model,delegation}:model;
   }
   const applyProgram = (snapshot, parts, actor, body, appendEvent, account) =>
     programs.get(parts[0]).change(snapshot, parts, actor, body, appendEvent, createVendorAssessments, account);
@@ -358,7 +369,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     getCaseDocuments(ctx){
       requireCurrentOperatorSession(ctx);
       if(ctx.enabled)return documentScope.list(state,ctx);
-      const baseline=documents.view(state,ctx.role);
+      const baseline=documents.view(rightsCaseScope.viewState(state,ctx),ctx.role);
       return state.documentAccessScope===undefined?baseline:{...baseline,documents:[]};
     },
     documentAccessView:ctx=>documentScope.boardView(state,ctx),
@@ -380,7 +391,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
         documentScope.missing();
       let level;
       if(ctx.enabled)level=documentScope.authorize(state,ctx,parts[2],parts[4],attachment);
-      else if(state.documentAccessScope!==undefined||!documents.view(state,ctx.role).documents
+      else if(state.documentAccessScope!==undefined||!documents.view(rightsCaseScope.viewState(state,ctx),ctx.role).documents
         .some(doc=>doc.id===parts[2]&&doc.revisions.some(version=>version.id===parts[4])))
         documentScope.missing();
       if(!body||typeof body!=='object'||Array.isArray(body))fail(400,'Expected a JSON object.');
@@ -398,7 +409,24 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       return level&&!attachment?{...result,version:documentScope.project(result.version,level)}:result;
     },
     getModules:()=>modules.model(state),
-    getRights:()=>rights.view(state),
+    caseOperatorState(ctx){
+      requireCurrentOperatorSession(ctx);
+      return rightsCaseScope.viewState(state,ctx);
+    },
+    getRights(ctx){
+      if(ctx)requireCurrentOperatorSession(ctx);
+      return projectRights(state,ctx);
+    },
+    delegateRightsCase(id,ctx,body){
+      requireCurrentOperatorSession(ctx);
+      const next=structuredClone(state);
+      rightsCaseScope.write(next,ctx,id,body,(target,actor,action,project,entity,details)=>{
+        event(target,actor,action,project,entity,details);
+        target.audit.at(-1).account=ctx.account;
+      });
+      persist(next);state=next;
+      return projectRights(state,ctx);
+    },
     getRightsDeadlinePolicy:account=>deadlines.view(state,account),
     getIncidents:(actor,account)=>incidents.view(state,actor,account),
     getDictionary:()=>dictionary.view(state),
@@ -418,7 +446,11 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     getProgramAudit:prefix=>state.audit.filter(e=>e.action.startsWith(prefix+'.')),
     visibleAudit:()=>state.audit.filter(e=>!excludedAudit(e)),
     reportSnapshot:()=>({state,audit:state.audit.filter(e=>!excludedAudit(e))}),
-    change(parts,actor,body,account,generation) {
+    change(parts,actor,body,account,generation,rightsContext) {
+      if(rightsContext){
+        requireCurrentOperatorSession(rightsContext);
+        if(rightsContext.role==='case-operator')rightsCaseScope.verifyTarget(state,rightsContext,parts[2]);
+      }
       if(generation!==undefined&&parts[0]==='governance-documents')
         requireCurrentOperatorSession({account,generation});
       if (!actors.some(a=>a.id===actor)) fail(403,'Select a valid demo identity.');
@@ -458,11 +490,12 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
         actionHandoff(next,actor,find(next,'handoff',parts[1]),parts[2]);
       } else fail(404,'Endpoint not found.');
       commit();
+      if(rightsContext&&!result)return projectRights(state,rightsContext);
       return result??(parts[0]==='modules'?modules.model(state):program?program.view(state,actor,account):publicState());
     }
   };
   if(!storage)return operations;
-  const mutations=new Set(['readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  const mutations=new Set(['delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
       if(name!=='identityMembership')state=storage.read(workbench)??fresh();

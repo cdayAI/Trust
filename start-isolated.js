@@ -48,6 +48,7 @@ const server=createServer({sqliteFile:process.env.TRUST_SQLITE_FILE,operationalE
   root:join(root,'workspaces'),enableIdentityAdmin,
   workspaces:[{id:'harbor',label:'Fictional Harbor'},{id:'orchard',label:'Fictional Orchard'}],
   ...(attachmentReviewSetting?{attachmentReviewWorkspaces:['harbor','orchard']}:{}),
+  ...(process.env.TRUST_ENABLE_LOCAL_RIGHTS_CASE_SCOPE==='1'?{rightsCaseScopeWorkspaces:['harbor','orchard']}:{}),
   ...(enableRecordScope?{documentScopeWorkspaces:['harbor','orchard']}:{}),
   ...(enableGroupGovernance?{groupApplications:['harbor','orchard'].map(workspace=>({workspace,applications:[
     {id:'sample-case-reference',name:'Sample Case Reference',summary:'Fictional reference application for the scoped access walkthrough.'},

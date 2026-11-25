@@ -23,12 +23,14 @@ public identity cues, not an official corporate brand kit.
 
 - **Data and recovery:** The opt-in SQLite backend has restart, concurrent
   command, backup integrity, isolated restore, and offline migration rehearsal
-  tests. Real platform mappings, managed encrypted backups, and an agreed
+  tests, including read-only reconciliation of a restored synthetic import.
+  Real platform mappings, managed encrypted backups, and an agreed
   recovery objective are still separate.
 - **Authorization:** Local workspace isolation, role denials, account
   revocation, group grants, and exact-edition document grants are covered.
-  Grants do not silently carry across document versions. Enterprise directory
-  federation and broad record/field-level policy still require validation.
+  Grants do not silently carry across document versions. OpenID Connect
+  is exercised against a local identity fixture; company tenant federation
+  and broad record/field-level policy still require validation.
 - **Documents:** Real Chromium covers multi-select, drag-and-drop,
   all-or-nothing validation, and byte-exact downloads for supported formats.
   An opt-in quarantine blocks pending or rejected bytes and requires a

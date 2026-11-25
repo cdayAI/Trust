@@ -2,15 +2,18 @@
 
 This is an offline receiving-environment rehearsal. It accepts only the original fictional transfer format, not third-party platform exports, actual work data, network endpoints, documents, accounts, identities, free text, or credentials. It does not implement a proprietary mapping, import approval history, or establish readiness for production.
 
-## Plan, review, import
+## Diagnose, plan, review, import
 
 Use a private local test directory. Run the commands from the source directory with the Node.js runtime listed in [local distribution](LOCAL-RELEASE.md).
 
 ```sh
+npm run storage -- diagnose-fixture-import fixtures/fictional-transfer-v1.json migration-rehearsal
 npm run storage -- plan-fixture-import fixtures/fictional-transfer-v1.json migration-rehearsal /private/test/plan.json
 # Inspect stages, duplicate counts, mappings, deferred bindings, and planDigest.
 npm run storage -- import-fixture fixtures/fictional-transfer-v1.json /private/test/plan.json /private/test/imported.sqlite --confirm PLAN_DIGEST
 ```
+
+Diagnostics are optional and read-only. They report stable issue codes, stages and one-based row numbers, not source text. More than one defect may be found, including dependent errors caused by a rejected upstream row. A blocked diagnosis returns exit status 2 with no plan; output begins with the first 50 issues and reports the total.
 
 Use actual new paths in place of the example. Substitute the exact digest from the reviewed dry run for `PLAN_DIGEST`. Planning creates only an owner-only review file, never a database. Import independently transforms the bounded source again and refuses any changes to the approved plan or normalized input. Source record order and insignificant JSON whitespace do not affect the digest; adding a duplicate or changing its content does. Local SHA-256 digests bind content and scope, not a human's identity and not an external signature. Keep the plan private.
 
@@ -21,6 +24,16 @@ The dry run reports four stages: inventory nodes, graph edges, dictionary drafts
 Import builds and verifies the isolated SQLite snapshot off to the side, then atomically publishes it on the destination filesystem, never overwriting an existing file. The receipt appears on stdout and is stored in the SQLite backup scope, but not published in the app's broad state API. Its counts do not imply that deferred work was applied.
 
 To open the result, use the loopback local isolation runtime with the new database as `sqliteFile` and a fresh empty workspace root. Provision the exact dry-run workspace ID with test-only analyst/reviewer accounts. The normal demo launcher uses different default workspace IDs, so use a custom receiving test config. [The integration test](test/fixture-migration.test.js) shows the exact `createServer` configuration and verifies the authenticated map/dictionary readback, draft approval, and workspace isolation. Do not point the receiving configuration at an existing database or official environment.
+
+## Reconcile after import
+
+```sh
+npm run storage -- verify-fixture-import fixtures/fictional-transfer-v1.json /private/test/plan.json /private/test/imported.sqlite --confirm RECEIPT_ID
+```
+
+Use the receipt ID printed at import time, before the receiver writes anything. Verification rebuilds the expected fixture snapshot from the reviewed inputs and receipt time, opens the database read-only, and verifies the complete supported snapshot and audit against the receipt. The report shows matched, changed, missing, unexpected and duplicate node, edge and term counts and separately checks that deferred term bindings were not activated. It does not echo observed record content. The same verification can be used after a verified backup and restore.
+
+A valid but modified database returns a drift report and exit status 2. It does not fix or remove anything. A broken receipt, wrong workspace or wrong reviewed plan is rejected without reconciliation. Exact verification is for the untouched fixture import, not a certificate for later approved edits or real data.
 
 ## Rollback rehearsal
 

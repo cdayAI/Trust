@@ -7,16 +7,19 @@ const ident=/^[a-z][a-z0-9-]{0,47}$/;
 const codePattern=/^[A-Za-z0-9_-]{43}$/;
 const roles=new Set(['analyst','reviewer','case-operator','publisher','ethics-investigator','ethics-reviewer']);
 const digest=value=>createHash('sha256').update(value).digest();
-const cookieName='trust_local_session';
 const denied=(status,message)=>{throw Object.assign(new Error(message),{status})};
-const cookie=(token='',age=0)=>cookieName+'='+token+'; Path=/; Max-Age='+age+'; HttpOnly; SameSite=Strict';
 
 function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdentityAdmin=false,now=Date.now},
-  readIdentityRecord=()=>({revision:0,disabled:false}),workspaceFeatures=()=>({})){
+  readIdentityRecord=()=>({revision:0,disabled:false}),workspaceFeatures=()=>({}),oidc=null){
   if(typeof root!=='string'||!root||!Number.isSafeInteger(sessionSeconds)||sessionSeconds<1||sessionSeconds>3600||
     typeof now!=='function'||typeof readIdentityRecord!=='function'||typeof enableIdentityAdmin!=='boolean'||!Array.isArray(workspaces)||!workspaces.length||!Array.isArray(accounts)||!accounts.length)
     throw new Error('Invalid isolated workspace configuration.');
+  const mode=oidc?'corporate-oidc':'local-isolated';
+  const cookieName=oidc?(oidc.secure?'__Host-trust_corporate_session':'trust_corporate_session'):'trust_local_session';
+  const cookie=(token='',age=0)=>cookieName+'='+token+'; Path=/; Max-Age='+age+
+    '; HttpOnly; SameSite='+(oidc?'Lax':'Strict')+(oidc?.secure?'; Secure':'');
   const spaces=new Map(), users=new Map(), seats=new Set(), keys=new Set(),sessions=new Map();
+  const subjects=new Map();
   const base=resolve(root);
   fs.mkdirSync(base,{recursive:true,mode:0o700});
   const resolvedRoot=fs.realpathSync(base);
@@ -33,18 +36,29 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
     if(!fs.lstatSync(folder).isDirectory()||fs.realpathSync(folder)!==folder)throw new Error('Invalid workspace store directory.');
     spaces.set(id,{id,label,file:safeFile(folder,'state.json'),workflowFile:safeFile(folder,'workflows.json')});
   }
-  for(const {id,codeHash,memberships,disabled=false,validUntil=null} of accounts){
-    if(typeof id!=='string'||!ident.test(id)||users.has(id)||typeof codeHash!=='string'||!/^([0-9a-f]{64})$/.test(codeHash)||
-      keys.has(codeHash)||typeof disabled!=='boolean'||(validUntil!==null&&(!Number.isSafeInteger(validUntil)||validUntil<1))||!memberships||typeof memberships!=='object'||Array.isArray(memberships)||!Object.keys(memberships).length)
+  for(const {id,codeHash,subject,initialWorkspace,memberships,disabled=false,validUntil=null} of accounts){
+    if(typeof id!=='string'||!ident.test(id)||users.has(id)||typeof disabled!=='boolean'||
+      (validUntil!==null&&(!Number.isSafeInteger(validUntil)||validUntil<1))||!memberships||
+      typeof memberships!=='object'||Array.isArray(memberships)||!Object.keys(memberships).length)
       throw new Error('Invalid local synthetic account.');
-    keys.add(codeHash);
+    if(oidc){
+      if(!id.startsWith('sample-')||codeHash!==undefined||typeof subject!=='string'||
+        !/^[\x21-\x7e]{1,255}$/.test(subject)||subjects.has(subject)||typeof initialWorkspace!=='string'||
+        !Object.hasOwn(memberships,initialWorkspace))
+        throw new Error('Invalid corporate synthetic account.');
+      subjects.set(subject,id);
+    }else{
+      if(typeof codeHash!=='string'||!/^([0-9a-f]{64})$/.test(codeHash)||keys.has(codeHash))
+        throw new Error('Invalid local synthetic account.');
+      keys.add(codeHash);
+    }
     const grants=new Map();
     for(const [space,role] of Object.entries(memberships)){
       const seat=space+':'+role;
       if(!spaces.has(space)||(!roles.has(role)&&!(enableIdentityAdmin&&role==='identity-admin'))||seats.has(seat))throw new Error('Invalid or duplicated workspace role assignment.');
       seats.add(seat);grants.set(space,role);
     }
-    users.set(id,{id,hash:Buffer.from(codeHash,'hex'),grants,disabled,validUntil});
+    users.set(id,{id,hash:oidc?null:Buffer.from(codeHash,'hex'),subject,initialWorkspace,grants,disabled,validUntil});
   }
   const invalidHash=randomBytes(32);
   const live=(account,at)=>account&&!account.disabled&&(account.validUntil===null||at<account.validUntil);
@@ -66,20 +80,20 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
   }
   function context(req,expected){
     const current=lookup(req);
-    if(!current)denied(401,'Sign in to a local workspace.');
+    if(!current)denied(401,oidc?'Sign in with your organization.':'Sign in to a local workspace.');
     if(expected.length!==1||expected[0]!==current.workspace)denied(403,'This request does not match the active workspace.');
     return {space:spaces.get(current.workspace),actor:current.account.grants.get(current.workspace),
       account:current.account.id,generation:current.generation};
   }
-  const describe=session=>({mode:'local-isolated',authenticated:!!session,...(session?{
+  const describe=session=>({mode,authenticated:!!session,...(session?{
     account:session.account.id,actor:session.account.grants.get(session.workspace),workspace:session.workspace,
     capabilities:capabilities(session.account.grants.get(session.workspace),workspaceFeatures(session.workspace)),
     workspaces:[...session.account.grants].filter(([id])=>!membership(id,session.account.id).disabled).map(([id])=>({id,label:spaces.get(id).label}))
   }:{})});
-  function issue(account,workspace,previous){
+  function issue(account,workspace,previous,authenticationUntil=Infinity){
     const at=now();
-    const until=Math.min(at+1000*sessionSeconds,account.validUntil??Infinity);
-    if(!live(account,at))denied(401,'Invalid local sign-in.');
+    const until=Math.min(at+1000*sessionSeconds,account.validUntil??Infinity,authenticationUntil);
+    if(!live(account,at)||until<=at)denied(401,'Invalid local sign-in.');
     const record=membership(workspace,account.id);
     if(record.disabled)denied(401,'Invalid local sign-in.');
     for(const [key,session] of sessions)
@@ -87,7 +101,7 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
     const count=[...sessions].filter(([key,s])=>key!==previous&&s.account===account).length;
     if(count>=8)denied(429,'Local account session limit reached.');
     if(sessions.size>=256&&!sessions.has(previous))denied(503,'Local session limit reached.');
-    const token=randomBytes(32).toString('base64url'),session={account,workspace,until,generation:record.revision};
+    const token=randomBytes(32).toString('base64url'),session={account,workspace,until,authenticationUntil,generation:record.revision};
     if(previous)sessions.delete(previous);
     sessions.set(token,session);
     return {value:describe(session),cookie:cookie(token,Math.ceil((until-at)/1000))};
@@ -95,23 +109,29 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
   return {
     describe:req=>describe(lookup(req)),
     login(req,body){
+      if(oidc)denied(404,'Not found.');
       const account=typeof body?.account==='string'?users.get(body.account):null;
       const candidate=typeof body?.code==='string'&&codePattern.test(body.code)?digest(body.code):invalidHash;
       const matches=timingSafeEqual(account?.hash??invalidHash,candidate);
       if(!account||!matches||candidate===invalidHash||!account.grants.has(body.workspace)||!live(account,now()))denied(401,'Invalid local sign-in.');
       return issue(account,body.workspace,tokenOf(req));
     },
+    loginOidc(req,{subject,until}){
+      const account=users.get(subjects.get(subject));
+      if(!oidc||!account||!Number.isSafeInteger(until))denied(401,'Corporate sign-in denied.');
+      return issue(account,account.initialWorkspace,tokenOf(req),until);
+    },
     switch(req,body){
       const current=lookup(req);
-      if(!current)denied(401,'Sign in to a local workspace.');
+      if(!current)denied(401,oidc?'Sign in with your organization.':'Sign in to a local workspace.');
       if(body?.current!==current.workspace||!current.account.grants.has(body.workspace)||membership(body.workspace,current.account.id).disabled)denied(403,'Workspace not available for this session.');
-      return issue(current.account,body.workspace,current.token);
+      return issue(current.account,body.workspace,current.token,current.authenticationUntil);
     },
     logout(req){sessions.delete(tokenOf(req));return {value:describe(null),cookie:cookie()}},
     identityRoster(id){
       return [...users.values()].filter(u=>u.grants.has(id)).map(u=>({
         id:u.id,role:u.grants.get(id),configuredDisabled:u.disabled,validUntil:u.validUntil,
-        provisioning:digest(JSON.stringify([u.hash.toString('hex'),u.validUntil])).toString('hex')
+        provisioning:digest(JSON.stringify([u.hash?.toString('hex')??u.subject,u.validUntil])).toString('hex')
       }));
     },
     identityTime:now,

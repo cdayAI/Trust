@@ -53,8 +53,33 @@ function rightsForm(target,path,fields,requestBody,caption){
   };
   target.append(form);
 }
+function renderCaseDelegation(card,row,board){
+  const grant=board?.cases.find(item=>item.id===row.id);
+  if(!grant)return;
+  const panel=add(el('details'),el('summary','Account access'),
+    el('p','Delegation: '+grant.status.replaceAll('-',' ')+(grant.account?' · '+grant.account:'')+
+      (grant.status==='active'&&grant.expiresAt?' · expires '+new Date(grant.expiresAt).toISOString().slice(0,10):''),
+      'hint'),
+    el('p','Assigning the case-operator role alone does not share this case. An account delegation expires after 30 days.','hint'));
+  const reasons={'case-assignment':'Case assignment','coverage-change':'Coverage change','scope-review':'Access review','assignment-ended':'Assignment ended'};
+  const reasonField=()=>rightsSelect('Delegation reason','reason',board.reasons.map(value=>({value,label:reasons[value]})),
+    grant.status==='active'?'assignment-ended':'case-assignment');
+  const confirmed=message=>{
+    const input=el('input');input.type='checkbox';input.required=true;
+    return add(el('label'),input,document.createTextNode(' '+message));
+  };
+  const path=rightsPath+'/'+encodeURIComponent(row.id)+'/delegation';
+  if(grant.canDelegate&&grant.status!=='active'&&board.accounts.length)
+    rightsForm(panel,path,[rightsSelect('Specific local case operator','account',board.accounts.map(value=>({value,label:value}))),
+      reasonField(),confirmed('Confirm delegation of this exact case.')],
+      values=>({...values,operation:'delegate',expectedRevision:row.revision}),'Delegate this case');
+  if(grant.account&&grant.status!=='revoked')
+    rightsForm(panel,path,[reasonField(),confirmed('Confirm revocation of this case delegation.')],
+      values=>({...values,operation:'revoke',expectedRevision:row.revision}),'Revoke case access');
+  card.append(panel);
+}
 function renderRights(){
-  const {cases,kinds,owners,policy,legacyRecords}=rightsData;
+  const {cases,kinds,owners,policy,legacyRecords,delegation}=rightsData;
   const ownerName=id=>state?.actors.find(o=>o.id===id)?.name??owners.find(o=>o.id===id)?.name??id;
   const ownerOptions=owners.map(o=>({value:o.id,label:o.name}));
   const intro=add(el('section'),heading('Privacy rights cases'),
@@ -78,6 +103,7 @@ function renderRights(){
       el('p','Identity: '+row.identity.status.replaceAll('-',' ')),el('p',row.summary));
     card.id='work-record-'+row.id;
     renderRightsDeadlineCase(card,row);
+    if(actor==='analyst')renderCaseDelegation(card,row,delegation);
     if(row.identity.reviewedBy)card.append(el('p','Identity reviewed by: '+ownerName(row.identity.reviewedBy),'hint'));
     if(row.completion)card.append(el('p','Mock fulfillment only. No data released. '+row.completion.note,'success'));
     if(row.status==='closed-unverified')card.append(el('p','Closed without disclosure.'));

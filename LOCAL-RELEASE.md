@@ -6,8 +6,10 @@ commands deploy the application or require a GitHub, Marriott, or cloud account.
 ## Install-free quickstart
 
 Use Node.js 22.13.0 or newer. Node 24.22.3 is the pinned CI toolchain.
-You do not need `npm install` for the application. With Node and its normally
-bundled npm, open a terminal in the source or extracted archive and run:
+The demo and isolated launchers run without `npm install`. The optional
+[corporate sign-in mode](CORPORATE-SIGNIN.md) uses its own locked dependencies.
+With Node and its normally bundled npm, open a terminal in the source or
+extracted archive and run:
 
 ```sh
 npm run verify:runtime

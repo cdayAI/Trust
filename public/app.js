@@ -200,9 +200,21 @@ function showSkipDestination(id,label){
 async function start(){
   try{
     const session=await read('/api/session');
-    if(session.mode==='local-isolated'){
+    if(session.mode==='local-isolated'||session.mode==='corporate-oidc'){
       localSession=session;
-      if(!session.authenticated){$('#local-signin').hidden=false;showSkipDestination('local-signin','Skip to sign-in');return}
+      if(!session.authenticated){
+        if(session.mode==='corporate-oidc'){
+          $('#signin-title').textContent='Sign in with your organization';
+          $('#local-signin-help').hidden=true;
+          $('#local-login').hidden=true;
+          $('#corporate-login').hidden=false;
+          if(new URLSearchParams(location.search).get('signin')==='denied'){
+            $('#local-error').textContent='Sign-in failed or this account does not have workspace access.';
+            history.replaceState(null,'','/');
+          }
+        }
+        $('#local-signin').hidden=false;showSkipDestination('local-signin','Skip to sign-in');return
+      }
       actor=session.actor;
       const workspace=$('#local-workspace');
       workspace.replaceChildren(...session.workspaces.map(x=>{const option=el('option',x.label);option.value=x.id;return option}));

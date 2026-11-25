@@ -94,7 +94,7 @@ function attachmentForm(path,revision,rules,remaining){
   const drop=add(el('div',undefined,'attachment-drop-zone'),
     add(el('label','Fictional attachments'),picker),
     el('p','Choose files or drop them here. A new selection replaces the previous one.','hint'));
-  const form=add(el('form'),drop,el('p','PDF, Word, Excel, PowerPoint, TXT, CSV, TSV, PNG, JPEG, GIF, WebP, BMP and TIFF. Up to '+
+  const form=add(el('form'),drop,el('p','PDF, Word, Excel, PowerPoint, TXT, CSV, TSV, JSON, JSON Lines, Markdown, LOG and common raster images. Up to '+
     attachmentSize(rules.maxFileBytes)+' per file (16 KiB for TXT), '+attachmentSize(rules.maxBatchBytes)+' per upload. '+
     'Four attachments per revision, 8 MiB and 256 files per workspace. Download only.','hint'),status,selection,submit);
   let files=[],preparing=false;

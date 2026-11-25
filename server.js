@@ -1,5 +1,6 @@
 'use strict';
 const http = require('node:http');
+const https = require('node:https');
 const {createOperations,launchLocalServer,loopbackAddresses}=require('./operational-health');
 const fs = require('node:fs/promises');
 const path = require('node:path');
@@ -14,6 +15,7 @@ const {createAccess}=require('./workspace-access');
 const policy=require('./access-policy');
 const groups=require('./group-governance');
 const documentScope=require('./document-scope');
+const rightsCaseScope=require('./rights-case-scope');
 const {fixtureOptions}=require('./discovery-import');
 const {createPortal}=require('./requester-portal');
 const trustCenter=require('./trust-center');
@@ -83,12 +85,17 @@ async function readBody(req,limit=32768) {
   try { return bytes?JSON.parse(Buffer.concat(chunks).toString('utf8')):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
-function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,operationalEvents=false}={}) {
+function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false}={}) {
+  const oidcModule=corporate===undefined?null:require('./oidc/client');
+  const oidc=oidcModule?.createOidc(corporate);
+  if((oidc&&!isolated)||Boolean(tls)!==Boolean(oidc?.secure))
+    throw new Error('Corporate sign-in requires an isolated workspace and the configured transport.');
   const scopedCatalogs=groups.provision(isolated);
   const scopedDocuments=documentScope.provision(isolated);
+  const scopedRights=rightsCaseScope.provision(isolated);
   const manualReview=provisionReview(isolated);
   const access=isolated===undefined?null:createAccess(isolated,(space,id)=>runtime(space).store.identityMembership(id),
-    id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id)}));
+    id=>({operatorJobs:sqliteFile!==undefined,groupGovernance:scopedCatalogs.has(id),documentScope:scopedDocuments.has(id)}),oidc);
   const portal=access&&isolated.requesterGrants!==undefined?createPortal({
     grants:isolated.requesterGrants,workspaces:isolated.workspaces,accounts:isolated.accounts,now:isolated.now
   }):null;
@@ -102,10 +109,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     requesters:isolated.requesterGrants,employees:isolated.employeeGrants,now:isolated.now
   }):null;
   const database=sqliteFile===undefined?null:openSqlite(sqliteFile);
-  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false,manualAttachmentReview=false){
+  function openRuntime(stateFile,workflowFile,scope,empty,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false){
     const storage=database?.scope(scope);
     const workflow=openWorkflowHttp(workflowFile,{storage});
-    return {store:openStore(stateFile,{empty,storage,scopeDocuments,manualAttachmentReview}),workflow};
+    return {store:openStore(stateFile,{empty,storage,scopeDocuments,manualAttachmentReview,scopeRights}),workflow};
   }
   let demo;
   try {
@@ -119,11 +126,11 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   function runtime(space){
     if(!space)return demo;
     if(!runtimes.has(space.id))runtimes.set(space.id,
-      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id),manualReview.has(space.id)));
+      openRuntime(space.file,space.workflowFile,'workspace:'+space.id,true,scopedDocuments.has(space.id),manualReview.has(space.id),scopedRights.has(space.id)));
     return runtimes.get(space.id);
   }
   try{
-    for(const id of new Set([...scopedDocuments,...manualReview]))runtime(access.spaceForProvisionedGrant(id));
+    for(const id of new Set([...scopedDocuments,...manualReview,...scopedRights]))runtime(access.spaceForProvisionedGrant(id));
   }catch(error){database?.close();throw error;}
   const files=database?[sqliteFile]:access?isolated.workspaces.flatMap(({id})=>{
     const {file,workflowFile}=access.spaceForProvisionedGrant(id);
@@ -135,11 +142,43 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       logEvents:operationalEvents,checkBackend:database?()=>database.checkMode(access?'isolated':'demo'):undefined});
   }catch(error){database?.close();throw error;}
   let activeBatchUploads=0;
-  const server=http.createServer(async (req,res)=>{
+  const handler=async (req,res)=>{
     let countedBatch=false;
     try {
-      if (!loopbackAddresses.has(req.socket.remoteAddress)||!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i.test(req.headers.host||'')) return send(res,403,{error:'Only loopback access is allowed.'});
-      const {pathname,searchParams}=new URL(req.url,'http://localhost');
+      if(!loopbackAddresses.has(req.socket.remoteAddress))return send(res,403,{error:'Only loopback access is allowed.'});
+      if(oidc){
+        if(req.headers.host!==oidc.host||Boolean(req.socket.encrypted)!==oidc.secure||
+          !req.url.startsWith('/')||req.url.startsWith('//')||req.url.includes('\\'))
+          return send(res,403,{error:'Invalid application origin.'});
+      }else if(!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i.test(req.headers.host||'')){
+        return send(res,403,{error:'Only loopback access is allowed.'});
+      }
+      const {pathname,searchParams,search}=new URL(req.url,'http://localhost');
+      if(oidc&&pathname===oidcModule.startPath){
+        if(req.method!=='POST')return send(res,405,{error:'Method not allowed.'},undefined,{Allow:'POST'});
+        if(req.headers.origin!==oidc.origin||searchParams.size)
+          return send(res,403,{error:'Invalid sign-in request.'});
+        try{
+          const {location,cookie}=await oidc.start();
+          return send(res,303,'','text/plain',{'Location':location,'Set-Cookie':cookie});
+        }catch{
+          operations.requestError();
+          return send(res,503,{error:'Corporate sign-in is unavailable.'});
+        }
+      }
+      if(oidc&&pathname===oidcModule.callbackPath){
+        if(req.method!=='GET')return send(res,405,{error:'Method not allowed.'},undefined,{Allow:'GET'});
+        const cookies=[oidc.clear()];
+        let location=oidcModule.deniedPath;
+        try{
+          const identity=await oidc.complete(req,search);
+          cookies.push(access.loginOidc(req,identity).cookie);
+          location='/';
+        }catch{
+          // Keep provider responses, codes and claims out of error pages and logs.
+        }
+        return send(res,303,'','text/plain',{'Location':location,'Set-Cookie':cookies});
+      }
       if(pathname==='/health/live'||pathname==='/health/ready'){
         if(searchParams.size)return send(res,404,{error:'Not found.'});
         if(req.method!=='GET')return send(res,405,{error:'Method not allowed.'},undefined,{Allow:'GET'});
@@ -174,11 +213,12 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       }
       if (req.method==='GET'&&staticFiles.has(pathname)) {
         const [file,type]=staticFiles.get(pathname);
-        return send(res,200,await fs.readFile(path.join(publicDir,file)),type);
+        return send(res,200,await fs.readFile(path.join(publicDir,file)),type,
+          oidc&&file==='index.html'?{'Referrer-Policy':'same-origin'}:undefined);
       }
       if(req.method==='POST'&&pathname.startsWith('/api/')){
         const origin=req.headers.origin;
-        if ((access&&origin!=='http://'+req.headers.host)||
+        if ((access&&origin!==(oidc?.origin??'http://'+req.headers.host))||
           (origin&&origin!=='http://'+req.headers.host&&origin!=='https://'+req.headers.host))
           return send(res,403,{error:'Cross-origin writes are not allowed.'});
         if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')) return send(res,415,{error:'Use application/json.'});
@@ -186,7 +226,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if(req.method==='GET'&&pathname==='/api/session')return send(res,200,access?access.describe(req):{mode:'synthetic-demo'});
       if(pathname.startsWith('/api/session/')){
         const operation=pathname.slice('/api/session/'.length);
-        if(!access||req.method!=='POST'||!['login','switch','logout'].includes(operation))return send(res,404,{error:'Not found.'});
+        if(!access||req.method!=='POST'||!['login','switch','logout'].includes(operation)||(oidc&&operation==='login'))return send(res,404,{error:'Not found.'});
         const result=access[operation](req,await readBody(req));
         return send(res,200,result.value,undefined,{'Set-Cookie':result.cookie});
       }
@@ -265,19 +305,20 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         policy.requirePermission(req.method,pathname,checked.actor);
         return send(res,200,store.groupGovernanceChange(groupContext(checked),body));
       }
-      const documentContext=checked=>({
+      const scopeContext=checked=>({
         role:checked.actor,account:checked.account,generation:checked.generation,at:access.identityTime(),
-        roster:access.identityRoster(checked.space.id),enabled:scopedDocuments.has(checked.space.id)
+        roster:access.identityRoster(checked.space.id),enabled:scopedDocuments.has(checked.space.id),
+        rightsEnabled:scopedRights.has(checked.space.id)
       });
       if(pathname==='/api/document-access'){
         if(!scopedDocuments.has(selection?.space.id))return send(res,404,{error:'Not found.'});
         if(searchParams.size)return send(res,422,{error:'Document access does not accept query filters.'});
-        if(req.method==='GET')return send(res,200,store.documentAccessView(documentContext(selection)));
+        if(req.method==='GET')return send(res,200,store.documentAccessView(scopeContext(selection)));
         if(req.method!=='POST')return send(res,404,{error:'Not found.'});
         const body=await readBody(req);
         const checked=access.context(req,expected);
         policy.requirePermission(req.method,pathname,checked.actor);
-        return send(res,200,store.documentAccessTransition(documentContext(checked),body));
+        return send(res,200,store.documentAccessTransition(scopeContext(checked),body));
       }
       const mode=access?'local-isolated':'synthetic-demo';
       const workflowParts=pathname.startsWith('/api/workflows/')?pathname.slice(15).split('/'):null;
@@ -319,7 +360,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         const homeActor=actor??'analyst';
         if(!['analyst','reviewer','case-operator'].includes(homeActor))
           return send(res,403,{error:'This role has no workspace dashboard.'});
-        return send(res,200,workspaceHome(store.getState(),{mode,actor:homeActor,selection,views:policy.capabilities(homeActor).views},searchParams));
+        return send(res,200,workspaceHome(caseOperator?store.caseOperatorState(scopeContext(selection)):store.getState(),{mode,actor:homeActor,selection,views:policy.capabilities(homeActor).views},searchParams));
       }
       if(req.method==='GET'&&['/api/reporting','/api/reporting/export'].includes(pathname)){
         if(access&&!reporting.canReport(actor))return send(res,403,{error:'An analyst or reviewer is required for reporting.'});
@@ -333,7 +374,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       const ownWork=req.method==='GET'&&pathname.match(myWorkRoute);
       if(ownWork){
         if(!selection)return send(res,404,{error:'My work requires an isolated staff session.'});
-        return send(res,200,myWork(store.getState(),selection,policy.capabilities(actor).views,searchParams,ownWork[1]));
+        return send(res,200,myWork(caseOperator?store.caseOperatorState(scopeContext(selection)):store.getState(),selection,policy.capabilities(actor).views,searchParams,ownWork[1]));
       }
       if (req.method==='GET'&&['/api/work-queue','/api/work-queue/export'].includes(pathname)){
         const queue=workQueue(store.getState(),searchParams);
@@ -341,7 +382,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           {'Content-Disposition':'attachment; filename="privacy-workbench-queue.json"'}):send(res,200,queue);
       }
       if (req.method==='GET'&&pathname==='/api/governance-documents'){
-        const docs=caseOperator?store.getCaseDocuments(documentContext(selection)):store.getDocuments(actor);
+        const docs=caseOperator?store.getCaseDocuments(scopeContext(selection)):store.getDocuments(actor);
         return send(res,200,caseOperator?policy.caseDocumentView(docs):docs);
       }
       if (req.method==='GET'&&pathname==='/api/vendor-monitoring') return send(res,200,store.getVendorMonitoring());
@@ -386,7 +427,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
       if(!access&&/^\/api\/rights\/cases\/[^/]+\/(?:request|approve|reject)-extension$/.test(pathname))
         return send(res,404,{error:'Not found.'});
       if (req.method==='GET'&&pathname==='/api/rights/cases'){
-        const rights=store.getRights();
+        const rights=store.getRights(selection?scopeContext(selection):undefined);
         return send(res,200,caseOperator?policy.caseOperatorView(rights):rights);
       }
       if (req.method==='GET'&&pathname==='/api/modules') return send(res,200,store.getModules());
@@ -420,9 +461,11 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         }
         if(pathname==='/api/data-map/discovery/preview')return send(res,200,store.previewDiscovery(actor,body,selection?.account));
         const parts=pathname.slice(5).split('/');
-        if(caseOperator){
-          if(parts[0]==='rights'&&!store.getState().rightsCases?.some(row=>row.id===parts[2]&&row.owner===actor))
-            return send(res,404,{error:'Rights case not found.'});
+        const rightsContext=current&&parts[0]==='rights'&&parts[1]==='cases'?scopeContext(current):undefined;
+        if(parts[0]==='rights'&&parts[1]==='cases'&&parts[3]==='delegation'&&parts.length===4){
+          if(!rightsContext?.rightsEnabled)return send(res,404,{error:'Rights case not found.'});
+          if(searchParams.size)return send(res,422,{error:'Rights delegation does not accept query filters.'});
+          return send(res,200,store.delegateRightsCase(parts[2],rightsContext,body));
         }
         if(parts[0]==='training'&&parts.length===2){
           if(!trainingEnabled)return send(res,404,{error:'Policy training is not provisioned for this workspace.'});
@@ -438,7 +481,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           return send(res,200,store.trustCenterView(centerPath));
         }
         const resourceChange=()=>caseOperator&&parts[0]==='governance-documents'?
-          store.readCaseDocument(parts,documentContext(current),body):store.change(parts,actor,body,selection?.account,current?.generation);
+          store.readCaseDocument(parts,scopeContext(current),body):store.change(parts,actor,body,selection?.account,current?.generation,rightsContext);
         if(parts.length===8&&parts[0]==='governance-documents'&&parts[1]==='records'&&parts[3]==='revisions'&&parts[5]==='attachments'&&parts[7]==='download'){
           const {bytes,filename}=resourceChange();
           return send(res,200,bytes,'application/octet-stream',{
@@ -457,7 +500,8 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
     } finally {
       if(countedBatch)activeBatchUploads--;
     }
-  });
+  };
+  const server=tls?https.createServer(tls,handler):http.createServer(handler);
   if(database)server.once('close',()=>database.close());
   server.on('listening',operations.listening);
   server.on('close',operations.stopped);

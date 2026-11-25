@@ -291,7 +291,7 @@ test('browser portal: learner grant with no work cannot open peer training; assi
   f.finish();
 });
 
-test('browser portal: separately reviewed trust center drafts, local publication and withdrawal',enabled,async t=>{
+test('browser portal: separately reviewed trust center drafts, local publication, replacement and withdrawal',enabled,async t=>{
   const f=await fixture(t),author=await f.operator('analyst','Trust center'),reviewer=await f.operator('reviewer');
   const a=author.locator('#trust-center-view'),r=reviewer.locator('#trust-center-view');
   const title='Privacy practices',privateCopy='Changes to fictional information handling are documented and reviewed in the sample workbench.';
@@ -339,11 +339,35 @@ test('browser portal: separately reviewed trust center drafts, local publication
   const history=await f.disclosure(aRow,'Version history');
   await seen(history,'Version 2 · published · '+privateCopy);
   await seen(history,'Version 1 · returned · '+firstChoice);
+  async function projections(current,excluded){
+    for(const p of [visitor,guest]){
+      await p.reload();await h(p,title).waitFor();await seen(p,current);
+      await gone(p,excluded);await gone(p,returnNote);
+      assert.equal(await h(p,title).count(),1);
+    }
+  }
+  await f.select(aRow,'Bundled fictional copy','overview');
+  await f.click(aRow,'Draft new version','The active v2 remains published during draft v3',()=>seen(aRow,'Latest version 3 · draft'));
+  await projections(privateCopy,firstChoice);
+  await f.click(aRow,'Send for review','Exact replacement is in review without exposing its copy',()=>seen(aRow,'Latest version 3 · in-review'));
+  await reviewer.reload();
+  await f.click(reviewer,'Trust center','Independent reviewer sees the replacement candidate',()=>seen(rRow,'Latest version 3 · in-review'));
+  await f.click(rRow,'Approve this version','Independent approval does not replace existing visitor copy',()=>seen(rRow,'Latest version 3 · approved'));
+  await projections(privateCopy,firstChoice);
+  await author.reload();
+  await f.click(author,'Trust center','Author sees v3 independently approved',()=>seen(aRow,'Latest version 3 · approved'));
+  await f.click(aRow,'Publish approved version to local preview','Published v3 replaces v2 without duplicates',async()=>{
+    await seen(aRow,'Visitor sees version 3.');
+    await projections(firstChoice,privateCopy);
+  });
+  const replacements=await f.disclosure(aRow,'Version history');
+  await seen(replacements,'Version 3 · published · '+firstChoice);
+  await seen(replacements,'Version 2 · superseded · '+privateCopy);
   await f.fill(aRow,'Internal fictional note',withdraw);
-  await f.click(aRow,'Withdraw active version','Visitor shows no published cards after withdrawal',async()=>{
-    await seen(aRow,'Latest version 2 · withdrawn');
+  await f.click(aRow,'Withdraw active version','Withdrawal leaves nothing and does not revive superseded v2',async()=>{
+    await seen(aRow,'Latest version 3 · withdrawn');
     await empty();
-    await gone(visitor,privateCopy);await gone(visitor,withdraw);
+    await gone(visitor,firstChoice);await gone(visitor,privateCopy);await gone(visitor,withdraw);
   });
   await f.absent(aRow,'button','Withdraw active version');
   await f.absent(aRow,'button','Publish approved version to local preview');

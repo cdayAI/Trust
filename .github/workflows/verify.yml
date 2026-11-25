@@ -45,3 +45,18 @@ jobs:
         run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund
       - name: Run unit, HTTP and real Chromium tests
         run: npm run test:browser
+      - name: Install locked OIDC dependencies
+        run: npm --prefix oidc ci --ignore-scripts --no-audit --no-fund
+      - name: Verify corporate sign-in over loopback HTTP and HTTPS in Chromium
+        run: |
+          set -euo pipefail
+          npm run test:corporate
+          fixture_tls="$(mktemp -d)"
+          trap 'rm -rf "$fixture_tls"' EXIT
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj '/CN=local-oidc-fixture' \
+            -addext 'subjectAltName=IP:127.0.0.1,IP:127.0.0.2' \
+            -keyout "$fixture_tls/key.pem" -out "$fixture_tls/cert.pem"
+          NODE_EXTRA_CA_CERTS="$fixture_tls/cert.pem" \
+            TRUST_TEST_OIDC_TLS_CERT="$fixture_tls/cert.pem" \
+            TRUST_TEST_OIDC_TLS_KEY="$fixture_tls/key.pem" \
+            RUN_BROWSER_SMOKE=1 npm run test:corporate

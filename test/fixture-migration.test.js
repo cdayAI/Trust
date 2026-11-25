@@ -169,3 +169,134 @@ test('CLI import reads back in the isolated HTTP app, defers approvals, and supp
   await invalid(['rollback-fixture-import',db,output('drifted.sqlite'),'--confirm',receipt.receiptId],/untouched/);
   assert.ok(!(await readdir(output())).includes('drifted.sqlite'));
 });
+
+async function reported(args,code){
+  try{
+    const result=await call(...args);
+    assert.equal(code,0);
+    return result;
+  }catch(error){
+    if(error.code!==code)throw error;
+    assert.equal(error.stderr,'');
+    return JSON.parse(error.stdout);
+  }
+}
+
+test('diagnostics return all independent synthetic defects by stage and row and never stage a blocked plan',async t=>{
+  const output=await room(t);
+  const submitted=copy(),input=output('diagnose.json');
+  submitted.inventories[3].owner='quality';
+  submitted.relationships[0].from='n9999';
+  submitted.terms[0].title='Fictional unexpected field should never echo';
+  submitted.termBindings[1].node='n0002';
+  await writeFile(input,JSON.stringify(submitted));
+  const report=await reported(['diagnose-fixture-import',input,workspace],2);
+  assert.equal(report.status,'blocked');
+  assert.equal(report.issueCount,5);
+  assert.deepEqual(report.issues.map(({stage,row,code})=>[stage,row,code]),[
+    ['inventory',4,'CONFLICTING_KEY'],['relationships',1,'UNRESOLVED_REFERENCE'],['terms',1,'INVALID_ROW'],
+    ['termBindings',1,'UNRESOLVED_REFERENCE'],['termBindings',2,'INCOMPATIBLE_REFERENCE'],
+  ]);
+  assert.equal(report.planDigest,undefined);
+  assert.doesNotMatch(JSON.stringify(report),/Fictional unexpected field|n9999/);
+  assert.deepEqual(await readdir(output()),['diagnose.json']);
+  await invalid(['plan-fixture-import',input,workspace,output('no-plan.json')],/conflicts/);
+
+  await writeFile(input,JSON.stringify({...source,relationships:Array.from({length:51},()=>null)}));
+  const capped=await reported(['diagnose-fixture-import',input,workspace],2);
+  assert.equal(capped.issueCount,51);
+  assert.equal(capped.truncated,true);
+  assert.equal(capped.issues.length,50);
+  await writeFile(input,Buffer.from([0xff,0xfe]));
+  assert.equal((await reported(['diagnose-fixture-import',input,workspace],2)).issues[0].code,'INVALID_UTF8');
+  assert.equal((await reported(['diagnose-fixture-import',output('missing.json'),workspace],2)).issues[0].code,'INVALID_LOCAL_FILE');
+  assert.equal((await reported(['diagnose-fixture-import',fixture,'incorrect-scope'],2)).issues[0].code,'INVALID_WORKSPACE');
+  const ready=await reported(['diagnose-fixture-import',fixture,workspace],0);
+  const plan=await call('plan-fixture-import',fixture,workspace,output('plan.json'));
+  assert.equal(ready.status,'ready');
+  assert.equal(ready.planDigest,plan.planDigest);
+  assert.deepEqual(ready.stages,plan.stages);
+});
+
+test('read-only reconciliation verifies the complete supported snapshot, including a backup/restore round trip',async t=>{
+  const output=await room(t),planFile=output('plan.json'),db=output('fixture.sqlite'),restored=output('restored.sqlite');
+  const plan=await call('plan-fixture-import',fixture,workspace,planFile);
+  const receipt=await call('import-fixture',fixture,planFile,db,'--confirm',plan.planDigest);
+  const bytes=await readFile(db);
+  const verification=(file,code=0)=>reported(['verify-fixture-import',fixture,planFile,file,'--confirm',receipt.receiptId],code);
+  const report=await verification(db);
+  assert.equal(report.status,'verified');
+  assert.deepEqual(Object.values(report.checks),[true,true,true,true,true,true]);
+  const count=n=>({expected:n,observed:n,matched:n,missing:0,changed:0,extra:0,duplicates:0});
+  assert.deepEqual(report.stages,{inventory:count(3),relationships:count(2),terms:count(2),
+    termBindings:{planned:2,expectedApplied:0,observedApplied:0}});
+  assert.deepEqual(await readFile(db),bytes);
+  await call('backup',db,output('snapshot.json'));
+  const {payload:golden}=JSON.parse(await readFile(output('snapshot.json'))).documents[0];
+  assert.deepEqual(golden.dataMap.nodes.map(({type,name,owner,detail,createdAt,updatedAt,archivedAt})=>
+    [type,name,owner,detail,createdAt,updatedAt,archivedAt]),[
+    ['system','Fictional system 0001','Fictional Studio','Fictional service sandbox.','2000-01-01T00:00:00.000Z','2000-01-01T00:00:00.000Z',null],
+    ['dataset','Fictional dataset 0002','Fictional Operations','Fictional event schema; no sample values.','2000-01-01T00:00:00.000Z','2000-01-01T00:00:00.000Z',null],
+    ['activity','Fictional activity 0003','Fictional Quality','Fictional workflow rehearsal.','2000-01-01T00:00:00.000Z','2000-01-01T00:00:00.000Z',null],
+  ]);
+  const [system,dataset,activity]=golden.dataMap.nodes.map(({id})=>id);
+  assert.deepEqual(golden.dataMap.links.map(({type,fromId,toId})=>[type,fromId,toId]),[['hosts',system,dataset],['reads',dataset,activity]]);
+  assert.deepEqual(golden.dictionary.terms.map(({slug,activeVersion,versions})=>
+    [slug,activeVersion,versions[0].title,versions[0].review]),
+    [['migration-fixture-0042-t0001',null,'Fictional sensitivity term 0001',null],
+      ['migration-fixture-0042-t0002',null,'Fictional purpose term 0002',null]]);
+  assert.deepEqual(golden.dictionary.references,[]);
+  await call('restore',output('snapshot.json'),restored);
+  assert.deepEqual(await verification(restored),report);
+  await invalid(['verify-fixture-import',fixture,planFile,restored,'--confirm','d'.repeat(64)],/no longer matches/);
+
+  const {openSqlite}=require('../durable-storage');
+  const sqlite=openSqlite(restored);
+  try{
+    sqlite.scope('workspace:'+workspace).write('workbench',(state,commit)=>{
+      const [first,second,third]=state.dataMap.nodes;
+      const changed={...first,detail:'Fictional changed marker not to echo'};
+      state.dataMap.nodes=[changed,third,{...third,id:second.id.replace(/^.{8}/,'00000000')},changed];
+      state.dataMap.links.reverse(); // Same rows; full snapshot fidelity still detects ordering drift.
+      state.dictionary.terms[0].versions[0].status='review';
+      state.dictionary.references.push({termId:state.dictionary.terms[0].id,nodeId:third.id,version:1});
+      commit(state);
+    });
+  }finally{sqlite.close();}
+  const drifted=await readFile(restored);
+  const drift=await verification(restored,2);
+  assert.equal(drift.status,'drift');
+  assert.deepEqual(drift.stages.inventory,{expected:3,observed:4,matched:1,missing:1,changed:1,extra:1,duplicates:1});
+  assert.deepEqual(drift.stages.relationships,count(2));
+  assert.equal(drift.stages.terms.changed,1);
+  assert.equal(drift.stages.termBindings.observedApplied,1);
+  assert.equal(drift.checks.genesisGeneration,false);
+  assert.equal(drift.checks.planMatchesReceipt,true);
+  assert.equal(drift.checks.auditMatches,true);
+  assert.equal(drift.checks.snapshotDigestMatches,false);
+  assert.doesNotMatch(JSON.stringify(drift),/Fictional changed marker not to echo/);
+  const rejected=output('not-created.sqlite');
+  await invalid(['rollback-fixture-import',restored,rejected,'--confirm',receipt.receiptId],/untouched/);
+  assert.deepEqual(await readFile(restored),drifted);
+  assert.ok(!(await readdir(output())).includes('not-created.sqlite'));
+});
+
+test('concurrent confirmed imports and rollbacks have a single winner and preserve the verified source',async t=>{
+  const output=await room(t),planFile=output('plan.json'),db=output('fixture.sqlite'),rollback=output('rollback.sqlite');
+  const plan=await call('plan-fixture-import',fixture,workspace,planFile);
+  function singleWinner(results){
+    const ok=results.filter(r=>r.status==='fulfilled'),errors=results.filter(r=>r.status==='rejected');
+    assert.equal(ok.length,1);assert.equal(errors.length,1);
+    assert.match(errors[0].reason.stderr,/EEXIST/);
+    return ok[0].value;
+  }
+  const imports=await Promise.allSettled(Array.from({length:2},()=>call('import-fixture',fixture,planFile,db,'--confirm',plan.planDigest)));
+  const receipt=singleWinner(imports);
+  const bytes=await readFile(db);
+  assert.equal((await call('verify-fixture-import',fixture,planFile,db,'--confirm',receipt.receiptId)).status,'verified');
+  const rollbacks=await Promise.allSettled(Array.from({length:2},()=>call('rollback-fixture-import',db,rollback,'--confirm',receipt.receiptId)));
+  assert.equal(singleWinner(rollbacks).restoredFromReceipt,receipt.receiptId);
+  assert.deepEqual(await readFile(db),bytes);
+  assert.deepEqual((await readdir(output())).sort(),['fixture.sqlite','plan.json','rollback.sqlite']);
+  await invalid(['verify-fixture-import',fixture,planFile,rollback,'--confirm',receipt.receiptId],/receipt is required/);
+});

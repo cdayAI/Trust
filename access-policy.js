@@ -58,6 +58,7 @@ route('POST','rights/deadline-policy/(?:return|publish)',['reviewer']);
 route('POST','rights/cases/'+uuid+'/request-extension',['analyst','case-operator']);
 route('POST','rights/cases/'+uuid+'/(?:approve-extension|reject-extension)',['reviewer']);
 route('POST','rights/cases',operators);
+route('POST','rights/cases/'+uuid+'/delegation',['analyst']);
 route('POST','rights/cases/'+uuid+'/(?:assign|verify|deny-verification)',operators);
 route('POST','rights/cases/'+uuid+'/(?:begin|fulfill|close-unverified)',rights);
 route('POST','incidents/policy/(?:create|edit|submit)',['analyst']);

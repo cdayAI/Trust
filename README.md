@@ -6,7 +6,7 @@ A work-in-progress privacy operations prototype with synthetic fixtures. It is n
 
 See the [install-free quickstart, local package, and verification guide](LOCAL-RELEASE.md).
 
-Use Node.js 22.13 or newer. There are no runtime npm packages to install.
+Use Node.js 22.13 or newer. The demo and isolated launchers run without npm dependencies. See the [corporate sign-in guide](CORPORATE-SIGNIN.md) for the optional OIDC mode.
 
 ```sh
 npm start
@@ -202,7 +202,7 @@ revisions. In-app viewing and downloads use local role checks and record an
 audit event without putting document text in the generic state or audit
 export. Demo identities are selectable; isolated mode uses signed-in local roles.
 The server is loopback-only. Scoped governance attachments support synthetic PDF,
-modern Office, TXT/CSV/TSV and common raster files as opaque downloads only.
+modern Office, text/logs, CSV/TSV, JSON/JSON Lines, plain Markdown, and common raster files as opaque downloads only.
 See [attachment types, limits and validation](DOCUMENT-ATTACHMENTS.md). No files
 are sent outside the local workspace.
 

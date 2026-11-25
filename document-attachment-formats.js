@@ -18,6 +18,31 @@ function text(bytes){
     invalid('Text files must be nonempty printable UTF-8, not markup or binary files.');
   return value;
 }
+function parsedJson(value,message){
+  try{return JSON.parse(value);}
+  catch{invalid(message);}
+}
+function json(bytes){
+  const value=parsedJson(text(bytes),'JSON attachments must contain valid UTF-8 JSON.');
+  if(value===null||typeof value!=='object')invalid('JSON attachments must contain a top-level object or array.');
+}
+function jsonLines(bytes){
+  const value=text(bytes);
+  let start=0,count=0;
+  while(start<value.length){
+    const newline=value.indexOf('\n',start),end=newline<0?value.length:newline;
+    if(++count>10000)invalid('JSON Lines attachments support up to 10,000 records.');
+    const record=parsedJson(value.slice(start,end),'Each JSON Lines entry must be a valid UTF-8 JSON object, with no blank lines.');
+    if(record===null||typeof record!=='object'||Array.isArray(record))invalid('Each JSON Lines entry must be a JSON object.');
+    start=end+1;
+  }
+}
+function markdown(bytes){
+  const value=text(bytes);
+  // Only plain-style Markdown is accepted. The app never interprets it or fetches a resource.
+  if(/<(?:[!?]|\/?[A-Za-z])/u.test(value)||/!\s*\[|\]\s*[(\[]|^[ \t]*\[[^\]\r\n]+\]:/mu.test(value))
+    invalid('Markdown attachments cannot contain raw HTML, links or embedded images.');
+}
 function delimited(bytes,separator){
   const value=text(bytes);
   let quoted=false, closed=false, start=0;
@@ -385,6 +410,10 @@ function add(extensions,mediaType,label,check,maxFileBytes=MiB,aliases=[]){
 add(['.txt'],'text/plain','Plain text',text,16*KiB);
 add(['.csv'],'text/csv','CSV',bytes=>delimited(bytes,','),MiB,['application/csv','application/vnd.ms-excel','text/plain']);
 add(['.tsv'],'text/tab-separated-values','TSV',bytes=>delimited(bytes,'\t'),MiB,['text/plain']);
+add(['.json'],'application/json','JSON',json,MiB,['text/json','text/plain']);
+add(['.jsonl','.ndjson'],'application/x-ndjson','JSON Lines',jsonLines,MiB,['application/jsonl','application/json','application/ndjson','text/jsonl','text/plain']);
+add(['.md','.markdown'],'text/markdown','Markdown',markdown,MiB,['text/x-markdown','text/plain']);
+add(['.log'],'text/plain','Plain log',text,MiB,['text/x-log']);
 add(['.pdf'],'application/pdf','PDF',pdf);
 for(const [extension,[,,,name]] of Object.entries(officeRules)){
   const kind={document:'Word',workbook:'Excel',presentation:'PowerPoint'}[name];

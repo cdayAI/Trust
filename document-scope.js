@@ -2,6 +2,7 @@
 const {createHash,randomUUID}=require('node:crypto');
 const identity=require('./identity-admin');
 const documents=require('./governance-documents');
+const caseScope=require('./rights-case-scope');
 const uuid=/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const slug=/^[a-z][a-z0-9-]{0,47}$/;
 const hash=/^[a-f0-9]{64}$/;
@@ -66,7 +67,7 @@ function seatBinding(state,ctx,id){
   return stamp([seat.id,seat.provisioning,identity.record(state,id).revision]);
 }
 // The domain's ordinary role, publication and linked-case ownership gates are always additive.
-function baseModel(state){return documents.view(state,'case-operator');}
+function baseModel(state,ctx){return documents.view(caseScope.viewState(state,ctx),'case-operator');}
 function entry(model,document,edition){
   const doc=model.documents.find(x=>x.id===document);
   const rev=doc?.revisions.find(x=>x.id===edition&&x.status==='published');
@@ -76,7 +77,7 @@ function binding(state,ctx,g,model){
   const seat=seatBinding(state,ctx,g.account),edition=entry(model,g.document,g.edition)?.rev;
   if(!seat||!edition)return undefined;
   const ownershipEpochs=edition.links.filter(link=>link.type==='rights-case').map(link=>[
-    link.id,state.audit.findLast(row=>row.entityId===link.id&&row.action==='rights.case.assign')?.id??null
+    link.id,state.audit.findLast(row=>row.entityId===link.id&&['rights.case.assign','rights.case.account-delegated','rights.case.account-revoked'].includes(row.action))?.id??null
   ]);
   return stamp([seat,g.document,g.edition,edition.contentHash,g.level,ownershipEpochs,
     edition.attachments.map(a=>[a.id,a.sha256,a.name,a.size,a.mediaType])]);
@@ -89,7 +90,7 @@ function effective(state,ctx,g,model){
 }
 function boardView(state,ctx){
   authority(state,ctx,['reviewer','identity-admin']);
-  const board=records(state),model=baseModel(state);
+  const board=records(state),model=baseModel(state,ctx);
   const grants=board.grants.map(g=>{
     const version=entry(model,g.document,g.edition);
     return {id:g.id,account:g.account,document:g.document,edition:g.edition,level:g.level,
@@ -116,7 +117,7 @@ function transition(state,ctx,body,event){
     fail(422,'INVALID_DOCUMENT_SCOPE','Choose an exact document edition, access level, account and decision reason.');
   const board=records(state);
   if(board.revision!==body.expectedRevision)fail(409,'STALE_DOCUMENT_SCOPE','Document access changed. Reload the board.');
-  const model=baseModel(state);
+  const model=baseModel(state,ctx);
   let grant;
   if(propose){
     const check=binding(state,ctx,body,model);
@@ -160,14 +161,14 @@ function allowed(state,ctx,model){
     .map(g=>[g.document+':'+g.edition,g.level]));
 }
 function list(state,ctx){
-  const model=baseModel(state),grants=allowed(state,ctx,model);
+  const model=baseModel(state,ctx),grants=allowed(state,ctx,model);
   return {...model,documents:model.documents.flatMap(d=>{
     const revisions=d.revisions.filter(r=>grants.has(d.id+':'+r.id)).map(r=>project(r,grants.get(d.id+':'+r.id)));
     return revisions.length?[{...d,currentRevisionId:revisions.at(-1).id,revisions}]:[];
   })};
 }
 function authorize(state,ctx,document,edition,attachment){
-  const level=allowed(state,ctx,baseModel(state)).get(document+':'+edition);
+  const level=allowed(state,ctx,baseModel(state,ctx)).get(document+':'+edition);
   if(!level||(attachment&&level!=='text-and-attachments'))missing();
   return level;
 }

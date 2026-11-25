@@ -4,9 +4,9 @@ The release is a functioning local synthetic workbench, not an official service.
 Use [Local release](LOCAL-RELEASE.md) to run an isolated copy and
 [Browser acceptance](BROWSER-ACCEPTANCE.md) for the actual test coverage.
 
-1. Verify configurable corporate sign-in against a test identity provider,
-   then map approved company identities, roles, groups, and lifecycle rules in
-   the receiving environment.
+1. Verify the configurable corporate sign-in with an approved company
+   test provider and map identities, roles, groups, and lifecycle rules in
+   the receiving environment. The local provider is a synthetic fixture.
 2. Extend record- and field-level authorization beyond the tested document
    grants, including every list, deep link, bulk action, and export.
 3. Increase approved operator-job coverage, preserve independent decision

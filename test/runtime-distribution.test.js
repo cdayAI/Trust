@@ -22,6 +22,9 @@ test('source release hashes the explicit inventory and refuses unsafe and privat
   assert.ok(manifest.files.some(file => file.path === 'server.js'));
   assert.ok(manifest.files.some(file => file.path === 'start-isolated.js'));
   assert.ok(manifest.files.some(file => file.path === 'public/index.html'));
+  for (const path of ['start-corporate.js', 'oidc/package.json', 'oidc/package-lock.json', 'oidc/client.js', 'oidc/signin-check.js']) {
+    assert.ok(manifest.files.some(file => file.path === path), path + ' is missing from the release inventory.');
+  }
   assert.ok(manifest.files.every(file => /^[a-f0-9]{64}$/.test(file.sha256)));
   assert.equal(manifest.files.find(file => file.path === 'package.json').size > 0, true);
   const room = await mkdtemp(join(tmpdir(), 'trust-release-inventory-'));

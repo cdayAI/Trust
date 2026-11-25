@@ -249,7 +249,9 @@ test('browser: governance file picker enforces limits and uploads, downloads, re
 
 const mediaTypes={
   bmp:'image/bmp',csv:'text/csv',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-  gif:'image/gif',jpg:'image/jpeg',jpeg:'image/jpeg',pdf:'application/pdf',png:'image/png',
+  gif:'image/gif',jpg:'image/jpeg',jpeg:'image/jpeg',json:'application/json',
+  jsonl:'application/x-ndjson',ndjson:'application/x-ndjson',md:'text/markdown',markdown:'text/markdown',log:'text/plain',
+  pdf:'application/pdf',png:'image/png',
   pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',tif:'image/tiff',tiff:'image/tiff',
   tsv:'text/tab-separated-values',txt:'text/plain',webp:'image/webp',
   xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
@@ -262,12 +264,21 @@ const csvRow=Buffer.from('fictional,-12.75,"Quoted, with a ""mark""\nand a newli
 formatSamples.set('fictional.csv',Buffer.from(csvHeader.toString()+csvRow.toString().repeat(750))); // safely crosses generic 32 KiB limit
 formatSamples.set('fictional.tsv',Buffer.from('record\tamount\r\nfictional\t-12.75\r\n'));
 formatSamples.set('fictional.txt',Buffer.from(original));
+formatSamples.set('fictional.json',Buffer.from('\uFEFF{\r\n  "record": "Fictional entry", "details": ["Résumé"]\r\n}\r\n'));
+formatSamples.set('fictional.jsonl',Buffer.from('{"record":"Fictional first entry"}\r\n{"record":"Fictional second entry"}\r\n'));
+formatSamples.set('fictional.ndjson',Buffer.from('{"id":"SYN-0001","state":"fictional"}\n{"id":"SYN-0002","state":"fictional"}'));
+formatSamples.set('fictional.md',Buffer.from('# Fictional report\r\n\r\n- Review A\r\n- **Review B**\r\n'));
+formatSamples.set('fictional.markdown',Buffer.from('# Fictional acceptance\n\n| Evidence | Outcome |\n| --- | --- |\n| Test | Passed |\n'));
+formatSamples.set('fictional.log',Buffer.from('2026-11-25T05:01:00Z INFO synthetic checks completed\n'));
+
 function formatPayload(filename,bytes,mediaType=mediaTypes[filename.split('.').at(-1)]??''){
   return {filename,mediaType,data:bytes.toString('base64')};
 }
 
 test('attachment allowlist accepts real byte structures by extension with known or empty browser media types',()=>{
   const version={attachments:[]},book={documents:[{revisions:[version]}]};
+  assert.deepEqual(attachmentPolicy.rules.formats.map(x=>x.extension).sort(),
+    Array.from(formatSamples.keys(),name=>name.slice(name.lastIndexOf('.'))).sort());
   for(const [name,bytes] of formatSamples){
     for(const reported of [undefined,'']){
       const dest=attachmentPolicy.attachment(formatPayload(name,bytes,reported),book,version);
@@ -282,6 +293,31 @@ test('attachment allowlist accepts real byte structures by extension with known 
   const boundary=Buffer.alloc(1024*1024,65);
   assert.equal(attachmentPolicy.attachment(formatPayload('limit.csv',boundary,'application/vnd.ms-excel'),book,version).size,boundary.length);
   assert.throws(()=>attachmentPolicy.attachment(formatPayload('limit.csv',Buffer.concat([boundary,Buffer.from('a')])),book,version),{status:413});
+});
+
+test('everyday data and text formats reject non-documents, unsupported active content, malformed records, and misleading types',()=>{
+  const version={attachments:[]},book={documents:[{revisions:[version]}]};
+  const save=(name,data,mime)=>attachmentPolicy.attachment(formatPayload(name,
+    Buffer.isBuffer(data)?data:Buffer.from(data),mime),book,version);
+  for(const content of ['{} trailing fiction','{"a":}', 'null', 'true', '42', '"fiction"', '{"note":"line\nfeed"}'])
+    assert.throws(()=>save('invalid.json',content),{code:'ATTACHMENT_CONTENT_INVALID'});
+  assert.equal(save('synthetic.json','[1,2]','text/json').mediaType,'application/json');
+  assert.equal(save('synthetic.log','Fictional log line','text/x-log').mediaType,'text/plain');
+  for(const [filename,data] of [
+    ['syntax.jsonl','{"a":1}\n{"b":}\n'],['blank.ndjson','{"a":1}\n\n{"b":2}\n'],
+    ['array.ndjson','[{"a":1}]\n'],['flood.ndjson','{}\n'.repeat(10001)],
+    ['markup.md','# Synthetic\n<article>Fictional raw markup</article>'],
+    ['image.md','# Synthetic\n![Fictional image](https://example.invalid/fictional.png)'],
+    ['link.markdown','# Synthetic\n[Fictional reference](https://example.invalid/)'],
+    ['reference.markdown','# Synthetic\n[Synthetic][key]\n[key]: https://example.invalid/'],
+    ['controls.log',Buffer.from('CONTROL\x1b[31m Fictitious logs')]
+  ])assert.throws(()=>save(filename,data),{code:'ATTACHMENT_CONTENT_INVALID'},filename);
+  assert.throws(()=>save('fictional.json','{"pass":true}','application/pdf'),{code:'ATTACHMENT_TYPE_MISMATCH'});
+  assert.throws(()=>save('fictional.json',formatSamples.get('fictional.pdf')),{code:'ATTACHMENT_CONTENT_INVALID'});
+  for(const name of ['fictional.rtf','fictional.odt','fictional.ods','fictional.odp','fictional.pages','fictional.numbers',
+    'fictional.key','fictional.eml','fictional.xml','fictional.html','fictional.svg','fictional.json.js']){
+    assert.throws(()=>save(name,'{"fictional":true}'),{code:'ATTACHMENT_TYPE_UNSUPPORTED'},name);
+  }
 });
 
 function zip(rows,options={}){
@@ -394,7 +430,7 @@ test('extended request limit is scoped to the authorized upload path for content
   assert.equal((await f.request(documents,200,{cookie})).data.documents[0].revisions[0].attachments.length,1);
 });
 
-test('browser: each allowed format uploads with the real chooser and downloads byte-for-byte without rendering',{
+test('browser: all allowed formats multi-select with the real chooser and download byte-for-byte without rendering',{
   skip:process.env.RUN_BROWSER_SMOKE!=='1'&&'Set RUN_BROWSER_SMOKE=1 with Playwright installed',timeout:50_000
 },async t=>{
   const {chromium}=require('playwright'),f=await fixture(t);
@@ -434,6 +470,9 @@ test('browser: each allowed format uploads with the real chooser and downloads b
     await card.getByRole('button',{name:'Upload attachments',exact:true}).click();
     for(const [name,bytes] of selected){
       const action=card.getByRole('button',{name:'Download attachment '+name,exact:true});
+      await action.waitFor().catch(async error=>{
+        throw new Error('The selected file was not uploaded: '+name+'. '+await card.textContent(),{cause:error});
+      });
       const [download]=await Promise.all([page.waitForEvent('download'),action.click()]);
       assert.equal(download.suggestedFilename(),name);
       const chunks=[];
@@ -554,17 +593,27 @@ test('Chromium drops multiple files and shows content refusals individually with
     await drop.dispatchEvent('drop',{dataTransfer:handle});
     await handle.dispose();
   }
-  const good={name:'Fictional drop.txt',type:'text/plain',bytes:[...Buffer.from(original)]};
-  await dropFiles([good,{name:'Fictional bad.pdf',type:'application/pdf',bytes:[...Buffer.from('Fictional bad PDF')]}]);
-  await page.getByText(/^2 selected/).waitFor();
+  const good={name:'Fictional drop.json',type:'application/json',bytes:[...Buffer.from('{"summary": "Fictional review"}\r\n')]};
+  await dropFiles([good,
+    {name:'Fictional bad.md',type:'text/markdown',bytes:[...Buffer.from('# Fictional report\n<script>synthetic fixture</script>')]},
+    {name:'Fictional bad.ndjson',type:'application/x-ndjson',bytes:[...Buffer.from('{"synthetic": true}\nnot-a-record\n')]},
+    {name:'Fictional bad.pdf',type:'application/pdf',bytes:[...Buffer.from('Fictional bad PDF')]}]);
+  await page.getByText(/^4 selected/).waitFor();
   const button=page.getByRole('button',{name:'Upload attachments',exact:true});
   await button.click();
   await page.getByText(/Fictional bad\.pdf.*file bytes do not match/).waitFor();
+  await page.getByText(/Fictional bad\.md.*cannot contain raw HTML/).waitFor();
+  await page.getByText(/Fictional bad\.ndjson.*valid UTF-8 JSON object/).waitFor();
   await page.getByText('No attachments.',{exact:true}).waitFor();
-  assert.equal(await page.getByRole('button',{name:'Download attachment Fictional drop.txt',exact:true}).count(),0);
-  await page.getByRole('button',{name:'Remove selected file Fictional bad.pdf',exact:true}).click();
+  assert.equal(await page.getByRole('button',{name:'Download attachment Fictional drop.json',exact:true}).count(),0);
+  for(const ext of ['pdf','md','ndjson'])await page.getByRole('button',{name:'Remove selected file Fictional bad.'+ext,exact:true}).click();
   await button.click();
-  await page.getByRole('button',{name:'Download attachment Fictional drop.txt',exact:true}).waitFor();
+  const [download]=await Promise.all([page.waitForEvent('download'),
+    page.getByRole('button',{name:'Download attachment Fictional drop.json',exact:true}).click()]);
+  assert.equal(download.suggestedFilename(),good.name);
+  const chunks=[];
+  for await(const chunk of await download.createReadStream())chunks.push(chunk);
+  assert.deepEqual(Buffer.concat(chunks),Buffer.from(good.bytes));
 });
 
 for(const backend of ['json','sqlite'])test('manual attachment quarantine persists and gates bytes, publication and release in '+backend,async t=>{
