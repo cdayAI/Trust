@@ -19,6 +19,9 @@ function view(s){
 function report(s,id){
   const plan=lookup(s,id);
   if(!plan.final)error(409,'AUDIT_NOT_FINAL','Only finalized audit reports can be exported.');
+  if(!plan.final.result||typeof plan.final.result!=='object'||Array.isArray(plan.final.result)||
+    digest(plan.final.result)!==plan.final.sha256)
+    error(409,'AUDIT_INTEGRITY_FAILED','The finalized audit report does not match its stored digest.');
   return {schemaVersion:1,mode:'synthetic-local',result:plan.final.result,sha256:plan.final.sha256};
 }
 const actions={
