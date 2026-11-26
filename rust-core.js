@@ -14,8 +14,8 @@ if(mode!=='off'){
     const module=new WebAssembly.Module(bytes);
     if(WebAssembly.Module.imports(module).length)throw Error('The Rust core must not import host capabilities.');
     core=new WebAssembly.Instance(module,{}).exports;
-    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==1||
-      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day'].some(key=>typeof core[key]!=='function'))
+    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==2||
+      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout'].some(key=>typeof core[key]!=='function'))
       throw Error('Incompatible Rust core ABI. Rebuild the Rust core.');
   }
 }
@@ -96,4 +96,47 @@ function addDays(from,days,basis,closedDates=[]){
   if(end===-2147483648)throw Error('Rust calendar result outside bounds.');
   return new Date(end*86400000).toISOString().slice(0,10);
 }
-module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays});
+function zip(bytes){
+  if(!Buffer.isBuffer(bytes))throw Error('Invalid archive input.');
+  if(bytes.length>4*1024*1024)return null;
+  const stride=12*4;
+  return withBuffer(bytes,256*stride,ptr=>{
+    const count=core.trust_zip(bytes.length);
+    if(count===-1)return null;
+    if(count<1||count>256)throw Error('Invalid Rust ZIP count.');
+    const output=new DataView(core.memory.buffer,ptr+bytes.length,count*stride);
+    return Array.from({length:count},(_,i)=>{
+      const [nameAt,nameEnd,directory,loc,method,flags,localExtras,centralExtras,start,end,size,crc]=
+        Array.from({length:12},(_,word)=>output.getUint32(i*stride+word*4,true));
+      if(nameAt>=nameEnd||nameEnd>bytes.length||start>end||end>bytes.length||directory>1||
+        ![0,8].includes(method)||loc>=start||size>2*1024*1024)throw Error('Invalid Rust ZIP row.');
+      return {name:bytes.toString('latin1',nameAt,nameEnd),directory:directory===1,loc,method,flags,localExtras,centralExtras,start,end,size,crc};
+    });
+  });
+}
+function batchHeader(bytes){
+  if(!Buffer.isBuffer(bytes))throw Error('Invalid batch input.');
+  return withBuffer(bytes.subarray(0,4),0,()=>core.trust_batch_header(bytes.length));
+}
+function batchLayout(frameLen,manifest,sizes){
+  if(!Number.isSafeInteger(frameLen)||frameLen<0||frameLen>0xffffffff||
+    !Number.isSafeInteger(manifest)||manifest<0||manifest>0xffffffff||
+    !Array.isArray(sizes)||sizes.length<1||sizes.length>4)throw Error('Invalid batch layout input.');
+  const input=Buffer.alloc(sizes.length*4);
+  sizes.forEach((size,i)=>input.writeUInt32LE(size,i*4));
+  return withBuffer(input,0,ptr=>{
+    const count=core.trust_batch_layout(frameLen,manifest);
+    if(count===-1||count===-2)return count;
+    if(count!==sizes.length)throw Error('Invalid Rust batch count.');
+    const output=new DataView(core.memory.buffer,ptr,count*4);
+    const offsets=Array.from({length:count},(_,i)=>output.getUint32(i*4,true));
+    let expected=4+manifest;
+    for(let i=0;i<count;i++){
+      if(offsets[i]!==expected||expected+sizes[i]>frameLen)throw Error('Invalid Rust batch offset.');
+      expected+=sizes[i];
+    }
+    if(expected!==frameLen)throw Error('Invalid Rust batch end.');
+    return offsets;
+  });
+}
+module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays,zip,batchHeader,batchLayout});

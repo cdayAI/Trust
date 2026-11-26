@@ -1,6 +1,6 @@
 # Rust core migration
 
-This is the first compatibility-preserving backend migration. The browser and
+This is the compatibility-preserving backend migration. The browser and
 Node HTTP/session, authorization, audit and persistence layers remain unchanged.
 Rust runs as a dependency-free WebAssembly module within Node, with no imports,
 filesystem access, separate process, native addon or network. The ABI exchanges
@@ -12,6 +12,13 @@ memory; no unsafe blocks, third-party Rust crates or custom cryptography.
 - Structural validation of PNG, JPEG, GIF, WebP, BMP and TIFF attachments.
   Existing extension/media-type limits and failure messages remain in Node.
   No content is rendered or decoded and this is not a malware scanner.
+- ZIP central/local header agreement, bounded extra fields, safe entry names,
+  duplicate rejection, data descriptors and contiguous compressed spans for
+  DOCX, XLSX, PPTX, ODT, ODS and ODP. Node keeps the document-specific
+  allowlists, bounded inflate, CRC verification and XML profile checks.
+- Binary attachment-batch header and exact contiguous file layout, with
+  the existing 4 MiB and four-file budget. JSON shape and media rules remain
+  in Node; only the header and size vector cross the Wasm boundary.
 - Breadth-first graph lineage and cycle prevention in the inventory data map.
 - Directed cycle validation of synthetic fixture migrations.
 - UTC calendar and business-day deadlines, including weekends and closed dates,
@@ -48,8 +55,8 @@ reproducible artifact/distribution and rollback procedure.
 
 ## Next migration stages
 
-1. Move bounded archive metadata and binary attachment framing only after
-   differential tests and malformed-input coverage are established.
+1. Extend archive malformed-input fuzzing and performance comparisons before
+   removing the JavaScript reference parser.
 2. Migrate pure workflow transitions and reporting calculations with exact
    audit-event and revision parity.
 3. Migrate HTTP routing and authorization together, using the existing API

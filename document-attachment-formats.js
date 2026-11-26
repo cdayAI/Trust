@@ -224,7 +224,34 @@ const officeRules={
   '.xlsx':['xl/','xl/workbook.xml','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml','workbook',/spreadsheetml\/(?:20\d{2}\/)?main/u],
   '.pptx':['ppt/','ppt/presentation.xml','application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml','presentation',/presentationml\/(?:20\d{2}\/)?main/u]
 };
+function decodeZipPart(bytes,{method,start,end,size,crc},reject){
+  const compressed=end-start;
+  let decoded;
+  if(method===0){
+    if(compressed!==size)reject();
+    decoded=bytes.subarray(start,end);
+  }else{
+    try{
+      const result=inflateRawSync(bytes.subarray(start,end),{maxOutputLength:Math.max(1,size),info:true});
+      if(result.engine.bytesWritten!==compressed)reject();
+      decoded=result.buffer;
+    }catch{reject();}
+  }
+  if(decoded.length!==size||crc32(decoded)!==crc)reject();
+  return decoded;
+}
 function boundedZip(bytes,reject,allowEntry){
+  if(rust.enabled){
+    const entries=rust.zip(bytes);
+    if(!entries)reject();
+    const parts=new Map();
+    for(const entry of entries){
+      if(!allowEntry(entry))reject();
+      const decoded=decodeZipPart(bytes,entry,reject);
+      if(!entry.directory)parts.set(entry.name,decoded);
+    }
+    return parts;
+  }
   const finish=bytes.length-22;
   if(finish<30||bytes.readUInt32LE(finish)!==0x06054b50||!prefix(bytes,'PK\x03\x04')||
     bytes.readUInt32LE(finish+4)!==0||bytes.readUInt16LE(finish+20)!==0)reject();
@@ -277,16 +304,7 @@ function boundedZip(bytes,reject,allowEntry){
       dataEnd+=12;
     }
     spans.push([loc,dataEnd]);at=next;
-    let decoded;
-    if(method===0){if(compressed!==size)reject();decoded=bytes.subarray(start,end);}
-    else{
-      try{
-        const result=inflateRawSync(bytes.subarray(start,end),{maxOutputLength:Math.max(1,size),info:true});
-        if(result.engine.bytesWritten!==compressed)reject();
-        decoded=result.buffer;
-      }catch{reject();}
-    }
-    if(decoded.length!==size||crc32(decoded)!==crc)reject();
+    const decoded=decodeZipPart(bytes,{method,start,end,size,crc},reject);
     if(!directory)parts.set(name,decoded);
   }
   spans.sort((a,b)=>a[0]-b[0]);

@@ -3,6 +3,8 @@
 use std::cell::RefCell;
 mod graph;
 mod raster;
+mod archive;
+mod batch;
 
 const MAX_BUFFER: usize = 8 * 1024 * 1024;
 const INVALID: i32 = i32::MIN;
@@ -12,7 +14,7 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn trust_abi() -> u32 { 1 }
+pub extern "C" fn trust_abi() -> u32 { 2 }
 
 // The host borrows this byte range only until the next reserve call. Each
 // invocation is synchronous, and Rust only accesses the owned Vec via slices.
@@ -81,6 +83,46 @@ pub extern "C" fn trust_due_day(from: i32, days: u32, business: u32) -> i32 {
         let closed: Vec<i32> = bytes.chunks_exact(4)
             .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
         due_day(from, days, business == 1, &closed).unwrap_or(INVALID)
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn trust_zip(input: u32) -> i32 {
+    BUFFER.with(|cell| {
+        let mut bytes = cell.borrow_mut();
+        let count_bytes = input as usize;
+        let rows = match bytes.get(..count_bytes).and_then(archive::parse) {
+            Some(rows) => rows, None => return -1,
+        };
+        let output = match bytes.get_mut(count_bytes..) {
+            Some(output) => output, None => return -1,
+        };
+        if output.len() < rows.len()*archive::ENTRY_WORDS*4 { return -1; }
+        for (dst,value) in output.chunks_exact_mut(4).zip(rows.iter().flatten()) {
+            dst.copy_from_slice(&value.to_le_bytes());
+        }
+        rows.len() as i32
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn trust_batch_header(frame_len: u32) -> i32 {
+    BUFFER.with(|cell| batch::header(frame_len,&cell.borrow()))
+}
+
+#[no_mangle]
+pub extern "C" fn trust_batch_layout(frame_len: u32, manifest: u32) -> i32 {
+    BUFFER.with(|cell| {
+        let mut bytes = cell.borrow_mut();
+        if bytes.len() % 4 != 0 || bytes.len() > batch::MAX_FILES*4 { return batch::INVALID; }
+        let sizes: Vec<u32> = bytes.chunks_exact(4).map(|c| u32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
+        let offsets = match batch::layout(frame_len,manifest,&sizes) {
+            Ok(offsets) => offsets, Err(status) => return status,
+        };
+        for (dst,value) in bytes.chunks_exact_mut(4).zip(&offsets) {
+            dst.copy_from_slice(&value.to_le_bytes());
+        }
+        offsets.len() as i32
     })
 }
 
