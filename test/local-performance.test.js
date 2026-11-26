@@ -233,3 +233,43 @@ test('incremental staff intake appends exact case and audit rows, preserves scop
     assert.equal(db.snapshot().documents.length,2);
   }finally{db.close();}
 });
+
+
+test('staff intake domain operation uses the opt-in append and retains an exact committed audit event',async t=>{
+  const {openStore}=require('../store');
+  const dir=await mkdtemp(join(tmpdir(),'trust-domain-intake-append-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const db=openSqlite(join(dir,'state.sqlite'));
+  try{
+    db.requireMode('isolated');
+    const alpha=db.scope('workspace:alpha'),beta=db.scope('workspace:beta');
+    const initial={version:1,actors:[{id:'analyst'},{id:'reviewer'},{id:'case-operator'}],projects:[],vendors:[],assessments:[],handoff:[],audit:[]};
+    alpha.write('workbench',(_,save)=>save(initial));beta.write('workbench',(_,save)=>save(initial));
+    let full=0,appended=0;
+    const storage={...alpha,write(kind,callback){
+      return alpha.write(kind,(snapshot,save,generation,append)=>callback(snapshot,payload=>{full++;save(payload);},generation,
+        (next,row,event)=>{const result=append(next,row,event);if(result)appended++;return result;}));
+    }};
+    const prior=process.env.TRUST_INCREMENTAL_INTAKE;
+    let store;
+    try{process.env.TRUST_INCREMENTAL_INTAKE='on';store=openStore(join(dir,'unused.json'),{empty:true,storage});}
+    finally{if(prior===undefined)delete process.env.TRUST_INCREMENTAL_INTAKE;else process.env.TRUST_INCREMENTAL_INTAKE=prior;}
+    full=0;appended=0;
+    const before=alpha.readSince('workbench',-1);
+    const context={role:'analyst',actor:'analyst',account:'sample-analyst',generation:0,rightsEnabled:false,intakeEnabled:false};
+    const request={kind:'access',owner:'analyst',days:14,note:'Synthetic append via the real staff intake operation.'};
+    const result=store.createRightsIntake(context,request,{preferMinimal:true});
+    assert.equal(result.minimal,true);
+    assert.equal(appended,1);
+    assert.equal(full,0);
+    const after=alpha.readSince('workbench',before.generation);
+    assert.equal(after.generation,before.generation+1);
+    assert.equal(after.payload.rightsCases.length,(before.payload.rightsCases??[]).length+1);
+    assert.equal(after.payload.rightsCases.at(-1).id,result.model.case.id);
+    assert.equal(after.payload.audit.length,before.payload.audit.length+1);
+    assert.equal(after.payload.audit.at(-1).action,'rights.case.opened');
+    assert.equal(after.payload.audit.at(-1).account,'sample-analyst');
+    assert.equal(after.payload.audit.at(-1).entityId,result.model.case.id);
+    assert.deepEqual(beta.read('workbench'),initial);
+  }finally{db.close();}
+});
