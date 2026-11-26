@@ -274,6 +274,20 @@ test('a missing workflow asset or enabled portal asset fails readiness without f
       await cp(join(source,name),join(copy,name), {recursive:true,filter:path=>!path.split(/[\\/]/).includes('node_modules')});
     }
   }
+  // This fixture removes assets from an isolated checkout; retain any required
+  // compiled runtime artifacts so startup failures cannot mask readiness checks.
+  for(const artifact of [
+    'rust-core/target/release-artifact/trust_core.wasm',
+    'native-storage/target/release-artifact/trust_storage.node'
+  ]){
+    const target=join(copy,artifact);
+    await mkdir(dirname(target),{recursive:true});
+    try{await cp(join(source,artifact),target);}
+    catch(error){
+      if(error.code!=='ENOENT'||(artifact.endsWith('.wasm')&&process.env.TRUST_RUST_CORE==='required')||
+        (artifact.endsWith('.node')&&process.env.TRUST_SQLITE_DRIVER==='rust'))throw error;
+    }
+  }
   const missing = {status:'not_ready',checks:{configuration:false,storage:true}};
   const env = {TMP:dir,TEMP:dir};
   const demo = launch(t, 'server.js', dir, env, copy);

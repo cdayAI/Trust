@@ -10,7 +10,7 @@ const { checkRuntime } = require('./runtime-check');
 const appRoot = resolve(__dirname, '..');
 const startupTimeout = 12000;
 const operationTimeout = 6000;
-const hostFields = ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'LD_LIBRARY_PATH'];
+const hostFields = ['PATH', 'Path', 'SystemRoot', 'WINDIR', 'COMSPEC', 'LD_LIBRARY_PATH', 'TRUST_SQLITE_DRIVER', 'TRUST_RUST_CORE'];
 const host = Object.fromEntries(hostFields.filter(key => process.env[key] !== undefined).map(key => [key, process.env[key]]));
 
 function run(script, env, args = []) {
