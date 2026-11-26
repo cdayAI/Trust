@@ -23,13 +23,14 @@ if(diagnostics.length||emit.emitSkipped){
   const expected=JSON.parse(fs.readFileSync(path.join(root,'typescript','manifest.json'),'utf8'));
   if(JSON.stringify([...outputs.keys()].sort())!==JSON.stringify(expected))throw Error('TypeScript output inventory mismatch.');
   const mode=process.argv[2]??'verify';
-  if(!['verify','generate','check'].includes(mode))throw Error('Unknown TypeScript build mode.');
+  if(!['verify','generate','report','check'].includes(mode))throw Error('Unknown TypeScript build mode.');
   for(const relative of expected){
     if(!/^(?:public\/|scripts\/)?[a-z0-9-]+\.js$/.test(relative))throw Error('Unsafe generated JavaScript destination.');
     const output=outputs.get(relative);
     const destination=path.join(root,relative);
-    if(mode==='generate')fs.writeFileSync(destination,output);
+    if(mode==='generate'||mode==='report')fs.writeFileSync(destination,output);
     if(mode==='verify'&&fs.readFileSync(destination,'utf8').replace(/\r\n/g,'\n')!==output)throw Error('Stale generated JavaScript: '+relative);
+    if(mode==='report')for(const line of output.split('\n'))console.log('TRUST_TS|'+relative+'|'+JSON.stringify(line));
 
   }
   console.log('Strict TypeScript: '+expected.length+' runtime modules verified ('+mode+').');

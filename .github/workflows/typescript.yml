@@ -17,9 +17,10 @@ jobs:
         with:
           node-version: 24.22.3
       - run: npm --prefix scripts/type-tools ci --ignore-scripts --no-audit --no-fund
-      - run: npm run typecheck
+      - name: Compile strict workflow modules and record output
+        run: node scripts/typescript-build.js report
       - run: npm run verify:typescript
       - run: npm run verify:startup -- --sqlite
-      - run: node --test test/api.test.js test/access-policy.test.js test/attachment-binary-batch.test.js test/assessment-config.test.js test/workspace-home.test.js test/employee-attestations.test.js test/trust-center.test.js test/runtime-distribution.test.js test/local-performance.test.js test/reporting.test.js test/native-storage.test.js
+      - run: node --test test/api.test.js test/access-policy.test.js test/attachment-binary-batch.test.js test/assessment-config.test.js test/workspace-home.test.js test/employee-attestations.test.js test/trust-center.test.js test/runtime-distribution.test.js test/local-performance.test.js test/reporting.test.js test/native-storage.test.js test/workflow-engine.test.js test/workflow-http.test.js test/workflow-studio.test.js test/assessment-workflow-http.test.js test/assessment-incident.test.js test/work-queue-pagination.test.js test/my-work.test.js test/remediation-my-work.test.js test/reporting-runs.test.js test/report-schedules.test.js test/discovery-import.test.js
       - run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund
-      - run: npm run test:browser -- test/browser-portal-controls.test.js test/browser-acceptance.test.js test/employee-attestations.test.js test/trust-center.test.js
+      - run: npm run test:browser -- test/browser-portal-controls.test.js test/browser-acceptance.test.js test/employee-attestations.test.js test/trust-center.test.js test/browser-workflow-actions.test.js test/browser-concurrent-review.test.js test/browser-release-report-schedule-race.test.js

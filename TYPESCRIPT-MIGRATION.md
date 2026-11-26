@@ -53,3 +53,16 @@ the existing full save. The feature defaults off pending benchmark evidence.
 SQLite still updates a JSON snapshot blob on disk, so this is not a normalized
 row-level storage migration. CI compares cached native with incremental native
 and tests rollback, generation checks, exact payload and workspace isolation.
+
+## Typed workflow engine, queue and scheduling
+
+The workflow engine and HTTP adapter define separate input-validation, actor,
+normalized definition, published version, instance, transition, and event
+contracts. Command results are discriminated unions; failed commands retain
+exact audit semantics and Rust policy decisions. The assessment adapter uses
+the same typed engine. Work-queue projections, signed cursors, assigned tasks,
+pinned report snapshots, scheduling callbacks and fictional discovery fixture
+schemas are also checked under strict TypeScript. Existing persistence, route,
+role, and browser regression contracts remain the release gates. Legacy stored
+workflow snapshots keep their original shallow schema validation; type contracts
+do not imply comprehensive new stored-data validation.
