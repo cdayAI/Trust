@@ -10,7 +10,7 @@ function focusWorkRecord(view:string){
   if(!record){notice('The underlying record is no longer available in this view.',true);return}
   record.tabIndex=-1;record.focus({preventScroll:true});record.scrollIntoView({block:'center'});
 }
-async function openWorkTask(target:BrowserWorkDestination,{keepMyWorkLink=false,isCurrent=()=>true}={}):Promise<void>{
+async function openWorkTask(target:BrowserWorkDestination,{keepMyWorkLink=false,isCurrent=()=>true}:{keepMyWorkLink?:boolean;isCurrent?:()=>boolean}={}):Promise<void>{
   try{
     if(target.view==='assessments'){
       const next=await read('/api/state');
