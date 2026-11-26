@@ -74,7 +74,8 @@ npm run release:rust -- /private/path/mvw-trust-rust.tgz
 Extract into a clean directory, run `npm run release:verify`, then
 `npm run start:release -- --check` before launching normally. This variant
 includes exactly one allowlisted binary, `rust-core/runtime/trust_core.wasm`,
-and declares its ABI, byte length and SHA-256 in the release manifest. It
+and declares its ABI, byte length and SHA-256 in the release manifest. The
+build stages a verified, single-link copy of Cargo's output before packaging. It
 requires Node, not a Rust compiler or package install. A missing, corrupt,
 incompatible or disabled Rust module fails startup; use a separate original
 source release if rollback is necessary. The manifest detects accidental

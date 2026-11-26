@@ -1,7 +1,9 @@
 'use strict';
 const {createHash}=require('node:crypto');
 const abi=5;
-const built='rust-core/target/wasm32-unknown-unknown/release/trust_core.wasm';
+const cargoOutput='rust-core/target/wasm32-unknown-unknown/release/trust_core.wasm';
+// Cargo may hard-link its output to deps/. Package a distinct, verified file.
+const built='rust-core/target/release-artifact/trust_core.wasm';
 const packaged='rust-core/runtime/trust_core.wasm';
 const format='mvw-trust-rust-release';
 const required=['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout',
@@ -18,4 +20,4 @@ function instantiate(bytes){
     required.some(key=>typeof exports[key]!=='function'))throw Error('Incompatible Rust core ABI. Rebuild the Rust core.');
   return exports;
 }
-module.exports=Object.freeze({abi,built,packaged,format,maxBytes,sha256,instantiate});
+module.exports=Object.freeze({abi,cargoOutput,built,packaged,format,maxBytes,sha256,instantiate});

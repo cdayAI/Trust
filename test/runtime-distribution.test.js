@@ -68,7 +68,11 @@ test('compiled Rust release inventory binds only the fixed artifact and preserve
   const source=sourceManifest(directory).manifest;
   assert.equal(source.format,'mvw-trust-source-release');
   assert.ok(!source.files.some(row=>row.path.endsWith('.wasm')));
-  if(!existsSync(join(directory,...contract.built.split('/'))))return;
+  const built=join(directory,...contract.built.split('/'));
+  if(!existsSync(built))return;
+  const {lstatSync,readFileSync}=require('node:fs');
+  assert.equal(lstatSync(built).nlink,1);
+  assert.deepEqual(readFileSync(built),readFileSync(join(directory,...contract.cargoOutput.split('/'))));
   const {manifest,files}=sourceManifest(directory,{rust:true});
   const row=manifest.files.find(row=>row.path===contract.packaged);
   const bytes=files.find(file=>file.path===contract.packaged).bytes;
