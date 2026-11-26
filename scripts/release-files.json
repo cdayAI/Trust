@@ -202,6 +202,7 @@
   "scripts/rust-native-http.js",
   "scripts/rust-native-storage.js",
   "scripts/smoke-local.js",
+  "scripts/type-tools/package-lock.json",
   "scripts/type-tools/package.json",
   "scripts/typescript-build.js",
   "scripts/verify-audit-package.js",

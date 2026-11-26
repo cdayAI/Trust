@@ -75,6 +75,7 @@ function evaluate(questionnaire:Questionnaire, previous:Readonly<Record<string,u
       if(result.status===3)return fail('INVALID_ANSWER',q.label+' must be a whole number between -999,999,999 and 999,999,999.');
       if(result.status===4)return fail('INVALID_ANSWER',q.label+' must match a listed choice.');
       if(result.status===5)return fail('REQUIRED_ANSWER','Answer required: '+q.label+'.');
+      if(result.status!==0)throw Error('Invalid Rust questionnaire status.');
       answers[q.id]=result.value;
       continue;
     }
