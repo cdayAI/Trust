@@ -22,3 +22,5 @@ RELEASE-MANIFEST.json
 
 /native-storage/target/
 /native-http/target/
+/.typescript-output/
+/scripts/type-tools/node_modules/
