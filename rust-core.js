@@ -323,5 +323,115 @@ function authorize(method,pathname,role,limited){
   if(![0,1,2,3].includes(result))throw Error('Invalid Rust authorization result.');
   return result;
 }
+function word(value){const b=Buffer.alloc(4);b.writeUInt32LE(value);return b;}
+function encodedUnits(value){
+  if(typeof value!=='string')return word(0xffffffff);
+  return Buffer.concat([word(value.length),Buffer.from(value,'utf16le')]);
+}
+function revision(expected,actual,min){
+  const result=core.trust_revision(typeof expected==='number'?expected:NaN,typeof actual==='number'?actual:NaN,min);
+  if(result===3)throw Error('Invalid stored workflow revision.');
+  if(![0,1,2].includes(result))throw Error('Invalid Rust revision result.');
+  return result;
+}
+function workflowPlan(t,actor,instance,body){
+  const ids=new Map(),names=[];
+  const number=value=>{if(!ids.has(value)){names.push(value);ids.set(value,names.length);}return ids.get(value);};
+  const contributors=instance.contributors.map(number);
+  const current=number(actor.id),legacy=actor.legacyId?number(actor.legacyId):0,creator=number(instance.createdBy);
+  const role=roleBit(workflowRoles,actor.role);
+  const allowed=t?t.roles.reduce((mask,r)=>mask|roleBit(workflowRoles,r),0):0;
+  const available=!!t&&t.from===instance.state;
+  const required=t?.requiredFields??[];
+  const validBody=!!body&&typeof body==='object'&&!Array.isArray(body);
+  let entries=validBody?Object.entries(body):[];
+  // Oversized direct-engine callers can contain large surrounding whitespace;
+  // trim only for the bridge's maximum allocation, preserving JS semantics.
+  if(entries.length<=20)entries=entries.map(([key,value])=>[key,typeof value==='string'&&value.length>65536?value.trim():value]);
+  const validShape=validBody&&entries.length<=20;
+  const chunks=[word(contributors.length),...contributors.map(word),word(validShape?entries.length:0xffffffff),word(required.length)];
+  if(validShape){
+    for(const [key,value] of entries){
+      chunks.push(encodedUnits(key.length<=64?key:null),encodedUnits(typeof value==='string'&&value.length<=65536?value:null));
+    }
+    for(const key of required)chunks.push(encodedUnits(key));
+  }
+  const input=Buffer.concat(chunks);
+  const count=validShape?entries.length:0;
+  return withBuffer(input,8+count*8+(contributors.length+1)*4,ptr=>{
+    const status=core.trust_transition(input.length,available?1:0,role,allowed,t?.independent?1:0,current,legacy,creator);
+    if(![0,1,2,3,4,5].includes(status))throw Error('Invalid Rust workflow plan.');
+    const view=new DataView(core.memory.buffer,ptr+input.length);
+    if(status===5){
+      const mask=view.getUint32(0,true);
+      return {status,missing:required.filter((_,i)=>mask&(1<<i))};
+    }
+    if(status)return {status};
+    const fields=Object.fromEntries(entries.map(([key,value],i)=>{
+      const start=view.getUint32(8+i*8,true),end=view.getUint32(12+i*8,true);
+      if(typeof value!=='string'||start>=end||end>value.length)throw Error('Invalid Rust workflow field range.');
+      return [key,value.slice(start,end)];
+    }));
+    const n=view.getUint32(4,true);
+    if(n>contributors.length+1)throw Error('Invalid Rust contributor count.');
+    const next=Array.from({length:n},(_,i)=>{
+      const id=view.getUint32(8+count*8+i*4,true);
+      if(!id||id>names.length)throw Error('Invalid Rust contributor identifier.');
+      return names[id-1];
+    });
+    return {status,fields,contributors:next};
+  });
+}
+function questionnaireAnswer(question,input,active,provided,submitting){
+  const flags=(active?1:0)|(provided?2:0)|(question.required?4:0)|(submitting?8:0);
+  const kind=question.kind==='integer'?1:question.kind==='choice'?2:0;
+  const options=kind===2?question.options:[];
+  const value=typeof input==='string'&&input.length<=2000?input:null;
+  const bytes=Buffer.concat([encodedUnits(value),word(options.length),...options.map(encodedUnits)]);
+  return withBuffer(bytes,8,ptr=>{
+    const status=core.trust_answer(bytes.length,flags,kind);
+    if(![0,1,2,3,4,5,6].includes(status))throw Error('Invalid Rust questionnaire result.');
+    if(status)return {status};
+    const view=new DataView(core.memory.buffer,ptr+bytes.length,8);
+    const start=view.getUint32(0,true),end=view.getUint32(4,true);
+    if(typeof value!=='string'||start>end||end>value.length)throw Error('Invalid Rust answer range.');
+    return {status,value:value.slice(start,end)};
+  });
+}
+function storageScope(scope){
+  if(typeof scope!=='string'||scope.length>58)return 0;
+  const result=withBuffer(Buffer.from(scope,'utf8'),0,()=>core.trust_storage_scope());
+  if(![0,1,2].includes(result))throw Error('Invalid Rust storage scope result.');
+  return result;
+}
+function storageGeneration(value){
+  return core.trust_storage_generation(typeof value==='number'?value:NaN)===1;
+}
+function storagePayload(kind,payload){
+  const workbench=kind==='workbench';
+  const code=workbench?1:kind==='workflow'?2:0;
+  const keys=workbench?['actors','projects','vendors','assessments','handoff','audit']:['definitions','instances','events'];
+  const flags=keys.reduce((mask,key,i)=>mask|(Array.isArray(payload[key])?1<<i:0),0);
+  const version=workbench?payload.version:payload.schemaVersion;
+  return core.trust_storage_payload(code,typeof version==='number'?version:NaN,flags)===1;
+}
+function encryptedSize(header,archiveSize){
+  if(!Buffer.isBuffer(header)||header.length!==26||!Number.isSafeInteger(archiveSize))return -1;
+  return withBuffer(header,0,()=>core.trust_backup_header(archiveSize));
+}
+function incidentReady(row){
+  const flags=(row.containment?1:0)|(row.findings?2:0)|(row.branch==='elevated'?4:0)|
+    (row.evidence.some(e=>e.kind==='impact')?8:0)|(row.review?.decision==='more-information'?16:0)|
+    (row.lastInvestigationRevision>row.review?.revision?32:0);
+  return core.trust_incident_ready(flags,row.evidence.length)===1;
+}
+function retentionReason(holds,schedule,triggeredOn,asOf,dueOn){
+  const flags=(holds.length?1:0)|(schedule?2:0)|(triggeredOn?4:0)|(asOf<dueOn?8:0);
+  const result=core.trust_retention_reason(flags);
+  const reasons=['ACTIVE_HOLD','NO_ACTIVE_SCHEDULE','TRIGGER_NOT_RECORDED','BEFORE_DUE_DATE','ELIGIBLE'];
+  if(!reasons[result])throw Error('Invalid Rust retention decision.');
+  return reasons[result];
+}
 module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays,zip,batchHeader,batchLayout,
-  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport,expandRoute,installRoutes,authorize});
+  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport,expandRoute,installRoutes,authorize,revision,workflowPlan,questionnaireAnswer,
+  storageScope,storageGeneration,storagePayload,encryptedSize,incidentReady,retentionReason});

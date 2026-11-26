@@ -19,8 +19,16 @@ memory; no unsafe blocks, third-party Rust crates or custom cryptography.
 - Binary attachment-batch header and exact contiguous file layout, with
   the existing 4 MiB and four-file budget. JSON shape and media rules remain
   in Node; only the header and size vector cross the Wasm boundary.
-- Workflow definition reachability and independent transition authorization,
-  including legacy contributor IDs.
+- Workflow definition reachability, revision checks, transition planning,
+  independent review, required field validation and contributor updates.
+  The Rust plan supplies normalized fields and new contributors; Node
+  constructs and persists the existing event and snapshot shapes.
+- Assessment answer validation, conditional visibility, required fields,
+  integer and choice checks, with exact UTF-16 trim/length semantics.
+- Storage scope, positive generation and snapshot schema validation, plus
+  encrypted backup header/length validation. SQLite transactions, file
+  publication and authenticated encryption remain in Node.
+- Incident review-readiness and retention hold/disposition precedence.
 - Risk-control score bands, mitigation eligibility, largest verified
   reductions and vendor risk tiers.
 - Session-cookie parsing, duplicate-cookie refusal and account expiration

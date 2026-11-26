@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -18,13 +19,13 @@ const format = 'mvw-trust-local-backup';
 const modes = new Set(['demo', 'isolated']);
 const modeFor = scope => scope === 'demo' ? 'demo' : 'isolated';
 const basic = data => data && typeof data === 'object' && !Array.isArray(data);
-const positive = value => Number.isSafeInteger(value) && value > 0;
+const positive = value => rust.enabled ? rust.storageGeneration(value) : Number.isSafeInteger(value) && value > 0;
 const hash = text => createHash('sha256').update(text, 'utf8').digest('hex');
 const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
 const parseJsonBytes = bytes => JSON.parse(utf8.decode(bytes));
 
 function validateScope(scope) {
-  if (scope !== 'demo' && (typeof scope !== 'string' || !scopePattern.test(scope))) {
+  if (rust.enabled ? rust.storageScope(scope)===0 : scope !== 'demo' && (typeof scope !== 'string' || !scopePattern.test(scope))) {
     throw new Error('Invalid storage scope.');
   }
   return scope;
@@ -32,10 +33,13 @@ function validateScope(scope) {
 
 function validatePayload(kind, payload) {
   if (!kinds.has(kind) || !basic(payload)) throw new Error('Invalid storage document.');
-  const shape = kind === 'workbench'
-    ? [payload.version, ['actors', 'projects', 'vendors', 'assessments', 'handoff', 'audit']]
-    : [payload.schemaVersion, ['definitions', 'instances', 'events']];
-  if (shape[0] !== 1 || !shape[1].every(key => Array.isArray(payload[key]))) {
+  const valid = rust.enabled ? rust.storagePayload(kind,payload) : (() => {
+    const shape = kind === 'workbench'
+      ? [payload.version, ['actors', 'projects', 'vendors', 'assessments', 'handoff', 'audit']]
+      : [payload.schemaVersion, ['definitions', 'instances', 'events']];
+    return shape[0] === 1 && shape[1].every(key => Array.isArray(payload[key]));
+  })();
+  if (!valid) {
     throw new Error('Unsupported or invalid '+kind+' snapshot.');
   }
   return payload;

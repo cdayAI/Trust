@@ -37,7 +37,7 @@ function calculate(book,row,asOf){
   const holdIds=book.holds.filter(h=>h.recordId===row.id&&!h.releasedAt).map(h=>h.id);
   const triggeredOn=schedule?(schedule.trigger==='created'?row.createdOn:row.closedOn):null;
   const dueOn=triggeredOn?afterDays(triggeredOn,schedule.days):null;
-  const reason=holdIds.length?'ACTIVE_HOLD':!schedule?'NO_ACTIVE_SCHEDULE':!triggeredOn?'TRIGGER_NOT_RECORDED':asOf<dueOn?'BEFORE_DUE_DATE':'ELIGIBLE';
+  const reason=rust.enabled?rust.retentionReason(holdIds,schedule,triggeredOn,asOf,dueOn):holdIds.length?'ACTIVE_HOLD':!schedule?'NO_ACTIVE_SCHEDULE':!triggeredOn?'TRIGGER_NOT_RECORDED':asOf<dueOn?'BEFORE_DUE_DATE':'ELIGIBLE';
   return {recordId:row.id,asOf,reason,eligible:reason==='ELIGIBLE',scheduleId:schedule?.id??null,
     scheduleVersion:schedule?.version??null,triggeredOn,dueOn,holdIds,disposition:schedule?.disposition??null,mode:'simulation-only'};
 }

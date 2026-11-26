@@ -92,9 +92,11 @@ function createWorkflowEngine({load,save,now=()=>new Date().toISOString(),id=ran
         if(actor.role!=='publisher') return error('ROLE_REQUIRED','A publisher must publish workflow definitions.');
         const definition=normalizeDefinition(input.definition);
         if(!definition) return error('INVALID_DEFINITION','Definition is invalid: check states, reachability, transitions, roles and unique stable IDs.');
-        if(!Number.isSafeInteger(input.expectedVersion)||input.expectedVersion<0) return error('INVALID_EXPECTED_VERSION','Provide the current definition version, or 0 for a new definition.');
         const current=selectDefinition(state,definition.id)?.version??0;
-        if(input.expectedVersion!==current) return error('STALE_DEFINITION','The latest published definition version has changed.',{expectedVersion:input.expectedVersion,actualVersion:current});
+        const revision=rust.enabled?rust.revision(input.expectedVersion,current,0):
+          !Number.isSafeInteger(input.expectedVersion)||input.expectedVersion<0?1:input.expectedVersion!==current?2:0;
+        if(revision===1)return error('INVALID_EXPECTED_VERSION','Provide the current definition version, or 0 for a new definition.');
+        if(revision===2)return error('STALE_DEFINITION','The latest published definition version has changed.',{expectedVersion:input.expectedVersion,actualVersion:current});
         const published={...definition,version:current+1,publishedAt:at,publishedBy:actor.id};
         state.definitions.push(published);
         return {ok:true,definition:published,details:{definitionVersion:published.version}};
@@ -121,24 +123,38 @@ function createWorkflowEngine({load,save,now=()=>new Date().toISOString(),id=ran
         const instance=state.instances.find(x=>x.id===input.instanceId);
         if(!instance) return error('INSTANCE_NOT_FOUND','Workflow instance not found.');
         const details={definitionId:instance.definitionId,definitionVersion:instance.definitionVersion,from:instance.state,revision:instance.revision};
-        if(!Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<1) return error('INVALID_EXPECTED_REVISION','Provide the current instance revision.',details);
-        if(input.expectedRevision!==instance.revision) return error('STALE_REVISION','The workflow changed. Reload before retrying.',{...details,expectedRevision:input.expectedRevision});
+        const revision=rust.enabled?rust.revision(input.expectedRevision,instance.revision,1):
+          !Number.isSafeInteger(input.expectedRevision)||input.expectedRevision<1?1:input.expectedRevision!==instance.revision?2:0;
+        if(revision===1)return error('INVALID_EXPECTED_REVISION','Provide the current instance revision.',details);
+        if(revision===2)return error('STALE_REVISION','The workflow changed. Reload before retrying.',{...details,expectedRevision:input.expectedRevision});
         const definition=selectDefinition(state,instance.definitionId,instance.definitionVersion);
         if(!definition) throw Error('Pinned workflow revision is missing from storage.');
         const t=definition.transitions.find(t=>t.id===input.transitionId);
-        if(!t||t.from!==instance.state) return error('TRANSITION_NOT_AVAILABLE','This transition is not available from the current state.',details);
-        const denied=refusal(t,actor,instance);
-        if(denied)return error(...denied,details);
         const body=input.fields===undefined?{}:input.fields;
-        if(!object(body)||Object.keys(body).length>20||Object.keys(body).some(k=>!fieldKey(k)||!clean(body[k],2000))) return error('INVALID_FIELDS','Supply concise, nonempty text values under valid field keys.',details);
-        const missing=t.requiredFields.filter(k=>!Object.hasOwn(body,k));
-        if(missing.length) return error('MISSING_FIELDS','Complete the required transition fields: '+missing.join(', ')+'.',{...details,missing});
-        const fields=Object.fromEntries(Object.keys(body).map(k=>[k,clean(body[k],2000)]));
+        let fields,contributors;
+        if(rust.enabled){
+          const plan=rust.workflowPlan(t,actor,instance,body);
+          if(plan.status===1)return error('TRANSITION_NOT_AVAILABLE','This transition is not available from the current state.',details);
+          if(plan.status===2)return error('ROLE_REQUIRED','This actor is not authorized for the transition.',details);
+          if(plan.status===3)return error('INDEPENDENCE_REQUIRED','A different actor must perform the independent review.',details);
+          if(plan.status===4)return error('INVALID_FIELDS','Supply concise, nonempty text values under valid field keys.',details);
+          if(plan.status===5)return error('MISSING_FIELDS','Complete the required transition fields: '+plan.missing.join(', ')+'.',{...details,missing:plan.missing});
+          ({fields,contributors}=plan);
+        }else{
+          if(!t||t.from!==instance.state)return error('TRANSITION_NOT_AVAILABLE','This transition is not available from the current state.',details);
+          const denied=refusal(t,actor,instance);
+          if(denied)return error(...denied,details);
+          if(!object(body)||Object.keys(body).length>20||Object.keys(body).some(k=>!fieldKey(k)||!clean(body[k],2000)))return error('INVALID_FIELDS','Supply concise, nonempty text values under valid field keys.',details);
+          const missing=t.requiredFields.filter(k=>!Object.hasOwn(body,k));
+          if(missing.length)return error('MISSING_FIELDS','Complete the required transition fields: '+missing.join(', ')+'.',{...details,missing});
+          fields=Object.fromEntries(Object.keys(body).map(k=>[k,clean(body[k],2000)]));
+          contributors=t.independent?[]:[...new Set([...instance.contributors,actor.id])];
+        }
         instance.revision++;
         instance.state=t.to;
         instance.updatedAt=at;
         instance.lastActorId=actor.id;
-        instance.contributors=t.independent?[]:[...new Set([...instance.contributors,actor.id])];
+        instance.contributors=contributors;
         instance.steps.push({transitionId:t.id,actorId:actor.id,role:actor.role,at,from:t.from,to:t.to,revision:instance.revision,fields});
         return {ok:true,instance,details:{...details,to:t.to,revision:instance.revision,fieldKeys:Object.keys(fields)}};
       });

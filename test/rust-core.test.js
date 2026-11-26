@@ -232,3 +232,97 @@ test('Rust route authorization matches the complete legacy policy',{skip:!rust.e
     assert.deepEqual(result,expected[i],JSON.stringify(input[i]));
   }
 });
+
+
+test('Rust workflow plans preserve complete event and snapshot replay against JS',{skip:!rust.enabled},()=>{
+  const scenario=String.raw`
+const {createWorkflowEngine,syntheticDefinition}=require('./workflow-engine');
+let snapshot,seq=0;const history=[];
+const engine=createWorkflowEngine({load:()=>snapshot,save:next=>snapshot=next,now:()=>new Date(1767225600000+seq*1000).toISOString(),id:()=>String(++seq)});
+const author={id:'alice',role:'initiator'},reviewer={id:'bob',role:'reviewer'};
+history.push(engine.publish({actor:{id:'pat',role:'publisher'},definition:syntheticDefinition,expectedVersion:0}));
+const started=engine.start({actor:author,definitionId:syntheticDefinition.id,title:'Synthetic plan'});history.push(started);
+const id=started.instance.id;
+const step=(actor,transitionId,expectedRevision,fields)=>history.push(engine.advance({actor,instanceId:id,transitionId,expectedRevision,fields}));
+step(reviewer,'approve',1,{reason:'Too soon'});
+step(author,'submit-for-review','1',{summary:'Invalid revision'});
+step(author,'submit-for-review',1,{summary:'  '});
+step(author,'submit-for-review',1,{constructor:'not a field'});
+step(author,'submit-for-review',1,{summary:7});
+step(author,'submit-for-review',1,{});
+step(author,'submit-for-review',1,{summary:'\uFEFF Example 😀 \u00a0',detail:'\uD800'});
+step({id:'other',legacyId:'alice',role:'reviewer'},'approve',2,{reason:'Same contributor'});
+step(reviewer,'return-for-changes',1,{reason:'Stale'});
+step(reviewer,'return-for-changes',2,{reason:'  More detail  '});
+step(author,'submit-for-review',3,{summary:'Revised'});
+step(reviewer,'approve',4,{reason:'Complete'});
+process.stdout.write(JSON.stringify({history,snapshot}));
+`;
+  const run=mode=>spawnSync(process.execPath,['-e',scenario],{cwd:root,encoding:'utf8',env:{...process.env,TRUST_RUST_CORE:mode}});
+  const expected=run('off'),actual=run('required');
+  assert.equal(expected.status,0,expected.stderr);assert.equal(actual.status,0,actual.stderr);
+  assert.deepEqual(JSON.parse(actual.stdout),JSON.parse(expected.stdout));
+});
+
+test('Rust questionnaire decisions match the JS reference including hidden branches and UTF-16 boundaries',{skip:!rust.enabled},()=>{
+  const scenario=String.raw`
+const {evaluate}=require('./assessment-questionnaire');
+const q={questions:[{id:'choice',label:'Choice',kind:'choice',options:['Yes','No'],required:true},
+ {id:'count',label:'Count',kind:'integer',required:true,when:{question:'choice',equals:'Yes'}},
+ {id:'summary',label:'Summary',kind:'text',required:true}]};
+const results=[];
+for(const choice of ['Yes','No','bad',null])for(const count of ['',' 0 ','-0','-123','012','1234567890','\uFEFF2',3])
+ for(const summary of ['hello','\uD800',' \u00A0 ','a'.repeat(2001)])
+  for(const submitting of [true,false])results.push(evaluate(q,{count:'5',summary:'Old'},{choice,count,summary},submitting));
+results.push(evaluate(q,{count:'5',summary:'Old'},{choice:'No'},true));
+results.push(evaluate(q,{},{choice:'No',extra:'unknown'},false));
+process.stdout.write(JSON.stringify(results));
+`;
+  const run=mode=>spawnSync(process.execPath,['-e',scenario],{cwd:root,encoding:'utf8',env:{...process.env,TRUST_RUST_CORE:mode},maxBuffer:4*1024*1024});
+  const expected=run('off'),actual=run('required');
+  assert.equal(expected.status,0,expected.stderr);assert.equal(actual.status,0,actual.stderr);
+  assert.deepEqual(JSON.parse(actual.stdout),JSON.parse(expected.stdout));
+});
+
+
+test('Rust storage checks preserve scope, generation, snapshot and backup framing',{skip:!rust.enabled},()=>{
+  for(const scope of ['demo','workspace:a','workspace:a-1','workspace:'+('a'.repeat(48)),'workspace:'+('a'.repeat(49)),
+    'workspace:','workspace:Alpha','workspace:a/../b','workspace:a\n','workspace:\uFEFFa',null,7]){
+    const expected=scope==='demo'?1:typeof scope==='string'&&/^workspace:[a-z][a-z0-9-]{0,47}$/.test(scope)?2:0;
+    assert.equal(rust.storageScope(scope),expected,String(scope));
+  }
+  for(const value of [0,1,7,1.25,-1,Number.MAX_SAFE_INTEGER,Number.MAX_SAFE_INTEGER+1,Infinity,NaN,'1',null])
+    assert.equal(rust.storageGeneration(value),Number.isSafeInteger(value)&&value>0);
+  const workbench={version:1,actors:[],projects:[],vendors:[],assessments:[],handoff:[],audit:[]};
+  assert.equal(rust.storagePayload('workbench',workbench),true);
+  for(const key of Object.keys(workbench))assert.equal(rust.storagePayload('workbench',{...workbench,[key]:null}),false);
+  assert.equal(rust.storagePayload('workflow',{schemaVersion:1,definitions:[],instances:[],events:[]}),true);
+  assert.equal(rust.storagePayload('workflow',{schemaVersion:'1',definitions:[],instances:[],events:[]}),false);
+  const header=Buffer.alloc(26);header.write('MVWTRSTE');header[8]=1;header[9]=1;header.writeUInt32BE(123,22);
+  assert.equal(rust.encryptedSize(header,165),123);
+  assert.equal(rust.encryptedSize(header,164),-1);
+  assert.equal(rust.encryptedSize(header.subarray(0,25),165),-1);
+  for(const offset of [0,7,8,9,22,23,24,25]){
+    const changed=Buffer.from(header);changed[offset]^=1;
+    assert.equal(rust.encryptedSize(changed,165),-1);
+  }
+});
+
+test('Rust incident and retention decisions match every flag combination',{skip:!rust.enabled},()=>{
+  for(let mask=0;mask<64;mask++)for(const n of [0,1,2,3]){
+    const row={containment:mask&1?{}:null,findings:mask&2?{}:null,branch:mask&4?'elevated':'standard',
+      evidence:Array.from({length:n},(_,i)=>({kind:i===0&&mask&8?'impact':'other'})),
+      review:mask&16?{decision:'more-information',revision:2}:null,lastInvestigationRevision:mask&32?3:2};
+    const elevated=row.branch==='elevated';
+    const expected=Boolean(row.containment&&row.findings&&row.evidence.length>=(elevated?2:1)&&
+      (!elevated||row.evidence.some(e=>e.kind==='impact'))&&
+      (row.review?.decision!=='more-information'||row.lastInvestigationRevision>row.review.revision));
+    assert.equal(rust.incidentReady(row),expected);
+  }
+  for(let mask=0;mask<16;mask++){
+    const holds=mask&1?['hold']:[],schedule=mask&2?{}:null,trigger=mask&4?'2026-01-01':null;
+    const asOf=mask&8?'2026-01-01':'2026-01-03',due='2026-01-02';
+    assert.equal(rust.retentionReason(holds,schedule,trigger,asOf,due),holds.length?'ACTIVE_HOLD':
+      !schedule?'NO_ACTIVE_SCHEDULE':!trigger?'TRIGGER_NOT_RECORDED':asOf<due?'BEFORE_DUE_DATE':'ELIGIBLE');
+  }
+});

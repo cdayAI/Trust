@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 
 const fs = require('node:fs');
 const { createCipheriv, createDecipheriv, randomBytes } = require('node:crypto');
@@ -88,6 +89,11 @@ function makeHeader(size) {
   return header;
 }
 function expectedSize(header, archiveSize) {
+  if (rust.enabled) {
+    const size=rust.encryptedSize(header,archiveSize);
+    if(size<1)throw Error(invalidArchive);
+    return size;
+  }
   if (!header.subarray(0, magic.length).equals(magic) ||
     header[magic.length] !== version || header[magic.length + 1] !== cipherId) throw Error(invalidArchive);
   const size = header.readUInt32BE(lengthOffset);

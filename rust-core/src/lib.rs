@@ -8,6 +8,9 @@ mod batch;
 mod domain;
 mod report;
 mod policy;
+mod workflow;
+mod storage;
+mod lifecycle;
 
 const MAX_BUFFER: usize = 8 * 1024 * 1024;
 const INVALID: i32 = i32::MIN;
@@ -17,7 +20,7 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn trust_abi() -> u32 { 5 }
+pub extern "C" fn trust_abi() -> u32 { 7 }
 
 // The host borrows this byte range only until the next reserve call. Each
 // invocation is synchronous, and Rust only accesses the owned Vec via slices.
@@ -196,6 +199,68 @@ pub extern "C" fn trust_routes_init()->u32{
 #[no_mangle]
 pub extern "C" fn trust_authorize(method:u32,role:u32,limited:u32)->u32{
     BUFFER.with(|cell|policy::authorize(method,role,limited!=0,&cell.borrow()))
+}
+#[no_mangle]
+pub extern "C" fn trust_revision(expected:f64,actual:f64,min:u32)->u32{
+    workflow::revision(expected,actual,min)
+}
+#[no_mangle]
+pub extern "C" fn trust_transition(input:u32,available:u32,role:u32,allowed:u32,
+    independent:u32,actor:u32,legacy:u32,creator:u32)->i32{
+    BUFFER.with(|cell|{
+        let mut bytes=cell.borrow_mut();
+        let length=input as usize;
+        let result=match bytes.get(..length).and_then(|b|workflow::plan(b,available!=0,role,allowed,independent!=0,actor,legacy,creator)){
+            Some(plan)=>plan,None=>return -1
+        };
+        let Some(output)=bytes.get_mut(length..)else{return -1;};
+        let required=8+result.ranges.len()*8+result.contributors.len()*4;
+        if output.len()<required{return -1;}
+        let words=[result.missing,result.contributors.len() as u32].into_iter()
+            .chain(result.ranges.into_iter().flat_map(|(a,b)|[a,b]))
+            .chain(result.contributors);
+        for (dst,word) in output.chunks_exact_mut(4).zip(words){dst.copy_from_slice(&word.to_le_bytes());}
+        result.status as i32
+    })
+}
+#[no_mangle]
+pub extern "C" fn trust_answer(input:u32,flags:u32,kind:u32)->i32{
+    BUFFER.with(|cell|{
+        let mut bytes=cell.borrow_mut();
+        let length=input as usize;
+        let (status,start,end)=match bytes.get(..length).and_then(|b|workflow::answer(b,flags,kind)){
+            Some(result)=>result,None=>return -1
+        };
+        let Some(output)=bytes.get_mut(length..)else{return -1;};
+        if output.len()!=8{return -1;}
+        output[..4].copy_from_slice(&start.to_le_bytes());
+        output[4..].copy_from_slice(&end.to_le_bytes());
+        status as i32
+    })
+}
+#[no_mangle]
+pub extern "C" fn trust_storage_scope()->u32{
+    BUFFER.with(|cell|storage::scope(&cell.borrow()))
+}
+#[no_mangle]
+pub extern "C" fn trust_storage_generation(value:f64)->u32{
+    storage::positive_generation(value) as u32
+}
+#[no_mangle]
+pub extern "C" fn trust_storage_payload(kind:u32,version:f64,arrays:u32)->u32{
+    storage::payload_shape(kind,version,arrays) as u32
+}
+#[no_mangle]
+pub extern "C" fn trust_backup_header(archive_size:f64)->i32{
+    BUFFER.with(|cell|storage::encrypted_size(&cell.borrow(),archive_size).map(|size|size as i32).unwrap_or(-1))
+}
+#[no_mangle]
+pub extern "C" fn trust_incident_ready(flags:u32,evidence_count:u32)->u32{
+    lifecycle::incident_ready(flags,evidence_count) as u32
+}
+#[no_mangle]
+pub extern "C" fn trust_retention_reason(flags:u32)->u32{
+    lifecycle::retention_reason(flags)
 }
 #[cfg(test)]
 mod tests {
