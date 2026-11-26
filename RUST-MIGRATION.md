@@ -28,6 +28,10 @@ memory; no unsafe blocks, third-party Rust crates or custom cryptography.
   remain in Node.
 - Aggregate reporting filters, date/month grouping, counts and distinct
   workflows in bounded chunks; Rust receives only numeric dimensions.
+- Exact HTTP route/role authorization including limited reviewer seats.
+  Route expressions are expanded from the existing source-of-truth policy
+  using a deliberately small supported grammar; Rust matches typed segments
+  and role masks. Record-level checks remain in the application.
 - Breadth-first graph lineage and cycle prevention in the inventory data map.
 - Directed cycle validation of synthetic fixture migrations.
 - UTC calendar and business-day deadlines, including weekends and closed dates,

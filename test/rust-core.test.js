@@ -193,3 +193,42 @@ test('Rust reporting matches filtered aggregates across chunk and UTC year bound
     assert.equal(result.workflowCount,new Set(items.map(x=>x.workflow)).size);assert.deepEqual(result.buckets,buckets);
   }
 });
+
+
+test('Rust route authorization matches the complete legacy policy',{skip:!rust.enabled},()=>{
+  const {readFileSync}=require('node:fs');
+  const {requirePermission}=require('../access-policy');
+  const source=readFileSync(join(root,'access-policy.js'),'utf8');
+  const symbols={uuid:'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',
+    key:'[a-zA-Z0-9][a-zA-Z0-9-]{0,127}',myWorkToken:'[a-f0-9]{64}',
+    moduleId:'(?:inventory|processing|rights|incidents|third-party|risks|controls|retention|policies|administration|integrations)'};
+  const paths=new Set(['/api/unknown','/api','/api/state/','/api/state\n']);
+  for(const line of source.split('\n').filter(s=>s.startsWith("route('"))){
+    const expression=line.match(/^route\('(?:GET|POST)',(.*),(?:operators|studio|rights|ethics|all|\[[^\]]*\])\);$/)?.[1];
+    assert.ok(expression,line);
+    const parts=expression.match(/'[^']*'|uuid|key|myWorkToken|moduleId|\+/g);
+    assert.equal(parts.join(''),expression);
+    const pattern=parts.filter(p=>p!=='+').map(p=>p.startsWith("'")?p.slice(1,-1):symbols[p]).join('');
+    for(const value of rust.expandRoute(pattern)){
+      const path='/api/'+value.replaceAll('@uuid','00000000-0000-4000-8000-000000000001').replaceAll('@key','A-test-01')
+        .replaceAll('@version','123').replaceAll('@task','a'.repeat(64));
+      paths.add(path);paths.add(path+'/');paths.add(path+'x');paths.add(path.replaceAll('/','//'));
+    }
+  }
+  assert.ok(paths.size>400);
+  const roles=['analyst','reviewer','case-operator','publisher','identity-admin','ethics-investigator','ethics-reviewer','unknown'];
+  const input=[];
+  for(const path of paths)for(const method of ['GET','POST','DELETE'])for(const role of roles)for(const limited of [false,true])
+    input.push([method,path,role,limited]);
+  const code="const fs=require('node:fs');const {requirePermission}=require('./access-policy');const cases=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(cases.map(([m,p,r,l])=>{try{requirePermission(m,p,r,{documentReviewer:l});return [200,null];}catch(e){return [e.status,e.code??null];}})));";
+  const reference=spawnSync(process.execPath,['-e',code],{cwd:root,input:JSON.stringify(input),encoding:'utf8',
+    env:{...process.env,TRUST_RUST_CORE:'off'},maxBuffer:16*1024*1024});
+  assert.equal(reference.status,0,reference.stderr);
+  const expected=JSON.parse(reference.stdout);
+  for(const [i,[method,path,role,limited]] of input.entries()){
+    let result;
+    try{requirePermission(method,path,role,{documentReviewer:limited});result=[200,null];}
+    catch(error){result=[error.status,error.code??null];}
+    assert.deepEqual(result,expected[i],JSON.stringify(input[i]));
+  }
+});

@@ -7,6 +7,7 @@ mod archive;
 mod batch;
 mod domain;
 mod report;
+mod policy;
 
 const MAX_BUFFER: usize = 8 * 1024 * 1024;
 const INVALID: i32 = i32::MIN;
@@ -16,7 +17,7 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn trust_abi() -> u32 { 4 }
+pub extern "C" fn trust_abi() -> u32 { 5 }
 
 // The host borrows this byte range only until the next reserve call. Each
 // invocation is synchronous, and Rust only accesses the owned Vec via slices.
@@ -188,6 +189,14 @@ pub extern "C" fn trust_report(input:u32,workflow:u32,stage:u32,outcome:u32,grou
     })
 }
 
+#[no_mangle]
+pub extern "C" fn trust_routes_init()->u32{
+    BUFFER.with(|cell|policy::install(&cell.borrow()) as u32)
+}
+#[no_mangle]
+pub extern "C" fn trust_authorize(method:u32,role:u32,limited:u32)->u32{
+    BUFFER.with(|cell|policy::authorize(method,role,limited!=0,&cell.borrow()))
+}
 #[cfg(test)]
 mod tests {
     use super::*;

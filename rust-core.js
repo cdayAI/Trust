@@ -14,8 +14,8 @@ if(mode!=='off'){
     const module=new WebAssembly.Module(bytes);
     if(WebAssembly.Module.imports(module).length)throw Error('The Rust core must not import host capabilities.');
     core=new WebAssembly.Instance(module,{}).exports;
-    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==4||
-      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout','trust_workflow_permission','trust_risk_score','trust_link_status','trust_reductions','trust_account_live','trust_cookie','trust_report'].some(key=>typeof core[key]!=='function'))
+    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==5||
+      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout','trust_workflow_permission','trust_risk_score','trust_link_status','trust_reductions','trust_account_live','trust_cookie','trust_report','trust_routes_init','trust_authorize'].some(key=>typeof core[key]!=='function'))
       throw Error('Incompatible Rust core ABI. Rebuild the Rust core.');
   }
 }
@@ -246,5 +246,58 @@ function aggregateReport(source,filters,vocabulary){
   for(let i=0;i<vocabulary.workflow.length;i++)if(areas&(1<<i))workflowCount++;
   return {buckets:names,total,undated,workflowCount};
 }
+const workspaceRoles=['analyst','reviewer','case-operator','publisher','identity-admin','ethics-investigator','ethics-reviewer'];
+const methodCode=method=>method==='GET'?1:method==='POST'?2:0;
+// Expand only the existing bounded route grammar. Unsupported syntax fails
+// startup instead of being treated as a permissive wildcard.
+function expandRoute(pattern){
+  const tokens=[
+    ['[a-zA-Z0-9][a-zA-Z0-9-]{0,127}','@key'],
+    ['[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}','@uuid'],
+    ['[1-9][0-9]*','@version'],['[a-f0-9]{64}','@task']
+  ];
+  for(const [source,token] of tokens)pattern=pattern.replaceAll(source,token);
+  let pos=0;
+  function expression(depth){
+    if(depth>16)throw Error('Rust route nesting limit exceeded.');
+    let alternatives=[],sequence=[''];
+    while(pos<pattern.length&&pattern[pos]!==')'){
+      if(pattern[pos]==='|'){alternatives.push(...sequence);sequence=[''];pos++;continue;}
+      let next;
+      if(pattern.startsWith('(?:',pos)){
+        pos+=3;next=expression(depth+1);
+        if(pattern[pos++]!==')')throw Error('Unclosed Rust route group.');
+        if(pattern[pos]==='?'){next.push('');pos++;}
+      }else{
+        const char=pattern[pos++];
+        if(!/[a-z0-9/@-]/.test(char))throw Error('Unsupported Rust route grammar: '+char);
+        next=[char];
+      }
+      if(sequence.length*next.length>2048)throw Error('Rust route expansion limit exceeded.');
+      sequence=sequence.flatMap(prefix=>next.map(suffix=>prefix+suffix));
+    }
+    alternatives.push(...sequence);
+    if(alternatives.length>2048)throw Error('Rust route alternatives limit exceeded.');
+    return alternatives;
+  }
+  const result=expression(0);
+  if(pos!==pattern.length)throw Error('Unexpected Rust route terminator.');
+  return result;
+}
+function installRoutes(routes){
+  const lines=[];
+  for(const {method,value,roles} of routes){
+    const code=methodCode(method),mask=roles.reduce((m,r)=>m|roleBit(workspaceRoles,r),0);
+    if(!code||!mask||roles.some(role=>!workspaceRoles.includes(role)))throw Error('Invalid Rust route declaration.');
+    for(const path of expandRoute(value))lines.push(code+'\t'+mask+'\t/api/'+path);
+  }
+  if(withBuffer(Buffer.from(lines.join('\n')),0,()=>core.trust_routes_init())!==1)
+    throw Error('Rust route initialization failed.');
+}
+function authorize(method,pathname,role,limited){
+  const result=withBuffer(Buffer.from(pathname,'utf8'),0,()=>core.trust_authorize(methodCode(method),roleBit(workspaceRoles,role),limited?1:0));
+  if(![0,1,2,3].includes(result))throw Error('Invalid Rust authorization result.');
+  return result;
+}
 module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays,zip,batchHeader,batchLayout,
-  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport});
+  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport,expandRoute,installRoutes,authorize});
