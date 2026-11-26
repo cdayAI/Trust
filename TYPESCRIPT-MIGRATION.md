@@ -85,3 +85,13 @@ explicit TypeScript contracts. Authorization and untrusted-input checks remain
 runtime decisions. A store-level regression verifies the opt-in staff intake
 append is selected and commits the new case and exact audit event without a
 full JavaScript snapshot save.
+
+## Typed privacy, evidence and native transport boundaries
+
+Document authorship recovery, published deadline policies, delegated rights-case
+scope, requester result sealing, assessment-to-incident approval provenance and
+the private native HTTP transport have explicit domain and runtime contracts.
+Existing independent-review, version, signature, scope and audit validation
+remain authoritative. Malformed records are refused rather than treated as
+valid TypeScript objects. Existing snapshot formats and native protocol remain
+unchanged.

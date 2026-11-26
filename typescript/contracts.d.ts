@@ -58,6 +58,7 @@ export interface RustCore {
   workflowPlan(transition:WorkflowTransition|undefined,actor:WorkflowActor,instance:WorkflowInstance,body:unknown):WorkflowPlan;
   accountLive(account:AccountLifetime|null|undefined,at:number):boolean;
   sessionToken(name:string,header:string):string|null;
+  addDays(from:string,days:number,basis:string,closedDates:string[]):string;
 }
 export interface QueueTask {timing:string;owner:string;workflow:string;destination:{view:string;recordId:string;projectId?:string}}
 export interface QueueModel {tasks:QueueTask[];workflowLabels:Record<string,string>}
