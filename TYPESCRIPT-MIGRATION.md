@@ -66,3 +66,13 @@ schemas are also checked under strict TypeScript. Existing persistence, route,
 role, and browser regression contracts remain the release gates. Legacy stored
 workflow snapshots keep their original shallow schema validation; type contracts
 do not imply comprehensive new stored-data validation.
+
+## Typed operator screens
+
+The home dashboard, shared queue and assigned-work inbox consume typed server
+projections and preserve cursor/reload behavior. The identity roster, governed
+dictionary, employee policy administration and trust center use explicit view
+and action models, typed form inputs and narrowed error handling. The remaining
+JavaScript shell is represented by a small classic-script ambient contract;
+there is no runtime module loader or extra browser dependency. These static
+response projections do not replace server-side authorization or input checks.
