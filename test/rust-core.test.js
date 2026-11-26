@@ -174,3 +174,22 @@ test('Rust domain decisions preserve scores, review independence and session par
   for(const disabled of [false,true])for(const validUntil of [null,0,10,100])
     assert.equal(rust.accountLive({disabled,validUntil},10),!disabled&&(validUntil===null||10<validUntil));
 });
+
+
+test('Rust reporting matches filtered aggregates across chunk and UTC year boundaries',{skip:!rust.enabled},()=>{
+  const vocabulary={workflow:['rights','incidents'],stage:['draft','approved'],outcome:['recorded','refused']};
+  const records=Array.from({length:17000},(_,i)=>({workflow:i%2?'rights':'incidents',
+    stage:i%3?'approved':'draft',day:i%7===0?null:i%5===0?'0001-01-02':'2026-11-25'}));
+  for(const group of ['workflow','stage','day','month'])for(const workflow of ['all','rights'])for(const from of [null,'2020-01-01']){
+    const filters={workflow,stage:'all',outcome:'all',group,from,to:null};
+    const items=records.filter(x=>(workflow==='all'||x.workflow===workflow)&&(!from||x.day&&x.day>=from));
+    const buckets=new Map();
+    for(const row of items){
+      const key=group==='day'?(row.day??'undated'):group==='month'?(row.day?.slice(0,7)??'undated'):row[group];
+      buckets.set(key,(buckets.get(key)??0)+1);
+    }
+    const result=rust.aggregateReport(records,filters,vocabulary);
+    assert.equal(result.total,items.length);assert.equal(result.undated,items.filter(x=>!x.day).length);
+    assert.equal(result.workflowCount,new Set(items.map(x=>x.workflow)).size);assert.deepEqual(result.buckets,buckets);
+  }
+});

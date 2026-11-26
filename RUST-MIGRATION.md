@@ -26,6 +26,8 @@ memory; no unsafe blocks, third-party Rust crates or custom cryptography.
 - Session-cookie parsing, duplicate-cookie refusal and account expiration
   checks. Identity providers, random tokens, cryptography and session maps
   remain in Node.
+- Aggregate reporting filters, date/month grouping, counts and distinct
+  workflows in bounded chunks; Rust receives only numeric dimensions.
 - Breadth-first graph lineage and cycle prevention in the inventory data map.
 - Directed cycle validation of synthetic fixture migrations.
 - UTC calendar and business-day deadlines, including weekends and closed dates,

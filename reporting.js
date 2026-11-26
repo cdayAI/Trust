@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 
 // Reporting consumes only aggregate dimensions. Never copy source record fields,
 // descriptions, names, identities, evidence, audit payloads, or request data.
@@ -99,20 +100,27 @@ function report(state,audit,params,{mode='synthetic-demo',exporting=false,genera
   const {filters,format}=readFilters(params,exporting);
   const {dataset,workflow,stage,outcome,group,from,to}=filters;
   const source=dataset==='records'?recordRows(state,audit):activityRows(audit);
-  const buckets=new Map(), areas=new Set();
-  let total=0,undated=0;
-  for(const item of source){
-    if(workflow!=='all'&&item.workflow!==workflow||stage!=='all'&&item.stage!==stage||outcome!=='all'&&item.outcome!==outcome)continue;
-    if(from&&(!item.day||item.day<from)||to&&(!item.day||item.day>to))continue;
-    const key=group==='day'?(item.day??'undated'):group==='month'?(item.day?.slice(0,7)??'undated'):item[group];
-    buckets.set(key,(buckets.get(key)??0)+1);
-    areas.add(item.workflow);
-    total++;
-    if(!item.day)undated++;
+  let buckets,total=0,undated=0,workflowCount=0;
+  if(rust.enabled){
+    ({buckets,total,undated,workflowCount}=rust.aggregateReport(source,filters,{
+      workflow:Object.keys(workflows),stage:Object.keys(stages),outcome:Object.keys(outcomes)
+    }));
+  }else{
+    buckets=new Map();const areas=new Set();
+    for(const item of source){
+      if(workflow!=='all'&&item.workflow!==workflow||stage!=='all'&&item.stage!==stage||outcome!=='all'&&item.outcome!==outcome)continue;
+      if(from&&(!item.day||item.day<from)||to&&(!item.day||item.day>to))continue;
+      const key=group==='day'?(item.day??'undated'):group==='month'?(item.day?.slice(0,7)??'undated'):item[group];
+      buckets.set(key,(buckets.get(key)??0)+1);
+      areas.add(item.workflow);
+      total++;
+      if(!item.day)undated++;
+    }
+    workflowCount=areas.size;
   }
   const labels=group==='workflow'?workflows:group==='stage'?stages:group==='outcome'?outcomes:{undated:'Undated'};
   const rows=[...buckets].sort(([a],[b])=>a.localeCompare(b,'en')).map(([key,count])=>({key,label:labels[key]??key,count}));
-  const model={schemaVersion:1,mode,generatedAt,filters,counts:{total,workflowCount:areas.size,undated},rows,
+  const model={schemaVersion:1,mode,generatedAt,filters,counts:{total,workflowCount,undated},rows,
     options:{workflows,stages,outcomes,groupings,allowedGroups}};
   return {model,format};
 }

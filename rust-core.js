@@ -14,8 +14,8 @@ if(mode!=='off'){
     const module=new WebAssembly.Module(bytes);
     if(WebAssembly.Module.imports(module).length)throw Error('The Rust core must not import host capabilities.');
     core=new WebAssembly.Instance(module,{}).exports;
-    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==3||
-      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout','trust_workflow_permission','trust_risk_score','trust_link_status','trust_reductions','trust_account_live','trust_cookie'].some(key=>typeof core[key]!=='function'))
+    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==4||
+      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout','trust_workflow_permission','trust_risk_score','trust_link_status','trust_reductions','trust_account_live','trust_cookie','trust_report'].some(key=>typeof core[key]!=='function'))
       throw Error('Incompatible Rust core ABI. Rebuild the Rust core.');
   }
 }
@@ -192,5 +192,59 @@ function sessionToken(name,header){
     return Buffer.from(new Uint8Array(core.memory.buffer,ptr+prefix.length+bytes.length,43)).toString('ascii');
   });
 }
+function aggregateReport(source,filters,vocabulary){
+  const groups=['workflow','stage','outcome','day','month'];
+  const {workflow,stage,outcome,group,from,to}=filters;
+  const dimension=(list,value)=>{
+    if(value==='all'||value===undefined)return 0;
+    const n=list.indexOf(value)+1;
+    if(!n)throw Error('Unknown Rust reporting dimension.');
+    return n;
+  };
+  const day=value=>value?Number(value.replaceAll('-','')):0;
+  const w=dimension(vocabulary.workflow,workflow),s=dimension(vocabulary.stage,stage),o=dimension(vocabulary.outcome,outcome);
+  const g=groups.indexOf(group),first=day(from),last=day(to);
+  if(g<0||vocabulary.workflow.length>31)throw Error('Invalid Rust reporting dimensions.');
+  const maxRows=16384,buffer=Buffer.alloc(maxRows*16);
+  let count=0,total=0,undated=0,areas=0;
+  const buckets=new Map();
+  function flush(){
+    if(!count)return;
+    const length=count*16;
+    withBuffer(buffer.subarray(0,length),12+count*8,ptr=>{
+      const n=core.trust_report(length,w,s,o,g,first,last);
+      if(n<0||n>count)throw Error('Invalid Rust report result.');
+      const view=new DataView(core.memory.buffer,ptr+length,12+n*8);
+      total+=view.getUint32(0,true);undated+=view.getUint32(4,true);areas|=view.getUint32(8,true);
+      for(let i=0;i<n;i++){
+        const key=view.getUint32(12+i*8,true),amount=view.getUint32(16+i*8,true);
+        buckets.set(key,(buckets.get(key)??0)+amount);
+      }
+    });
+    count=0;
+  }
+  for(const row of source){
+    const w=dimension(vocabulary.workflow,row.workflow),s=dimension(vocabulary.stage,row.stage),o=dimension(vocabulary.outcome,row.outcome);
+    if(!w)throw Error('Unknown Rust report workflow.');
+    for(const [i,value] of [w,s,o,day(row.day)].entries())buffer.writeUInt32LE(value,count*16+i*4);
+    if(++count===maxRows)flush();
+  }
+  flush();
+  const names=new Map();
+  for(const [key,amount] of buckets){
+    let name;
+    if(g<3)name=vocabulary[group][key-1];
+    else if(!key)name='undated';
+    else{
+      const value=String(key).padStart(g===3?8:6,'0');
+      name=value.slice(0,4)+'-'+value.slice(4,6)+(g===3?'-'+value.slice(6,8):'');
+    }
+    if(name===undefined)throw Error('Invalid Rust report bucket.');
+    names.set(name,amount);
+  }
+  let workflowCount=0;
+  for(let i=0;i<vocabulary.workflow.length;i++)if(areas&(1<<i))workflowCount++;
+  return {buckets:names,total,undated,workflowCount};
+}
 module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays,zip,batchHeader,batchLayout,
-  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken});
+  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport});

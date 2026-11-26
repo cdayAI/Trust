@@ -6,6 +6,7 @@ mod raster;
 mod archive;
 mod batch;
 mod domain;
+mod report;
 
 const MAX_BUFFER: usize = 8 * 1024 * 1024;
 const INVALID: i32 = i32::MIN;
@@ -15,7 +16,7 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn trust_abi() -> u32 { 3 }
+pub extern "C" fn trust_abi() -> u32 { 4 }
 
 // The host borrows this byte range only until the next reserve call. Each
 // invocation is synchronous, and Rust only accesses the owned Vec via slices.
@@ -166,6 +167,24 @@ pub extern "C" fn trust_cookie(name_len:u32,header_len:u32)->i32{
         let Some(output)=bytes.get_mut(input_len..) else{return -1;};
         if output.len()!=43{return -1;}
         output.copy_from_slice(&token);1
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn trust_report(input:u32,workflow:u32,stage:u32,outcome:u32,group:u32,from:u32,to:u32)->i32{
+    BUFFER.with(|cell|{
+        let mut bytes=cell.borrow_mut();
+        let input=input as usize;
+        let result=match bytes.get(..input).and_then(|b|report::aggregate(b,workflow,stage,outcome,group,from,to)){
+            Some(result)=>result,None=>return -1
+        };
+        let Some(output)=bytes.get_mut(input..) else{return -1;};
+        let count=result.buckets.len();
+        if output.len()<12+count*8{return -1;}
+        let words=[result.total,result.undated,result.areas].into_iter()
+            .chain(result.buckets.into_iter().flat_map(|(key,count)|[key,count]));
+        for (dst,word) in output.chunks_exact_mut(4).zip(words){dst.copy_from_slice(&word.to_le_bytes());}
+        count as i32
     })
 }
 

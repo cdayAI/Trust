@@ -170,6 +170,7 @@
   "rust-core/src/graph.rs",
   "rust-core/src/lib.rs",
   "rust-core/src/raster.rs",
+  "rust-core/src/report.rs",
   "saved-email-profile.js",
   "scripts/benchmark-local.js",
   "scripts/browser-tools/package-lock.json",
