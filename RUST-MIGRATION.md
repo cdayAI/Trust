@@ -181,6 +181,24 @@ run the direct Node listener. Corporate TLS/OIDC continues to use the separate
 Node listener; arbitrary application mutations still execute in Node. The
 native HTTP package remains Linux x64 only pending additional qualification.
 
+## Repeatable 100-pass verification
+
+The manual `Current Trust 100-pass Rust audit` Actions workflow builds all three
+Rust layers and launches exactly 100 test processes in four independent
+shards. It covers the current suite inventory, repeats selected high-risk
+paths with the native SQLite driver, explicitly tests the native HTTP listener
+and real Chromium release journeys, rechecks selected JavaScript reference
+paths, and ends with the integrated suite. Pass summaries retain individual
+test totals, skips, failures and runtime modes; any failed test or empty pass
+fails its shard. The optional historical Stage 20 upgrade rehearsal requires
+the original pinned archive; without it the slot is replaced by a real
+native release-launcher test and the missing prerequisite is logged.
+
+The previous pre-final-integration audit completed 100/100 processes, 803
+passing individual test executions, zero failures and one skipped historical
+rehearsal (run 45745342290). This is repeatable regression testing, not 100
+independent security reviews or evidence of production readiness.
+
 ## Next migration stages
 
 1. Extend archive malformed-input fuzzing and performance comparisons before
