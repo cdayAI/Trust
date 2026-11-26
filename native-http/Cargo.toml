@@ -1,0 +1,16 @@
+[package]
+name = "trust-http"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+publish = false
+
+[dependencies]
+hyper = { version = "1", features = ["http1", "server", "client"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt", "macros", "net", "time", "sync", "io-util"] }
+
+[profile.release]
+lto = "thin"
+strip = "symbols"

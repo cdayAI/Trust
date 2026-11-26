@@ -30,6 +30,8 @@
     "build:rust-sqlite": "node scripts/rust-native-storage.js build",
     "test:rust-sqlite": "node scripts/rust-native-storage.js test",
     "release:native-rust": "node scripts/package-release.js --native-rust",
+    "build:rust-http": "node scripts/rust-native-http.js build",
+    "test:rust-http": "node scripts/rust-native-http.js test",
     "verify:native-release": "node scripts/verify-native-release.js",
     "benchmark:rust": "node scripts/benchmark-rust.js"
   }
