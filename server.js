@@ -111,6 +111,7 @@ async function readBody(req,limit=32768) {
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
 function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false,reportWorkerWorkspace,internalTransport}={}) {
+  if(require('./native-http-abi').descriptor(__dirname)&&!internalTransport)throw Error('Use the native HTTP release launcher.');
   if(internalTransport&&(!isolated||sqliteFile===undefined||corporate!==undefined||tls||reportWorkerWorkspace||
     typeof internalTransport.token!=='string'||!/^[a-f0-9]{64}$/.test(internalTransport.token)||typeof internalTransport.address!=='function'))
     throw Error('Private native HTTP transport requires an isolated synthetic SQLite application.');

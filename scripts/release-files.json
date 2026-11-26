@@ -92,6 +92,7 @@
   "maturity-planning.js",
   "modules.js",
   "my-work.js",
+  "native-http-abi.js",
   "native-http-transport.js",
   "native-http/Cargo.lock",
   "native-http/Cargo.toml",
