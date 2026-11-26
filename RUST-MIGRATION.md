@@ -19,6 +19,13 @@ memory; no unsafe blocks, third-party Rust crates or custom cryptography.
 - Binary attachment-batch header and exact contiguous file layout, with
   the existing 4 MiB and four-file budget. JSON shape and media rules remain
   in Node; only the header and size vector cross the Wasm boundary.
+- Workflow definition reachability and independent transition authorization,
+  including legacy contributor IDs.
+- Risk-control score bands, mitigation eligibility, largest verified
+  reductions and vendor risk tiers.
+- Session-cookie parsing, duplicate-cookie refusal and account expiration
+  checks. Identity providers, random tokens, cryptography and session maps
+  remain in Node.
 - Breadth-first graph lineage and cycle prevention in the inventory data map.
 - Directed cycle validation of synthetic fixture migrations.
 - UTC calendar and business-day deadlines, including weekends and closed dates,

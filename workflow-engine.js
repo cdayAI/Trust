@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {randomUUID}=require('node:crypto');
 
 const roles=new Set(['publisher','initiator','reviewer']);
@@ -29,9 +30,15 @@ function normalizeDefinition(d) {
      !distinct(t.requiredFields)||t.requiredFields.some(f=>!fieldKey(f)))))) return null;
   const transitions=d.transitions.map(t=>({id:t.id,from:t.from,to:t.to,roles:[...t.roles],independent:t.independent===true,requiredFields:[...(t.requiredFields??[])]}));
   if(!distinct(transitions.map(x=>x.id))) return null;
-  const reachable=new Set([d.initial]);
-  for(let n=0;n<states.length;n++) for(const t of transitions) if(reachable.has(t.from)) reachable.add(t.to);
-  if(reachable.size!==states.length) return null;
+  if(rust.enabled){
+    const adjacency=new Map(stateIds.map(id=>[id,new Set()]));
+    for(const t of transitions)adjacency.get(t.from).add(t.to);
+    if(rust.trace(d.initial,adjacency).length+1!==states.length)return null;
+  }else{
+    const reachable=new Set([d.initial]);
+    for(let n=0;n<states.length;n++)for(const t of transitions)if(reachable.has(t.from))reachable.add(t.to);
+    if(reachable.size!==states.length)return null;
+  }
   return {id:d.id,...(d.label===undefined?{}:{label:clean(d.label,120)}),initial:d.initial,states,transitions};
 }
 function selectDefinition(state,id,version) {
@@ -42,6 +49,11 @@ function selectDefinition(state,id,version) {
 // Inject only trustworthy actor identities from the calling application. This engine
 // enforces workflow roles and independence; it does not authenticate a browser.
 function refusal(t,actor,instance){
+  if(rust.enabled){
+    const decision=rust.workflowPermission(t,actor,instance);
+    return decision===1?['ROLE_REQUIRED','This actor is not authorized for the transition.']:
+      decision===2?['INDEPENDENCE_REQUIRED','A different actor must perform the independent review.']:null;
+  }
   if(!actor||!t.roles.includes(actor.role))return ['ROLE_REQUIRED','This actor is not authorized for the transition.'];
   const identities=[actor.id,...(actor.legacyId?[actor.legacyId]:[])];
   if(t.independent&&identities.some(id=>id===instance.createdBy||instance.contributors.includes(id)))

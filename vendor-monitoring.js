@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {randomUUID}=require('node:crypto');
 const assessmentFlow=require('./assessment-workflow');
 const bookOf=s=>s.vendorMonitoring??{revision:0,cases:[]};
@@ -15,8 +16,9 @@ function factor(x){
 function factors(body,vendor){
   const criticality=factor(body.criticality), exposure=factor(body.exposure);
   const ai=vendor.usesAI?2:0, sensitive=vendor.handlesSensitiveData?2:0;
-  const score=criticality*exposure+ai+sensitive;
-  const tier=score>=22?'critical':score>=14?'high':score>=7?'moderate':'low';
+  const result=rust.enabled?rust.riskScore(1,criticality,exposure,ai+sensitive):null;
+  const score=result?result.value:criticality*exposure+ai+sensitive;
+  const tier=result?result.tier:score>=22?'critical':score>=14?'high':score>=7?'moderate':'low';
   return {criticality,exposure,ai,sensitive,score,tier,policyVersion:policy.version};
 }
 function dueDate(now,days){

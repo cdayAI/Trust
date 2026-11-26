@@ -140,3 +140,37 @@ test('Rust binary batch framing preserves offsets and rejection ordering',{skip:
   }
   assert.throws(()=>decode(Buffer.alloc(requestLimit+1)),{status:413,code:'ATTACHMENT_BATCH_TOO_LARGE'});
 });
+
+
+test('Rust domain decisions preserve scores, review independence and session parsing',{skip:!rust.enabled},()=>{
+  for(let l=1;l<=5;l++)for(let i=1;i<=5;i++){
+    const value=l*i;
+    assert.deepEqual(rust.riskScore(0,l,i),{value,tier:value>=20?'critical':value>=12?'high':value>=6?'moderate':'low'});
+    for(const extras of [0,2,4]){
+      const score=value+extras;
+      assert.deepEqual(rust.riskScore(1,l,i,extras),{value:score,tier:score>=22?'critical':score>=14?'high':score>=7?'moderate':'low'});
+    }
+  }
+  for(const archivedAt of [null,'at'])for(const reviewedBy of [null,'reviewer'])
+    for(const t of [null,...['pass','fail'].flatMap(outcome=>['pending','accepted','rejected'].map(reviewStatus=>({outcome,reviewStatus})))]){
+      const link={archivedAt,reviewedBy};
+      const expected=archivedAt?'unlinked':!reviewedBy?'link-awaiting-review':!t?'untested':t.outcome==='fail'?'latest-test-failed':
+        t.reviewStatus==='accepted'?'verified-pass':t.reviewStatus==='rejected'?'review-rejected':'awaiting-independent-review';
+      assert.equal(rust.linkReason(link,t),expected);
+    }
+  const instance={createdBy:'alice',contributors:['bob']};
+  for(const actor of [null,{id:'alice',role:'reviewer'},{id:'carol',legacyId:'bob',role:'reviewer'},{id:'carol',role:'reviewer'},{id:'dan',role:'initiator'}])
+    for(const independent of [false,true]){
+      const transition={roles:['reviewer'],independent};
+      const expected=!actor||actor.role!=='reviewer'?1:independent&&[actor.id,actor.legacyId].some(id=>id===instance.createdBy||instance.contributors.includes(id))?2:0;
+      assert.equal(rust.workflowPermission(transition,actor,instance),expected);
+    }
+  const token='a'.repeat(43),name='trust_local_session';
+  for(const header of ['',name+'='+token,' x=2; \uFEFF'+name+'='+token+' ; z=3',name+'='+token+'; '+name+'='+token,name+'=bad',name+'='+token+'x',name+' ='+token]){
+    const values=header.split(';').map(x=>x.trim()).filter(x=>x.startsWith(name+'='));
+    const expected=values.length===1&&/^[A-Za-z0-9_-]{43}$/.test(values[0].slice(name.length+1))?values[0].slice(name.length+1):null;
+    assert.equal(rust.sessionToken(name,header),expected);
+  }
+  for(const disabled of [false,true])for(const validUntil of [null,0,10,100])
+    assert.equal(rust.accountLive({disabled,validUntil},10),!disabled&&(validUntil===null||10<validUntil));
+});

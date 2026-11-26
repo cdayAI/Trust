@@ -5,6 +5,7 @@ mod graph;
 mod raster;
 mod archive;
 mod batch;
+mod domain;
 
 const MAX_BUFFER: usize = 8 * 1024 * 1024;
 const INVALID: i32 = i32::MIN;
@@ -14,7 +15,7 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn trust_abi() -> u32 { 2 }
+pub extern "C" fn trust_abi() -> u32 { 3 }
 
 // The host borrows this byte range only until the next reserve call. Each
 // invocation is synchronous, and Rust only accesses the owned Vec via slices.
@@ -123,6 +124,48 @@ pub extern "C" fn trust_batch_layout(frame_len: u32, manifest: u32) -> i32 {
             dst.copy_from_slice(&value.to_le_bytes());
         }
         offsets.len() as i32
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn trust_workflow_permission(role:u32,allowed:u32,independent:u32,actor:u32,legacy:u32,creator:u32)->u32{
+    BUFFER.with(|cell|{
+        let bytes=cell.borrow();
+        if bytes.len()%4!=0{return 3;}
+        let contributors:Vec<u32>=bytes.chunks_exact(4).map(|c|u32::from_le_bytes([c[0],c[1],c[2],c[3]])).collect();
+        domain::permission(role,allowed,independent!=0,actor,legacy,creator,&contributors)
+    })
+}
+#[no_mangle]
+pub extern "C" fn trust_risk_score(profile:u32,likelihood:u32,impact:u32,extras:u32)->i32{
+    domain::score(profile,likelihood,impact,extras).map(|v|v as i32).unwrap_or(-1)
+}
+#[no_mangle]
+pub extern "C" fn trust_link_status(flags:u32,review:u32)->u32{domain::link_status(flags,review)}
+#[no_mangle]
+pub extern "C" fn trust_reductions()->i32{
+    BUFFER.with(|cell|domain::reductions(&cell.borrow()).map(|v|v as i32).unwrap_or(-1))
+}
+#[no_mangle]
+pub extern "C" fn trust_account_live(disabled:u32,has_expiry:u32,now:f64,valid_until:f64)->u32{
+    domain::account_live(disabled!=0,has_expiry!=0,now,valid_until) as u32
+}
+#[no_mangle]
+pub extern "C" fn trust_cookie(name_len:u32,header_len:u32)->i32{
+    BUFFER.with(|cell|{
+        let mut bytes=cell.borrow_mut();
+        let name_len=name_len as usize;
+        let Some(input_len)=name_len.checked_add(header_len as usize) else{return -1;};
+        let token={
+            let Some(name)=bytes.get(..name_len).and_then(|b|std::str::from_utf8(b).ok()) else{return -1;};
+            let Some(header)=bytes.get(name_len..input_len).and_then(|b|std::str::from_utf8(b).ok()) else{return -1;};
+            let Some(token)=domain::cookie(name,header) else{return 0;};
+            let Ok(token)=<&[u8;43]>::try_from(token.as_bytes()) else{return -1;};
+            *token
+        };
+        let Some(output)=bytes.get_mut(input_len..) else{return -1;};
+        if output.len()!=43{return -1;}
+        output.copy_from_slice(&token);1
     })
 }
 
