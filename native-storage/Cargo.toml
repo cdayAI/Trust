@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 napi = { version = "=3.16.2", features = ["napi6"] }
-napi-derive = "=3.6.3"
+napi-derive = "=3.7.2"
 rusqlite = { version = "=0.43.0", features = ["bundled"] }
 
 [build-dependencies]
