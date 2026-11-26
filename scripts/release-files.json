@@ -173,6 +173,7 @@
   "rust-core/src/policy.rs",
   "rust-core/src/raster.rs",
   "rust-core/src/report.rs",
+  "rust-core/src/workflow.rs",
   "saved-email-profile.js",
   "scripts/benchmark-local.js",
   "scripts/browser-tools/package-lock.json",

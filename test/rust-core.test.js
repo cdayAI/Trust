@@ -232,3 +232,54 @@ test('Rust route authorization matches the complete legacy policy',{skip:!rust.e
     assert.deepEqual(result,expected[i],JSON.stringify(input[i]));
   }
 });
+
+
+test('Rust workflow plans preserve complete event and snapshot replay against JS',{skip:!rust.enabled},()=>{
+  const scenario=String.raw`
+const {createWorkflowEngine,syntheticDefinition}=require('./workflow-engine');
+let snapshot,seq=0;const history=[];
+const engine=createWorkflowEngine({load:()=>snapshot,save:next=>snapshot=next,now:()=>new Date(1767225600000+seq*1000).toISOString(),id:()=>String(++seq)});
+const author={id:'alice',role:'initiator'},reviewer={id:'bob',role:'reviewer'};
+history.push(engine.publish({actor:{id:'pat',role:'publisher'},definition:syntheticDefinition,expectedVersion:0}));
+const started=engine.start({actor:author,definitionId:syntheticDefinition.id,title:'Synthetic plan'});history.push(started);
+const id=started.instance.id;
+const step=(actor,transitionId,expectedRevision,fields)=>history.push(engine.advance({actor,instanceId:id,transitionId,expectedRevision,fields}));
+step(reviewer,'approve',1,{reason:'Too soon'});
+step(author,'submit-for-review','1',{summary:'Invalid revision'});
+step(author,'submit-for-review',1,{summary:'  '});
+step(author,'submit-for-review',1,{constructor:'not a field'});
+step(author,'submit-for-review',1,{summary:7});
+step(author,'submit-for-review',1,{});
+step(author,'submit-for-review',1,{summary:'\uFEFF Example 😀 \u00a0',detail:'\uD800'});
+step({id:'other',legacyId:'alice',role:'reviewer'},'approve',2,{reason:'Same contributor'});
+step(reviewer,'return-for-changes',1,{reason:'Stale'});
+step(reviewer,'return-for-changes',2,{reason:'  More detail  '});
+step(author,'submit-for-review',3,{summary:'Revised'});
+step(reviewer,'approve',4,{reason:'Complete'});
+process.stdout.write(JSON.stringify({history,snapshot}));
+`;
+  const run=mode=>spawnSync(process.execPath,['-e',scenario],{cwd:root,encoding:'utf8',env:{...process.env,TRUST_RUST_CORE:mode}});
+  const expected=run('off'),actual=run('required');
+  assert.equal(expected.status,0,expected.stderr);assert.equal(actual.status,0,actual.stderr);
+  assert.deepEqual(JSON.parse(actual.stdout),JSON.parse(expected.stdout));
+});
+
+test('Rust questionnaire decisions match the JS reference including hidden branches and UTF-16 boundaries',{skip:!rust.enabled},()=>{
+  const scenario=String.raw`
+const {evaluate}=require('./assessment-questionnaire');
+const q={questions:[{id:'choice',label:'Choice',kind:'choice',options:['Yes','No'],required:true},
+ {id:'count',label:'Count',kind:'integer',required:true,when:{question:'choice',equals:'Yes'}},
+ {id:'summary',label:'Summary',kind:'text',required:true}]};
+const results=[];
+for(const choice of ['Yes','No','bad',null])for(const count of ['',' 0 ','-0','-123','012','1234567890','\uFEFF2',3])
+ for(const summary of ['hello','\uD800',' \u00A0 ','a'.repeat(2001)])
+  for(const submitting of [true,false])results.push(evaluate(q,{count:'5',summary:'Old'},{choice,count,summary},submitting));
+results.push(evaluate(q,{count:'5',summary:'Old'},{choice:'No'},true));
+results.push(evaluate(q,{},{choice:'No',extra:'unknown'},false));
+process.stdout.write(JSON.stringify(results));
+`;
+  const run=mode=>spawnSync(process.execPath,['-e',scenario],{cwd:root,encoding:'utf8',env:{...process.env,TRUST_RUST_CORE:mode},maxBuffer:4*1024*1024});
+  const expected=run('off'),actual=run('required');
+  assert.equal(expected.status,0,expected.stderr);assert.equal(actual.status,0,actual.stderr);
+  assert.deepEqual(JSON.parse(actual.stdout),JSON.parse(expected.stdout));
+});

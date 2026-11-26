@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {isDeepStrictEqual}=require('node:util');
 
 const baseQuestions=[
@@ -57,6 +58,20 @@ function evaluate(questionnaire, previous, updates, submitting) {
   if(Object.keys(payload).some(id=>!questions.some(q=>q.id===id)))return fail('UNKNOWN_QUESTION','An answer is not part of this questionnaire version.');
   const answers={};
   for(const q of questions) {
+    if(rust.enabled){
+      const active=!q.when||answers[q.when.question]===q.when.equals;
+      const provided=Object.hasOwn(payload,q.id);
+      const input=provided?payload[q.id]:(previous[q.id]??'');
+      const result=rust.questionnaireAnswer(q,input,active,provided,submitting);
+      if(result.status===6)continue;
+      if(result.status===1)return fail('HIDDEN_QUESTION','This question is not active: '+q.label+'.');
+      if(result.status===2)return fail('INVALID_ANSWER',q.label+' must be text of at most 2,000 characters.');
+      if(result.status===3)return fail('INVALID_ANSWER',q.label+' must be a whole number between -999,999,999 and 999,999,999.');
+      if(result.status===4)return fail('INVALID_ANSWER',q.label+' must match a listed choice.');
+      if(result.status===5)return fail('REQUIRED_ANSWER','Answer required: '+q.label+'.');
+      answers[q.id]=result.value;
+      continue;
+    }
     if(q.when&&answers[q.when.question]!==q.when.equals) {
       if(Object.hasOwn(payload,q.id)&&payload[q.id]!=='')return fail('HIDDEN_QUESTION','This question is not active: '+q.label+'.');
       // Answers from a closed branch cannot silently survive into review.
