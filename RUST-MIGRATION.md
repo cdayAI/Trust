@@ -60,11 +60,32 @@ CI job runs native Rust unit tests, required-mode integration/parity tests, and
 the existing Chromium suite. The standard CI job still verifies the unchanged
 JS-only path and text-only release packaging.
 
-The source release includes the Rust source, lockfile, build script and tests,
-not the compiled binary or Cargo target directory. Build in a developer
-checkout, not inside a previously verified exact-tree source release. Before
-making Rust mandatory for offline receiving environments, define a reviewed
-reproducible artifact/distribution and rollback procedure.
+## Portable compiled release
+
+The original source release remains install-free and uses the JS reference
+when the compiled artifact is not available. For a Rust-required distribution,
+build in a developer checkout and package the compiled module:
+
+```sh
+npm run build:rust
+npm run release:rust -- /private/path/mvw-trust-rust.tgz
+```
+
+Extract into a clean directory, run `npm run release:verify`, then
+`npm run start:release -- --check` before launching normally. This variant
+includes exactly one allowlisted binary, `rust-core/runtime/trust_core.wasm`,
+and declares its ABI, byte length and SHA-256 in the release manifest. The
+build stages a verified, single-link copy of Cargo's output before packaging. It
+requires Node, not a Rust compiler or package install. A missing, corrupt,
+incompatible or disabled Rust module fails startup; use a separate original
+source release if rollback is necessary. The manifest detects accidental
+corruption, not publisher authenticity; distribute the archive digest by a
+trusted channel. CI checks archive byte reproducibility, both launch paths,
+and missing/tampered binary refusal. No live deployment is authorized.
+
+In a developer checkout, `npm run start:rust -- --check` explicitly requires
+the locally built Rust core. Do not compile inside a previously verified exact
+tree because build output changes the tree.
 
 ## Next migration stages
 

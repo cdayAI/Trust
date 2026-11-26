@@ -104,6 +104,31 @@ jobs:
         run: |
           cargo +1.85.1 test --manifest-path rust-core/Cargo.toml --locked --offline
           npm run build:rust
+      - name: Verify portable Rust release, reproducibility and fail-closed artifact checks
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          npm run release:rust -- "$scratch/first.tgz"
+          npm run release:rust -- "$scratch/second.tgz"
+          cmp "$scratch/first.tgz" "$scratch/second.tgz"
+          tar -xzf "$scratch/first.tgz" -C "$scratch"
+          cd "$scratch/package"
+          npm run release:verify
+          node -e "const rust=require('./rust-core');if(!rust.enabled||rust.mode!=='required')process.exit(1)"
+          npm run verify:startup -- --sqlite
+          npm run start:release -- --check
+          if TRUST_RUST_CORE=off node -e "require('./rust-core')"; then exit 1; fi
+          artifact="rust-core/runtime/trust_core.wasm"
+          cp "$artifact" "$scratch/original.wasm"
+          printf X >> "$artifact"
+          if npm run release:verify; then exit 1; fi
+          if node -e "require('./rust-core')"; then exit 1; fi
+          rm "$artifact"
+          if npm run release:verify; then exit 1; fi
+          if node -e "require('./rust-core')"; then exit 1; fi
+          cp "$scratch/original.wasm" "$artifact"
+          npm run release:verify
       - name: Require Rust for targeted integration and differential tests
         run: npm run test:rust
       - name: Install locked browser tools

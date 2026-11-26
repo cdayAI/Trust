@@ -59,3 +59,27 @@ test('release inventory supports more than 250 explicit source files within boun
   for (const name of names.slice(0, 8)) await truncate(join(room, name), 4 * 1024 * 1024);
   assert.throws(() => sourceManifest(room), /32 MiB total input limit/);
 });
+
+
+test('compiled Rust release inventory binds only the fixed artifact and preserves the source variant',()=>{
+  const {existsSync}=require('node:fs');
+  const contract=require('../rust-core-abi');
+  const directory=resolve(__dirname,'..');
+  const source=sourceManifest(directory).manifest;
+  assert.equal(source.format,'mvw-trust-source-release');
+  assert.ok(!source.files.some(row=>row.path.endsWith('.wasm')));
+  const built=join(directory,...contract.built.split('/'));
+  if(!existsSync(built))return;
+  const {lstatSync,readFileSync}=require('node:fs');
+  assert.equal(lstatSync(built).nlink,1);
+  assert.deepEqual(readFileSync(built),readFileSync(join(directory,...contract.cargoOutput.split('/'))));
+  const {manifest,files}=sourceManifest(directory,{rust:true});
+  const row=manifest.files.find(row=>row.path===contract.packaged);
+  const bytes=files.find(file=>file.path===contract.packaged).bytes;
+  assert.equal(manifest.format,contract.format);
+  assert.equal(manifest.wasmAbi,contract.abi);
+  assert.equal(manifest.files.length,source.files.length+1);
+  assert.equal(row.size,bytes.length);
+  assert.equal(row.sha256,contract.sha256(bytes));
+  assert.equal(contract.instantiate(bytes).trust_abi(),contract.abi);
+});
