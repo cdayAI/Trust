@@ -63,6 +63,23 @@ const schema=`
           PRAGMA user_version = ${schemaVersion};
         `;
 const maxGeneration=Number.MAX_SAFE_INTEGER;
+// Fixed append-only operation; no caller-supplied SQL or JSON path.
+const appendIntakeSql=`UPDATE snapshots
+SET generation = generation + 1,
+    payload = json_insert(
+      CASE WHEN json_type(payload, '$.rightsCases') = 'array' THEN payload
+           ELSE json_set(payload, '$.rightsCases', json('[]')) END,
+      '$.rightsCases[#]', json(?1),
+      '$.audit[#]', json(?2))
+WHERE scope = ?3 AND kind = 'workbench' AND generation = ?4
+  AND generation < 9007199254740991
+  AND json_type(payload, '$.audit') = 'array'
+  AND COALESCE(json_type(payload, '$.rightsCases'), 'null') IN ('array', 'null')
+  AND json_type(?1) = 'object' AND json_type(?2) = 'object'
+  AND json_type(?1, '$.id') = 'text'
+  AND json_extract(?1, '$.id') = json_extract(?2, '$.entityId')
+  AND json_extract(?2, '$.action') = 'rights.case.opened'
+  AND json_extract(?2, '$.sequence') = COALESCE(json_extract(payload, '$.audit[#-1].sequence'), 0) + 1`;
 
 function nodeDriver(filename:string,readOnly:boolean):StorageDriver{
   const {DatabaseSync}:typeof import('node:sqlite')=require('node:sqlite');
@@ -93,6 +110,9 @@ function nodeDriver(filename:string,readOnly:boolean):StorageDriver{
         ON CONFLICT (scope, kind) DO UPDATE SET generation = generation + 1, payload = excluded.payload
         WHERE generation < ${maxGeneration}`).run(scope,kind,payload);
       if(Number(result.changes)!==1)throw Error('SQLite snapshot generation exceeds the supported safe integer range.');
+    },
+    appendIntake(scope,generation,caseJson,eventJson){
+      return Number(statement(appendIntakeSql).run({'?1':caseJson,'?2':eventJson,'?3':scope,'?4':generation}).changes)===1;
     },
     integrity(){
       const rows=db.prepare('PRAGMA integrity_check').all();
@@ -140,6 +160,7 @@ function rustDriver(filename:string,readOnly:boolean):StorageDriver{
     read:(scope,kind)=>driver.read(scope,kind)??undefined,
     readSince:(scope,kind,generation)=>driver.readSince(scope,kind,generation)??undefined,
     save:(scope,kind,payload)=>driver.save(scope,kind,payload),
+    appendIntake:(scope,generation,caseJson,eventJson)=>driver.appendIntake(scope,generation,caseJson,eventJson),
     integrity:()=>driver.integrity(),
     documents:()=>driver.documents(),
     hasSnapshots:()=>driver.hasSnapshots(),

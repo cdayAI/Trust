@@ -17,6 +17,7 @@ export interface StorageDriver {
   read(scope:string,kind:SnapshotKind):SnapshotRow|undefined;
   readSince(scope:string,kind:SnapshotKind,generation:number):SnapshotRow|undefined;
   save(scope:string,kind:SnapshotKind,payload:string):void;
+  appendIntake(scope:string,generation:number,caseJson:string,eventJson:string):boolean;
   integrity():boolean;
   documents():DocumentRow[];
   hasSnapshots():boolean;

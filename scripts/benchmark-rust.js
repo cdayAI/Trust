@@ -6,10 +6,11 @@ const {spawnSync}=require('node:child_process');
 const {join}=require('node:path');
 const root=join(__dirname,'..');
 const modes=[
-  {name:'js-node',TRUST_RUST_CORE:'off',TRUST_SQLITE_DRIVER:'node',TRUST_SNAPSHOT_CACHE:'off'},
-  {name:'wasm-node',TRUST_RUST_CORE:'required',TRUST_SQLITE_DRIVER:'node',TRUST_SNAPSHOT_CACHE:'off'},
-  {name:'wasm-native',TRUST_RUST_CORE:'required',TRUST_SQLITE_DRIVER:'rust',TRUST_SNAPSHOT_CACHE:'off'},
-  {name:'wasm-native-cached',TRUST_RUST_CORE:'required',TRUST_SQLITE_DRIVER:'rust',TRUST_SNAPSHOT_CACHE:'on'}
+  {name:'js-node',TRUST_RUST_CORE:'off',TRUST_SQLITE_DRIVER:'node',TRUST_SNAPSHOT_CACHE:'off',TRUST_INCREMENTAL_INTAKE:'off'},
+  {name:'wasm-node',TRUST_RUST_CORE:'required',TRUST_SQLITE_DRIVER:'node',TRUST_SNAPSHOT_CACHE:'off',TRUST_INCREMENTAL_INTAKE:'off'},
+  {name:'wasm-native',TRUST_RUST_CORE:'required',TRUST_SQLITE_DRIVER:'rust',TRUST_SNAPSHOT_CACHE:'off',TRUST_INCREMENTAL_INTAKE:'off'},
+  {name:'wasm-native-cached',TRUST_RUST_CORE:'required',TRUST_SQLITE_DRIVER:'rust',TRUST_SNAPSHOT_CACHE:'on',TRUST_INCREMENTAL_INTAKE:'off'},
+  {name:'wasm-native-incremental',TRUST_RUST_CORE:'required',TRUST_SQLITE_DRIVER:'rust',TRUST_SNAPSHOT_CACHE:'on',TRUST_INCREMENTAL_INTAKE:'on'}
 ];
 const workload=['--backend','sqlite','--records','400','--samples','24','--concurrency','2'];
 function trial(mode){
@@ -35,15 +36,16 @@ function main(){
     }));
     rows.push({workspace:result.mode,operation:metric.name,values,
       nativeP95Ratio:Number((values['wasm-native'].p95Ms/values['js-node'].p95Ms).toFixed(3)),
-      cachedP95Ratio:Number((values['wasm-native-cached'].p95Ms/values['wasm-native'].p95Ms).toFixed(3))});
+      cachedP95Ratio:Number((values['wasm-native-cached'].p95Ms/values['wasm-native'].p95Ms).toFixed(3)),
+      incrementalP95Ratio:Number((values['wasm-native-incremental'].p95Ms/values['wasm-native-cached'].p95Ms).toFixed(3))});
   }
   const report={schemaVersion:1,scope:'Synthetic local SQLite workloads; medians of three alternating same-runner trials.',
     platform:process.platform,architecture:process.arch,node:process.versions.node,workload,rows,trials};
   console.log(JSON.stringify(report,null,2));
   if(process.env.GITHUB_STEP_SUMMARY){
     const lines=['## Rust vs reference — synthetic workload','',
-      '| Workspace | Operation | JS/Node p95 ms | Wasm/Node p95 ms | Wasm/native p95 ms | Cached native p95 ms | Cache/native ratio |','| --- | --- | ---: | ---: | ---: | ---: | ---: |',
-      ...rows.map(r=>'| '+[r.workspace,r.operation,r.values['js-node'].p95Ms,r.values['wasm-node'].p95Ms,r.values['wasm-native'].p95Ms,r.values['wasm-native-cached'].p95Ms,r.cachedP95Ratio].join(' | ')+' |')];
+      '| Workspace | Operation | JS/Node p95 ms | Wasm/Node p95 ms | Wasm/native p95 ms | Cached native p95 ms | Incremental native p95 ms | Cache/native ratio | Incremental/cache ratio |','| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
+      ...rows.map(r=>'| '+[r.workspace,r.operation,r.values['js-node'].p95Ms,r.values['wasm-node'].p95Ms,r.values['wasm-native'].p95Ms,r.values['wasm-native-cached'].p95Ms,r.values['wasm-native-incremental'].p95Ms,r.cachedP95Ratio,r.incrementalP95Ratio].join(' | ')+' |')];
     require('node:fs').appendFileSync(process.env.GITHUB_STEP_SUMMARY,lines.join('\n')+'\n');
   }
 }
