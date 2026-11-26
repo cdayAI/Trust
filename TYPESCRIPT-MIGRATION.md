@@ -23,8 +23,8 @@ policy and workspace home, plus visitor and employee portals. Native and
 legacy interfaces have explicit structural contracts. Untrusted JSON remains
 unknown until validated; a static type is not an authorization check.
 
-The bootstrap draft CI records the compiler lock and generated output; the
-final CI must compare committed output byte-for-byte and run the existing
+The committed compiler lock is enforced with npm ci. CI compiles strict
+TypeScript and compares committed output byte-for-byte, then runs existing
 API, Chromium, native release and recovery checks. No runtime dependency
 changes or production deployment. Remaining JavaScript modules are not
 claimed migrated, and the current SQLite snapshot schema is unchanged.

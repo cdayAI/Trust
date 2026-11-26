@@ -198,7 +198,7 @@ test('Rust reporting matches filtered aggregates across chunk and UTC year bound
 test('Rust route authorization matches the complete legacy policy',{skip:!rust.enabled},()=>{
   const {readFileSync}=require('node:fs');
   const {requirePermission}=require('../access-policy');
-  const source=readFileSync(join(root,'access-policy.js'),'utf8');
+  const source=readFileSync(join(root,'typescript','access-policy.ts'),'utf8');
   const symbols={uuid:'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',
     key:'[a-zA-Z0-9][a-zA-Z0-9-]{0,127}',myWorkToken:'[a-f0-9]{64}',
     moduleId:'(?:inventory|processing|rights|incidents|third-party|risks|controls|retention|policies|administration|integrations)'};
