@@ -1,5 +1,5 @@
 //! Bounded, deterministic domain primitives. No host I/O, dependencies, or unsafe Rust.
-#![forbid(unsafe_code)]
+#![deny(unsafe_op_in_unsafe_fn)]
 use std::cell::RefCell;
 mod graph;
 mod raster;

@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {inflateRawSync,crc32}=require('node:zlib');
 const {posix}=require('node:path');
 const {odfTypes,checkOpenDocument}=require('./opendocument-attachment-profile');
@@ -412,6 +413,15 @@ function decodePart(path,reject){
 function isOfficeMime(mime){
   return !forbiddenOffice.test(mime)&&/^(?:application\/(?:xml|vnd\.(?:openxmlformats-officedocument|openxmlformats-package|ms-(?:excel|word|powerpoint)|ms-office)[a-z0-9.-]*\+xml)|text\/xml|image\/(?:png|jpeg|gif|webp|bmp|tiff))$/iu.test(mime);
 }
+function rasterCheck(kind,reference){
+  return bytes=>{
+    if(!rust.enabled)return reference(bytes);
+    const result=rust.raster(kind,bytes);
+    if(result===1)return;
+    if(result===2)invalid('Only nonanimated WebP files are supported.');
+    invalid();
+  };
+}
 const formats=new Map();
 function add(extensions,mediaType,label,check,maxFileBytes=MiB,aliases=[]){
   for(const extension of extensions)formats.set(extension,Object.freeze({extension,mediaType,label,check,maxFileBytes,aliases}));
@@ -433,11 +443,11 @@ for(const [extension,[,,,name]] of Object.entries(officeRules)){
 for(const [extension,{mediaType,label}] of Object.entries(odfTypes)){
   add([extension],mediaType,label,bytes=>checkOpenDocument(bytes,extension,boundedZip,invalid),MiB);
 }
-add(['.png'],'image/png','PNG',png);
-add(['.jpg','.jpeg'],'image/jpeg','JPEG',jpeg);
-add(['.gif'],'image/gif','GIF',gif);
-add(['.webp'],'image/webp','WebP',webp);
-add(['.bmp'],'image/bmp','BMP',bmp,MiB,['image/x-ms-bmp']);
-add(['.tif','.tiff'],'image/tiff','TIFF',tiff);
+add(['.png'],'image/png','PNG',rasterCheck(1,png));
+add(['.jpg','.jpeg'],'image/jpeg','JPEG',rasterCheck(2,jpeg));
+add(['.gif'],'image/gif','GIF',rasterCheck(3,gif));
+add(['.webp'],'image/webp','WebP',rasterCheck(4,webp));
+add(['.bmp'],'image/bmp','BMP',rasterCheck(5,bmp),MiB,['image/x-ms-bmp']);
+add(['.tif','.tiff'],'image/tiff','TIFF',rasterCheck(6,tiff));
 const catalog=Object.freeze(Array.from(formats.values(),({check,...format})=>Object.freeze(format)));
 module.exports={formats,catalog};

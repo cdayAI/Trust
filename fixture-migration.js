@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 
 const fs=require('node:fs');
 const {createHash}=require('node:crypto');
@@ -119,6 +120,11 @@ function collect(rows,cap,label,section,diagnostics,normalize){
   return {rows:[...seen.values()].sort((a,b)=>compare(JSON.stringify(a),JSON.stringify(b))),duplicates};
 }
 function ensureAcyclic(nodes,edges){
+  if(rust.enabled){
+    if(!rust.acyclic(nodes.map(n=>n.key),edges.map(e=>[e.from,e.to])))
+      reject('Inventory relationships contain a directed cycle.','RELATIONSHIP_CYCLE');
+    return;
+  }
   const outgoing=new Map(nodes.map(n=>[n.key,[]])),incoming=new Map(nodes.map(n=>[n.key,0]));
   for(const {from,to} of edges){
     outgoing.get(from).push(to);
