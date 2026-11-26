@@ -52,6 +52,10 @@ export interface RustCore {
   aggregateReport(source:Iterable<ReportRow>,filters:ReportFilters,vocabulary:ReportVocabulary):ReportAggregation;
   installRoutes(routes:readonly Route[]):void;
   authorize(method:string,pathname:string,role:string,limited:boolean):0|1|2|3;
+  trace(start:string,adjacency:Map<string,Set<string>>):unknown[];
+  revision(expected:unknown,actual:number,min:number):0|1|2;
+  workflowPermission(transition:WorkflowTransition,actor:WorkflowActor|null,instance:WorkflowInstance):0|1|2;
+  workflowPlan(transition:WorkflowTransition|undefined,actor:WorkflowActor,instance:WorkflowInstance,body:unknown):WorkflowPlan;
 }
 export interface QueueTask {timing:string;owner:string;workflow:string;destination:{view:string;recordId:string;projectId?:string}}
 export interface QueueModel {tasks:QueueTask[];workflowLabels:Record<string,string>}
@@ -64,3 +68,45 @@ export interface ReportFilters {
 export interface ReportRow {workflow:string;stage?:string;outcome?:string;day:string|null}
 export interface ReportAggregation {buckets:Map<string,number>;total:number;undated:number;workflowCount:number}
 export interface ReportVocabulary {workflow:string[];stage:string[];outcome:string[]}
+
+export type WorkflowRole='publisher'|'initiator'|'reviewer';
+export interface WorkflowActor {id:string;role:WorkflowRole;legacyId?:string}
+export interface WorkflowState {id:string;label:string}
+export interface WorkflowTransition {id:string;from:string;to:string;roles:WorkflowRole[];independent:boolean;requiredFields:string[]}
+export interface WorkflowDefinition {id:string;label?:string;initial:string;states:WorkflowState[];transitions:WorkflowTransition[]}
+export interface PublishedWorkflow extends WorkflowDefinition {version:number;publishedAt:string;publishedBy:string}
+export interface WorkflowStep {transitionId:string;actorId:string;role:WorkflowRole;at:string;from:string;to:string;revision:number;fields:Record<string,string>}
+export interface WorkflowInstance {
+  id:string;definitionId:string;definitionVersion:number;state:string;title:string;revision:number;
+  createdBy:string;createdAt:string;updatedAt:string;lastActorId:string;contributors:string[];steps:WorkflowStep[];
+  legacyBaseline?:{status:string;assessmentRevision:number;submittedBy?:string|null;decisionBy?:string|null};
+}
+export interface WorkflowEvent extends Record<string,unknown> {
+  id:string;sequence:number;at:string;kind:string;actor:WorkflowActor|null;outcome:'accepted'|'refused';code:string|null;
+}
+export interface WorkflowSnapshot {schemaVersion:1;definitions:PublishedWorkflow[];instances:WorkflowInstance[];events:WorkflowEvent[]}
+export interface WorkflowRefusal {ok:false;code:string;message:string;details?:Record<string,unknown>}
+export type WorkflowOutcome<T extends object> = ({ok:true}&T)|Omit<WorkflowRefusal,'details'>;
+export type WorkflowResult<T extends object> = WorkflowOutcome<T>&{event:WorkflowEvent};
+export type WorkflowPlan={status:0;fields:Record<string,string>;contributors:string[]}|{status:1|2|3|4}|{status:5;missing:string[]};
+export interface WorkDestination {view:string;recordId:string;projectId?:string}
+export interface WorkTask extends QueueTask {
+  id:string;label:string;title:string;dueDate:string|null;timing:'overdue'|'due-today'|'upcoming'|'no-date';
+}
+export interface WorkQueueTask extends WorkTask {sourceId:string;action:string}
+export interface WorkQueueState {
+  actors:readonly {id:string;name?:string}[];
+  vendors:readonly {id:string;name?:string}[];
+  assessments:readonly {id:string;vendorId:string;projectId:string;status:string;type?:string;monitoringCycleId?:unknown}[];
+  rightsCases?:readonly {id:string;kind:string;owner:string;identity:{status:string};status:string;dueDate:string|null;closedAt?:unknown}[];
+  incidentCases?:readonly {id:string;stage:string;owner:string;title:string}[];
+  vendorMonitoring?:{cases?:readonly {id:string;vendorId:string;owner:string;status:string;renewalDueDate?:string|null;engagement?:{title:string}}[]};
+  privacyNotices?:{notices?:readonly {id:string;status:string;authoredBy:string;title:string}[]};
+  retentionBook?:{schedules?:readonly {id:string;status:string;authoredBy:string;title:string}[]};
+  riskControls?:{
+    controls?:readonly {id:string;title:string}[];
+    risks?:readonly {id:string;title:string}[];
+    tests?:readonly {id:string;controlId:string;reviewStatus:string}[];
+    links?:readonly {id:string;riskId:string;reviewedBy?:unknown;archivedAt?:unknown}[];
+  };
+}
