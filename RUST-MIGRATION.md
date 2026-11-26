@@ -36,6 +36,9 @@ memory; no unsafe blocks, third-party Rust crates or custom cryptography.
   remain in Node.
 - Aggregate reporting filters, date/month grouping, counts and distinct
   workflows in bounded chunks; Rust receives only numeric dimensions.
+- HTTP request-boundary decisions for loopback access, corporate host/TLS and
+  request-target checks, cross-origin writes, JSON media types and binary-upload
+  encoding. Node still owns HTTP parsing, sockets, TLS and streaming limits.
 - Exact HTTP route/role authorization including limited reviewer seats.
   Route expressions are expanded from the existing source-of-truth policy
   using a deliberately small supported grammar; Rust matches typed segments

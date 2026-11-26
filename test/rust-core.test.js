@@ -326,3 +326,33 @@ test('Rust incident and retention decisions match every flag combination',{skip:
       !schedule?'NO_ACTIVE_SCHEDULE':!trigger?'TRIGGER_NOT_RECORDED':asOf<due?'BEFORE_DUE_DATE':'ELIGIBLE');
   }
 });
+
+
+test('Rust HTTP boundary agrees with the reference across loopback, corporate origin and media-type combinations',{skip:!rust.enabled},()=>{
+  const {connection,post}=require('../http-boundary');
+  const vectors=[];
+  const add=(kind,req,...args)=>vectors.push({kind,req,args});
+  const hosts=['localhost','LOCALHOST:1234','127.0.0.1:0','[::1]:443','local.example','localhost.evil','localhost:123456','localhost:','localhost\n','',undefined];
+  for(const host of hosts)for(const remoteAddress of ['127.0.0.1','::1','::ffff:127.0.0.1','192.0.2.1',undefined])
+    for(const url of ['/','/api/state','//local.example','/\\remote','https://local.example/'])
+      for(const encrypted of [false,true])
+        for(const oidc of [null,{host:'local.example',secure:true},{host:'local.example',secure:false}])
+          add('connection',{headers:{host},socket:{remoteAddress,encrypted},url},oidc);
+  const binaryType='application/vnd.mvw-trust.attachment-batch';
+  for(const host of ['localhost:3000','local.example','127.0.0.1'])for(const origin of [undefined,'','http://'+host,'https://'+host,'http://bad.invalid','null'])
+    for(const contentType of [undefined,'','application/json','APPLICATION/JSON; charset=utf-8','application/json \t; x=y','application/json\uFEFF; x=y','application/json ','application/jsonx','text/plain',binaryType])
+      for(const contentEncoding of [undefined,'','gzip'])
+        for(const isolated of [false,true])for(const binary of [false,true])
+          for(const oidc of [null,{origin:'https://'+host}])
+            add('post',{headers:{host,origin,'content-type':contentType,'content-encoding':contentEncoding}},isolated,oidc,binary,binaryType);
+  const script="const fs=require('node:fs'),b=require('./http-boundary');const vectors=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(vectors.map(v=>b[v.kind](v.req,...v.args))));";
+  const reference=spawnSync(process.execPath,['-e',script],{cwd:root,input:JSON.stringify(vectors),encoding:'utf8',
+    env:{...process.env,TRUST_RUST_CORE:'off'},maxBuffer:8*1024*1024});
+  assert.equal(reference.status,0,reference.stderr);
+  const expected=JSON.parse(reference.stdout);
+  assert.ok(vectors.length>5000);
+  for(const [i,v] of vectors.entries()){
+    const observed=v.kind==='connection'?connection(v.req,...v.args):post(v.req,...v.args);
+    assert.equal(observed,expected[i],JSON.stringify(v));
+  }
+});

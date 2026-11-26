@@ -432,6 +432,33 @@ function retentionReason(holds,schedule,triggeredOn,asOf,dueOn){
   if(!reasons[result])throw Error('Invalid Rust retention decision.');
   return reasons[result];
 }
+function httpEnvelope(fields){
+  const buffers=[];
+  for(const field of fields){
+    const bytes=Buffer.from(field,'utf8');
+    if(bytes.length>32*1024)return null;
+    buffers.push(word(bytes.length),bytes);
+  }
+  return Buffer.concat(buffers);
+}
+const headerValue=value=>typeof value==='string'?value:value?'\u0000':'';
+function httpConnection(remote,host,target,corporateHost,encrypted,secure){
+  const corporate=corporateHost!==undefined;
+  const input=httpEnvelope([headerValue(remote),headerValue(host),headerValue(target),headerValue(corporateHost)]);
+  if(!input)return corporate?2:1;
+  const result=withBuffer(input,0,()=>core.trust_http_connection((corporate?1:0)|(encrypted?2:0)|(secure?4:0)));
+  if(![0,1,2].includes(result))throw Error('Invalid Rust HTTP connection result.');
+  return result;
+}
+function httpPost(host,origin,corporateOrigin,contentType,contentEncoding,binaryType,isolated,binary){
+  const input=httpEnvelope([headerValue(host),headerValue(origin),headerValue(corporateOrigin),
+    headerValue(contentType),headerValue(contentEncoding),headerValue(binaryType)]);
+  if(!input)return 1;
+  const flags=(isolated?1:0)|(corporateOrigin!==undefined?2:0)|(binary?4:0);
+  const result=withBuffer(input,0,()=>core.trust_http_post(flags));
+  if(![0,1,2,3].includes(result))throw Error('Invalid Rust HTTP POST result.');
+  return result;
+}
 module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays,zip,batchHeader,batchLayout,
   workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport,expandRoute,installRoutes,authorize,revision,workflowPlan,questionnaireAnswer,
-  storageScope,storageGeneration,storagePayload,encryptedSize,incidentReady,retentionReason});
+  storageScope,storageGeneration,storagePayload,encryptedSize,incidentReady,retentionReason,httpConnection,httpPost});

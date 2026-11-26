@@ -1,4 +1,5 @@
 'use strict';
+const requestBoundary=require('./http-boundary');
 const http = require('node:http');
 const https = require('node:https');
 const {createOperations,launchLocalServer,loopbackAddresses}=require('./operational-health');
@@ -180,14 +181,9 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   const handler=async (req,res)=>{
     let countedBatch=false;
     try {
-      if(!loopbackAddresses.has(req.socket.remoteAddress))return send(res,403,{error:'Only loopback access is allowed.'});
-      if(oidc){
-        if(req.headers.host!==oidc.host||Boolean(req.socket.encrypted)!==oidc.secure||
-          !req.url.startsWith('/')||req.url.startsWith('//')||req.url.includes('\\'))
-          return send(res,403,{error:'Invalid application origin.'});
-      }else if(!/^(?:127\.0\.0\.1|localhost|\[::1\])(?::\d{1,5})?$/i.test(req.headers.host||'')){
-        return send(res,403,{error:'Only loopback access is allowed.'});
-      }
+      const connectionDecision=requestBoundary.connection(req,oidc);
+      if(connectionDecision===1)return send(res,403,{error:'Only loopback access is allowed.'});
+      if(connectionDecision===2)return send(res,403,{error:'Invalid application origin.'});
       const {pathname,searchParams,search}=new URL(req.url,'http://localhost');
       const binaryUpload=binaryAttachments.pathPattern.test(pathname);
       if(oidc&&pathname===oidcModule.startPath){
@@ -253,14 +249,10 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
           oidc&&file==='index.html'?{'Referrer-Policy':'same-origin'}:undefined);
       }
       if(req.method==='POST'&&pathname.startsWith('/api/')){
-        const origin=req.headers.origin;
-        if ((access&&origin!==(oidc?.origin??'http://'+req.headers.host))||
-          (origin&&origin!=='http://'+req.headers.host&&origin!=='https://'+req.headers.host))
-          return send(res,403,{error:'Cross-origin writes are not allowed.'});
-        if(binaryUpload){
-          if(req.headers['content-type']!==binaryAttachments.contentType||req.headers['content-encoding'])
-            return send(res,415,{error:'Use the uncompressed MVW Trust binary attachment-batch format.'},undefined,{'Connection':'close'});
-        }else if (!/^application\/json(?:\s*;|$)/i.test(req.headers['content-type']||'')) return send(res,415,{error:'Use application/json.'});
+        const decision=requestBoundary.post(req,!!access,oidc,binaryUpload,binaryAttachments.contentType);
+        if(decision===1)return send(res,403,{error:'Cross-origin writes are not allowed.'});
+        if(decision===2)return send(res,415,{error:'Use the uncompressed MVW Trust binary attachment-batch format.'},undefined,{'Connection':'close'});
+        if(decision===3)return send(res,415,{error:'Use application/json.'});
       }
       if(req.method==='GET'&&pathname==='/api/session')return send(res,200,access?access.describe(req):{mode:'synthetic-demo'});
       if(pathname.startsWith('/api/session/')){
