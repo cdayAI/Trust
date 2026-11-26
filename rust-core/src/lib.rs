@@ -9,6 +9,8 @@ mod domain;
 mod report;
 mod policy;
 mod workflow;
+mod storage;
+mod lifecycle;
 
 const MAX_BUFFER: usize = 8 * 1024 * 1024;
 const INVALID: i32 = i32::MIN;
@@ -18,7 +20,7 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn trust_abi() -> u32 { 6 }
+pub extern "C" fn trust_abi() -> u32 { 7 }
 
 // The host borrows this byte range only until the next reserve call. Each
 // invocation is synchronous, and Rust only accesses the owned Vec via slices.
@@ -235,6 +237,30 @@ pub extern "C" fn trust_answer(input:u32,flags:u32,kind:u32)->i32{
         output[4..].copy_from_slice(&end.to_le_bytes());
         status as i32
     })
+}
+#[no_mangle]
+pub extern "C" fn trust_storage_scope()->u32{
+    BUFFER.with(|cell|storage::scope(&cell.borrow()))
+}
+#[no_mangle]
+pub extern "C" fn trust_storage_generation(value:f64)->u32{
+    storage::positive_generation(value) as u32
+}
+#[no_mangle]
+pub extern "C" fn trust_storage_payload(kind:u32,version:f64,arrays:u32)->u32{
+    storage::payload_shape(kind,version,arrays) as u32
+}
+#[no_mangle]
+pub extern "C" fn trust_backup_header(archive_size:f64)->i32{
+    BUFFER.with(|cell|storage::encrypted_size(&cell.borrow(),archive_size).map(|size|size as i32).unwrap_or(-1))
+}
+#[no_mangle]
+pub extern "C" fn trust_incident_ready(flags:u32,evidence_count:u32)->u32{
+    lifecycle::incident_ready(flags,evidence_count) as u32
+}
+#[no_mangle]
+pub extern "C" fn trust_retention_reason(flags:u32)->u32{
+    lifecycle::retention_reason(flags)
 }
 #[cfg(test)]
 mod tests {

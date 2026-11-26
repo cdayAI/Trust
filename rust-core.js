@@ -398,5 +398,40 @@ function questionnaireAnswer(question,input,active,provided,submitting){
     return {status,value:value.slice(start,end)};
   });
 }
+function storageScope(scope){
+  if(typeof scope!=='string'||scope.length>58)return 0;
+  const result=withBuffer(Buffer.from(scope,'utf8'),0,()=>core.trust_storage_scope());
+  if(![0,1,2].includes(result))throw Error('Invalid Rust storage scope result.');
+  return result;
+}
+function storageGeneration(value){
+  return core.trust_storage_generation(typeof value==='number'?value:NaN)===1;
+}
+function storagePayload(kind,payload){
+  const workbench=kind==='workbench';
+  const code=workbench?1:kind==='workflow'?2:0;
+  const keys=workbench?['actors','projects','vendors','assessments','handoff','audit']:['definitions','instances','events'];
+  const flags=keys.reduce((mask,key,i)=>mask|(Array.isArray(payload[key])?1<<i:0),0);
+  const version=workbench?payload.version:payload.schemaVersion;
+  return core.trust_storage_payload(code,typeof version==='number'?version:NaN,flags)===1;
+}
+function encryptedSize(header,archiveSize){
+  if(!Buffer.isBuffer(header)||header.length!==26||!Number.isSafeInteger(archiveSize))return -1;
+  return withBuffer(header,0,()=>core.trust_backup_header(archiveSize));
+}
+function incidentReady(row){
+  const flags=(row.containment?1:0)|(row.findings?2:0)|(row.branch==='elevated'?4:0)|
+    (row.evidence.some(e=>e.kind==='impact')?8:0)|(row.review?.decision==='more-information'?16:0)|
+    (row.lastInvestigationRevision>row.review?.revision?32:0);
+  return core.trust_incident_ready(flags,row.evidence.length)===1;
+}
+function retentionReason(holds,schedule,triggeredOn,asOf,dueOn){
+  const flags=(holds.length?1:0)|(schedule?2:0)|(triggeredOn?4:0)|(asOf<dueOn?8:0);
+  const result=core.trust_retention_reason(flags);
+  const reasons=['ACTIVE_HOLD','NO_ACTIVE_SCHEDULE','TRIGGER_NOT_RECORDED','BEFORE_DUE_DATE','ELIGIBLE'];
+  if(!reasons[result])throw Error('Invalid Rust retention decision.');
+  return reasons[result];
+}
 module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays,zip,batchHeader,batchLayout,
-  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport,expandRoute,installRoutes,authorize,revision,workflowPlan,questionnaireAnswer});
+  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport,expandRoute,installRoutes,authorize,revision,workflowPlan,questionnaireAnswer,
+  storageScope,storageGeneration,storagePayload,encryptedSize,incidentReady,retentionReason});

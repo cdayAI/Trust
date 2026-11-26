@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {randomUUID}=require('node:crypto');
 const incidentPolicy=require('./incident-policy');
 const {severities,scopeClasses}=incidentPolicy;
@@ -24,6 +25,7 @@ function keys(body,allowed) {
 }
 const elevated=row=>row.branch==='elevated';
 function canReady(row){
+  if(rust.enabled)return rust.incidentReady(row);
   return Boolean(row.containment&&row.findings&&row.evidence.length>=(elevated(row)?2:1)&&
     (!elevated(row)||row.evidence.some(e=>e.kind==='impact'))&&
     (row.review?.decision!=='more-information'||row.lastInvestigationRevision>row.review.revision));

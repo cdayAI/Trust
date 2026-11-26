@@ -42,7 +42,7 @@ try{
     run(process.execPath,['--test','--test-concurrency=2','--test-timeout=90000',
       'test/rust-core.test.js','test/governance-document-attachments.test.js','test/api.test.js',
       'test/rights-deadline-policy.test.js','test/fixture-migration.test.js','test/data-dictionary.test.js',
-      'test/discovery-import.test.js','test/processing-register.test.js','test/evidence-disposition.test.js','test/attachment-binary-batch.test.js','test/workflow-engine.test.js','test/workflow-http.test.js','test/access-policy.test.js','test/workspace-access.test.js','test/document-review-seats.test.js','test/vendor-engagements.test.js','test/reporting.test.js','test/reporting-runs.test.js','test/report-schedules.test.js','test/assessment-config.test.js','test/assessment-workflow-http.test.js'],
+      'test/discovery-import.test.js','test/processing-register.test.js','test/evidence-disposition.test.js','test/attachment-binary-batch.test.js','test/workflow-engine.test.js','test/workflow-http.test.js','test/access-policy.test.js','test/workspace-access.test.js','test/document-review-seats.test.js','test/vendor-engagements.test.js','test/reporting.test.js','test/reporting-runs.test.js','test/report-schedules.test.js','test/assessment-config.test.js','test/assessment-workflow-http.test.js','test/durable-storage.test.js','test/storage-encryption.test.js','test/local-performance.test.js','test/incident-policy.test.js','test/assessment-incident.test.js'],
       {...process.env,TRUST_RUST_CORE:'required'});
   }else throw Error('Usage: npm run build:rust | npm run test:rust | npm run start:rust');
 }catch(error){console.error(error.message);process.exitCode=1;}
