@@ -22,6 +22,8 @@
     "test:browser": "node scripts/run-browser-verification.js",
     "release:local": "node scripts/package-release.js",
     "release:verify": "node scripts/package-release.js --verify-extracted",
-    "benchmark:local": "node scripts/benchmark-local.js"
+    "benchmark:local": "node scripts/benchmark-local.js",
+    "build:rust": "node scripts/rust-core.js build",
+    "test:rust": "node scripts/rust-core.js test"
   }
 }

@@ -16,3 +16,6 @@ node_modules/
 /dist/
 *.tgz
 RELEASE-MANIFEST.json
+
+# Local Rust build outputs
+/rust-core/target/

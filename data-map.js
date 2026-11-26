@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {randomUUID}=require('node:crypto');
 const dictionary=require('./data-dictionary');
 
@@ -31,6 +32,7 @@ function adjacency(nodes,links,reverse=false){
   return edges;
 }
 function trace(start,edges){
+  if(rust.enabled)return rust.trace(start,edges);
   const ids=new Set([start]);
   const work=[start];
   for(let i=0;i<work.length;i++){

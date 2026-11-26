@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 
 const {randomUUID}=require('node:crypto');
 const kinds=Object.freeze(['access','deletion','correction','portability','opt-out']);
@@ -31,6 +32,7 @@ function validate(rules,closedDates){
   return {calendar:{basis:'UTC',closedDates:closedDates.slice().sort()},rules:normalized};
 }
 function addDays(from,days,basis,closedDates=[]){
+  if(rust.enabled)return rust.addDays(from,days,basis,closedDates);
   const d=new Date(from.slice(0,10)+'T00:00:00Z'), exclusions=new Set(closedDates);
   for(let count=0;count<days;){
     d.setUTCDate(d.getUTCDate()+1);

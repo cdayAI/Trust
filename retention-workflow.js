@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {randomUUID}=require('node:crypto');
 const categories=['demo-customer','demo-employee','demo-operations'];
 const triggerTypes=['created','closed'];
@@ -24,6 +25,7 @@ function date(x,field){
   return x;
 }
 const afterDays=(x,days)=>{
+  if(rust.enabled)return rust.addDays(x,days,'calendar');
   const d=new Date(x+'T00:00:00Z');
   d.setUTCDate(d.getUTCDate()+days);
   return d.toISOString().slice(0,10);
