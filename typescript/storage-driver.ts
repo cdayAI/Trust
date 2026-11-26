@@ -112,7 +112,7 @@ function nodeDriver(filename:string,readOnly:boolean):StorageDriver{
       if(Number(result.changes)!==1)throw Error('SQLite snapshot generation exceeds the supported safe integer range.');
     },
     appendIntake(scope,generation,caseJson,eventJson){
-      return Number(statement(appendIntakeSql).run(caseJson,eventJson,scope,generation).changes)===1;
+      return Number(statement(appendIntakeSql).run({'?1':caseJson,'?2':eventJson,'?3':scope,'?4':generation}).changes)===1;
     },
     integrity(){
       const rows=db.prepare('PRAGMA integrity_check').all();
