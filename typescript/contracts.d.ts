@@ -48,9 +48,18 @@ export interface RustCore {
   batchHeader(bytes:Buffer):number;
   batchLayout(frameLength:number,manifestLength:number,sizes:number[]):number[]|-1|-2;
   questionnaireAnswer(question:Question,input:unknown,active:boolean,provided:boolean,submitting:boolean):AnswerDecision;
+  aggregateReport(source:Iterable<ReportRow>,filters:ReportFilters,vocabulary:ReportVocabulary):ReportAggregation;
   installRoutes(routes:readonly Route[]):void;
   authorize(method:string,pathname:string,role:string,limited:boolean):0|1|2|3;
 }
 export interface QueueTask {timing:string;owner:string;workflow:string;destination:{view:string;recordId:string;projectId?:string}}
 export interface QueueModel {tasks:QueueTask[];workflowLabels:Record<string,string>}
 export interface SummaryCounts {total:number;overdue:number;dueToday:number;upcoming:number;undated:number}
+
+export interface ReportFilters {
+  dataset:'records'|'activity';workflow:string;stage:string;outcome:string;
+  group:'workflow'|'stage'|'outcome'|'day'|'month';from:string|null;to:string|null
+}
+export interface ReportRow {workflow:string;stage?:string;outcome?:string;day:string|null}
+export interface ReportAggregation {buckets:Map<string,number>;total:number;undated:number;workflowCount:number}
+export interface ReportVocabulary {workflow:string[];stage:string[];outcome:string[]}
