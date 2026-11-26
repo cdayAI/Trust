@@ -56,13 +56,14 @@ test('selected driver probes its own SQLite version and owns the exclusive relea
     assert.throws(()=>acquireReleaseLease(file),/busy|locked/i);
     release();release=null;
     release=acquireReleaseLease(file);
-    const other=new DatabaseSync(file);
-    try{
-      other.exec('PRAGMA busy_timeout=0;');
-      assert.throws(()=>other.exec('BEGIN EXCLUSIVE'),/locked|busy/i);
-    }finally{other.close();}
+    // Bundled SQLite and Node SQLite are separate libraries. On POSIX,
+    // advisory file locks are process-scoped, so an independent process
+    // (not a second library in this process) must witness lease exclusion.
+    const attempt=()=>spawnSync(process.execPath,['-e',
+      "let db;try{db=new (require('node:sqlite').DatabaseSync)(process.argv[1]);db.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE; ROLLBACK;');}catch(e){if(/busy|locked/i.test(e.message))process.exitCode=2;else throw e;}finally{db?.close();}",file],
+      {encoding:'utf8',timeout:5000});
+    const blocked=attempt();assert.equal(blocked.status,2,blocked.stderr);
     release();release=null;
-    const probe=new DatabaseSync(file);
-    try{probe.exec('BEGIN EXCLUSIVE; ROLLBACK;');}finally{probe.close();}
+    const available=attempt();assert.equal(available.status,0,available.stderr);
   }finally{release?.();await rm(dir,{recursive:true,force:true});}
 });
