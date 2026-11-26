@@ -113,8 +113,8 @@ TRUST_SQLITE_DRIVER=rust TRUST_RUST_CORE=required npm run start:release -- --che
 ```
 
 The native build requires a C compiler for bundled SQLite and the committed Cargo
-lockfile. The draft CI bootstraps the lockfile for review if it has not yet been
-committed; do not merge until locked builds and regression tests pass. Explicit
+lockfile. CI enforces the committed lockfile rather than resolving unreviewed
+versions at build time. Explicit
 native selection fails closed if the driver is missing or incompatible; there
 is no automatic fallback. Native release packaging and platform qualification
 are separate follow-up work.
