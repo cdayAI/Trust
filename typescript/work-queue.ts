@@ -42,7 +42,7 @@ function view(state:WorkQueueState,params:URLSearchParams,today=new Date().toISO
   const vendors=includes('assessments')||includes('vendor-monitoring')?new Map(state.vendors.map(v=>[v.id,v])):null;
   if(includes('assessments'))for(const a of state.assessments){
     const [action,label,owner]=Object.hasOwn(assessmentActions,a.status)?assessmentActions[a.status]:[];
-    if(action)task('assessments',a,action,label,owner,
+    if(action&&label!==undefined&&owner!==undefined)task('assessments',a,action,label,owner,
       (vendors?.get(a.vendorId)?.name??'Vendor')+' · '+(a.type==='ai'?'AI risk':'privacy')+(a.monitoringCycleId?' reassessment':' assessment'),
       null,{projectId:a.projectId});
   }
