@@ -54,6 +54,7 @@ jobs:
           if node -e "require('./storage-driver')"; then exit 1; fi
           cp "$scratch/manifest.json" RELEASE-MANIFEST.json
           npm run release:verify
+      - run: node --test test/runtime-distribution.test.js
       - run: npm run test:rust-sqlite
       - name: Verify required native startup
         env:

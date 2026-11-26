@@ -195,7 +195,7 @@ function verifyExactTree(directory, manifest) {
 function verifyExtracted(directory = root) {
   const actual = JSON.parse(readSource(directory, 'RELEASE-MANIFEST.json'));
   const { manifest } = sourceManifest(directory, { rust: actual.format === 'mvw-trust-rust-release',
-    native:actual.format===require('../native-storage-abi').format, packaged: true });
+    native:actual.format==='mvw-trust-native-rust-release', packaged: true });
   if (JSON.stringify(actual) !== JSON.stringify(manifest)) {
     throw new Error('Extracted package does not match its release manifest.');
   }

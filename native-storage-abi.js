@@ -12,7 +12,8 @@ const maxBytes=16*1024*1024;
 const target=Object.freeze({platform:'linux',architecture:'x64',nodeApi:6});
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 function requireTarget(){
-  if(process.platform!==target.platform||process.arch!==target.architecture||Number(process.versions.napi)<target.nodeApi)
+  const nodeApi=Number(process.versions.napi);
+  if(process.platform!==target.platform||process.arch!==target.architecture||!Number.isSafeInteger(nodeApi)||nodeApi<target.nodeApi)
     throw Error('Unsupported native Rust release target.');
 }
 function verifyBinary(bytes){
@@ -44,7 +45,7 @@ function descriptor(root){
     throw Error('Invalid native Rust release descriptor.');
   const rows=manifest.files.filter(row=>row.path===packaged);
   if(rows.length!==1||!Number.isSafeInteger(rows[0].size)||rows[0].size<64||rows[0].size>maxBytes||
-    !/^[a-f0-9]{64}$/.test(rows[0].sha256??''))throw Error('Invalid native Rust artifact descriptor.');
+    typeof rows[0].sha256!=='string'||!/^[a-f0-9]{64}$/.test(rows[0].sha256))throw Error('Invalid native Rust artifact descriptor.');
   return rows[0];
 }
 function verifyArtifact(root,row){
