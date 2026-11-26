@@ -95,3 +95,14 @@ Existing independent-review, version, signature, scope and audit validation
 remain authoritative. Malformed records are refused rather than treated as
 valid TypeScript objects. Existing snapshot formats and native protocol remain
 unchanged.
+
+## Typed persistence and backup boundary
+
+The durable-storage transaction callback, generation readers, snapshot save and
+narrow append paths, backup envelope, restoration and legacy migration now use
+strict types shared with the Node and Rust drivers. Untrusted backup JSON stays
+unknown through validation, and validated document object order is preserved for
+historical checksums. The authenticated encrypted backup and CLI boundaries use
+the same typed contract. This refactor does not change the SQLite schema,
+archive format, encryption algorithm, or key handling. The full snapshot
+representation is retained; normalized persistence remains a separate effort.

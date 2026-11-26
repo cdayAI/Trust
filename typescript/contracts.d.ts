@@ -59,6 +59,10 @@ export interface RustCore {
   accountLive(account:AccountLifetime|null|undefined,at:number):boolean;
   sessionToken(name:string,header:string):string|null;
   addDays(from:string,days:number,basis:string,closedDates:string[]):string;
+  storageScope(scope:unknown):0|1|2;
+  storageGeneration(value:unknown):boolean;
+  storagePayload(kind:SnapshotKind,payload:JsonRecord):boolean;
+  encryptedSize(header:Buffer,archiveSize:number):number;
 }
 export interface QueueTask {timing:string;owner:string;workflow:string;destination:{view:string;recordId:string;projectId?:string}}
 export interface QueueModel {tasks:QueueTask[];workflowLabels:Record<string,string>}
@@ -119,3 +123,13 @@ export interface MembershipRecord {revision:number;disabled:boolean}
 export interface IdentitySeat {id:string;role:string;configuredDisabled:boolean;validUntil:number|null;provisioning:string}
 export interface AccountLifetime {disabled:boolean;validUntil:number|null}
 export interface WorkspaceFeatureFlags {groupGovernance?:boolean;documentScope?:boolean;operatorJobs?:boolean;directoryLifecycle?:boolean}
+
+export interface BackupDocument {scope:string;kind:SnapshotKind;generation:number;payload:JsonRecord}
+export interface BackupEnvelope {format:string;version:number;mode:StorageMode;documents:BackupDocument[];sha256:string}
+export type SnapshotSave=(payload:unknown)=>void;
+export type AppendIntake=(next:unknown,caseRow:unknown,auditRow:unknown)=>boolean;
+export interface ScopedStorage {
+  read(kind:SnapshotKind):JsonRecord|undefined;
+  readSince(kind:SnapshotKind,knownGeneration:number):{generation:number;payload?:JsonRecord};
+  write<T>(kind:SnapshotKind,callback:(snapshot:JsonRecord|undefined,save:SnapshotSave,generation:number,appendIntake:AppendIntake)=>T):T;
+}
