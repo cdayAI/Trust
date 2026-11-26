@@ -22,38 +22,7 @@ jobs:
         run: cargo +1.95.0 metadata --manifest-path native-storage/Cargo.toml --locked --format-version 1 > /dev/null
       - run: npm run build:rust
       - run: npm run build:rust-sqlite
-      - name: Verify platform-bound native release and tamper refusal
-        run: |
-          set -euo pipefail
-          scratch="$(mktemp -d)"
-          trap 'rm -rf "$scratch"' EXIT
-          npm run release:native-rust -- "$scratch/first.tgz"
-          npm run release:native-rust -- "$scratch/second.tgz"
-          cmp "$scratch/first.tgz" "$scratch/second.tgz"
-          tar -xzf "$scratch/first.tgz" -C "$scratch"
-          cd "$scratch/package"
-          npm run release:verify
-          node -e "if(require('./storage-driver').selectedStorageDriver()!=='rust'||!require('./rust-core').enabled)process.exit(1)"
-          npm run verify:startup -- --sqlite
-          npm run start:release -- --check
-          if TRUST_SQLITE_DRIVER=node node -e "require('./storage-driver')"; then exit 1; fi
-          if TRUST_RUST_CORE=off node -e "require('./rust-core')"; then exit 1; fi
-          artifact="native-storage/runtime/trust_storage.node"
-          cp "$artifact" "$scratch/original.node"
-          node -e "const fs=require('node:fs'),p=process.argv[1],b=fs.readFileSync(p);b[b.length-1]^=1;fs.writeFileSync(p,b)" "$artifact"
-          if npm run release:verify; then exit 1; fi
-          if node -e "require('./storage-driver')"; then exit 1; fi
-          rm "$artifact"
-          if npm run release:verify; then exit 1; fi
-          if node -e "require('./storage-driver')"; then exit 1; fi
-          cp "$scratch/original.node" "$artifact"
-          npm run release:verify
-          cp RELEASE-MANIFEST.json "$scratch/manifest.json"
-          node -e "const fs=require('node:fs'),p='RELEASE-MANIFEST.json',m=JSON.parse(fs.readFileSync(p,'utf8'));m.target.architecture='arm64';fs.writeFileSync(p,JSON.stringify(m))"
-          if npm run release:verify; then exit 1; fi
-          if node -e "require('./storage-driver')"; then exit 1; fi
-          cp "$scratch/manifest.json" RELEASE-MANIFEST.json
-          npm run release:verify
+      - run: npm run verify:native-release
       - run: node --test test/runtime-distribution.test.js
       - run: npm run test:rust-sqlite
       - name: Verify required native startup
@@ -63,3 +32,11 @@ jobs:
         run: |
           npm run verify:startup -- --sqlite
           npm run start:release -- --check
+      - name: Compare Rust and JavaScript performance on the same runner
+        run: npm run benchmark:rust
+      - name: Install locked browser tools
+        run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund
+      - name: Verify native SQLite browser journeys
+        env:
+          TRUST_SQLITE_DRIVER: rust
+        run: npm run test:browser

@@ -42,3 +42,27 @@ test('selected driver preserves rollback, scoped generations and interoperable S
     assert.equal(reopened.snapshot().documents.length,2);
   }finally{if(reopened)reopened.close();if(other)other.close();if(db)db.close();await rm(dir,{recursive:true,force:true});}
 });
+
+
+test('selected driver probes its own SQLite version and owns the exclusive release lease',async()=>{
+  const {probeStorageDriver,acquireReleaseLease}=require('../storage-driver');
+  const {writeFile}=require('node:fs/promises');
+  assert.match(probeStorageDriver(),/^3\.\d+\.\d+$/);
+  const dir=await mkdtemp(join(tmpdir(),'trust-native-lease-')),file=join(dir,'lease.sqlite');
+  await writeFile(file,'',{mode:0o600});
+  let release;
+  try{
+    release=acquireReleaseLease(file);
+    assert.throws(()=>acquireReleaseLease(file),/busy|locked/i);
+    release();release=null;
+    release=acquireReleaseLease(file);
+    const other=new DatabaseSync(file);
+    try{
+      other.exec('PRAGMA busy_timeout=0;');
+      assert.throws(()=>other.exec('BEGIN EXCLUSIVE'),/locked|busy/i);
+    }finally{other.close();}
+    release();release=null;
+    const probe=new DatabaseSync(file);
+    try{probe.exec('BEGIN EXCLUSIVE; ROLLBACK;');}finally{probe.close();}
+  }finally{release?.();await rm(dir,{recursive:true,force:true});}
+});

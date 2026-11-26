@@ -13,16 +13,11 @@ function checkRuntime({ sqlite = false, version = process.versions.node } = {}) 
   }
   const report = { node: version, platform: process.platform, architecture: process.arch };
   if (sqlite) {
-    let db;
     try {
-      const { DatabaseSync } = require('node:sqlite');
-      db = new DatabaseSync(':memory:');
-      db.exec('BEGIN IMMEDIATE; CREATE TABLE runtime_check (n INTEGER); INSERT INTO runtime_check VALUES (1); COMMIT;');
-      if (db.prepare('SELECT n FROM runtime_check').get().n !== 1) throw new Error('SQLite test transaction failed.');
-      report.sqlite = db.prepare('SELECT sqlite_version() AS version').get().version;
+      report.sqlite=require('../storage-driver').probeStorageDriver();
     } catch (error) {
       throw new Error('This Node.js installation cannot run SQLite mode: ' + error.message);
-    } finally { db?.close(); }
+    }
   }
   return report;
 }

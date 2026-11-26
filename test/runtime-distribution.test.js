@@ -89,7 +89,7 @@ test('native release is a distinct platform-bound inventory with exactly two com
   const {existsSync}=require('node:fs');
   const native=require('../native-storage-abi'),core=require('../rust-core-abi');
   const directory=resolve(__dirname,'..');
-  if(process.platform!==native.target.platform||process.arch!==native.target.architecture){
+  if(!['linux:x64','linux:arm64','darwin:x64','darwin:arm64','win32:x64'].includes(process.platform+':'+process.arch)){
     assert.throws(()=>native.requireTarget(),/Unsupported native Rust release target/);
     return;
   }

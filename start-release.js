@@ -161,13 +161,8 @@ async function releaseLease(room,fresh){
   const path=join(room,lockName);
   if(fresh)await (await fs.open(path,'wx',0o600)).close();
   await privateFile(path);
-  const {DatabaseSync}=require('node:sqlite');
-  const db=new DatabaseSync(path);
-  try{db.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;');}
-  catch(error){db.close();throw error;}
-  // Separate file so the lease never locks the workbench data, and the OS
-  // releases it on process termination without stale PID cleanup.
-  return ()=>{try{db.exec('ROLLBACK');}finally{db.close();}};
+  // A separate file keeps lease contention independent of workbench snapshots.
+  return require('./storage-driver').acquireReleaseLease(path);
 }
 async function readProfile(room){
   const path=join(room,profileName),info=await privateFile(path);

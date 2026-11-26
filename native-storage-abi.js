@@ -3,26 +3,38 @@ const fs=require('node:fs');
 const path=require('node:path');
 const {createHash}=require('node:crypto');
 const format='mvw-trust-native-rust-release';
-const abi=1;
+const abi=2;
 const built='native-storage/target/release-artifact/trust_storage.node';
 const packaged='native-storage/runtime/trust_storage.node';
 const maxBytes=16*1024*1024;
-// Only the currently qualified native target is distributable. Developer
-// builds on other platforms remain opt-in until their complete tests pass.
-const target=Object.freeze({platform:'linux',architecture:'x64',nodeApi:6});
+// Explicit native formats; each target has its own CI qualification.
+const supported=new Set(['linux:x64','linux:arm64','darwin:x64','darwin:arm64','win32:x64']);
+const target=Object.freeze({platform:process.platform,architecture:process.arch,nodeApi:6});
 const sha256=bytes=>createHash('sha256').update(bytes).digest('hex');
 function requireTarget(){
   const nodeApi=Number(process.versions.napi);
-  if(process.platform!==target.platform||process.arch!==target.architecture||!Number.isSafeInteger(nodeApi)||nodeApi<target.nodeApi)
+  if(!supported.has(process.platform+':'+process.arch)||!Number.isSafeInteger(nodeApi)||nodeApi<target.nodeApi)
     throw Error('Unsupported native Rust release target.');
 }
 function verifyBinary(bytes){
-  // ELF64 little-endian, x86-64, shared object. This is a format check,
-  // not an assertion of provenance, safety, or a cryptographic signature.
-  if(!Buffer.isBuffer(bytes)||bytes.length<64||bytes.length>maxBytes||
-    !bytes.subarray(0,6).equals(Buffer.from([127,69,76,70,2,1]))||
-    bytes.readUInt16LE(16)!==3||bytes.readUInt16LE(18)!==62)
-    throw Error('Invalid native Rust SQLite binary format.');
+  requireTarget();
+  let valid=false;
+  if(Buffer.isBuffer(bytes)&&bytes.length>=64&&bytes.length<=maxBytes){
+    if(target.platform==='linux'){
+      valid=bytes.subarray(0,6).equals(Buffer.from([127,69,76,70,2,1]))&&
+        bytes.readUInt16LE(16)===3&&bytes.readUInt16LE(18)===(target.architecture==='x64'?62:183);
+    }else if(target.platform==='darwin'){
+      valid=bytes.readUInt32LE(0)===0xfeedfacf&&
+        bytes.readUInt32LE(4)===(target.architecture==='x64'?0x01000007:0x0100000c)&&
+        [6,8].includes(bytes.readUInt32LE(12));
+    }else if(target.platform==='win32'){
+      const pe=bytes.readUInt32LE(60);
+      valid=bytes.subarray(0,2).equals(Buffer.from('MZ'))&&pe>=64&&pe<=bytes.length-26&&
+        bytes.readUInt32LE(pe)===0x4550&&bytes.readUInt16LE(pe+4)===0x8664&&
+        (bytes.readUInt16LE(pe+22)&0x2000)!==0&&bytes.readUInt16LE(pe+24)===0x20b;
+    }
+  }
+  if(!valid)throw Error('Invalid native Rust SQLite binary format.');
 }
 function descriptor(root){
   const location=path.join(root,'RELEASE-MANIFEST.json');
