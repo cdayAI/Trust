@@ -181,13 +181,36 @@ function openSqlite(file, { readOnly = false } = {}) {
           write(kind, callback) {
             if (readOnly || !kinds.has(kind)) throw new Error('Storage document is not writable.');
             return inTransaction('BEGIN IMMEDIATE', () => {
-              let active = true;
+              let active = true, saved = false;
               try {
-                const row=db.read(scope,kind);
-                return callback(decode(kind,row), payload => {
+                const row=db.read(scope,kind), previous=decode(kind,row);
+                const save=payload=>{
                   if (!active) throw new Error('Storage transaction is closed.');
-                  db.save(scope, kind, JSON.stringify(validatePayload(kind, payload)));
-                }, row?.generation??0);
+                  db.save(scope,kind,JSON.stringify(validatePayload(kind,payload)));
+                  saved=true;
+                };
+                // Only the staff-intake operation can use this fixed append.
+                // Keep the existing full-write path for absent rows and any
+                // shape that is not a simple, exact append.
+                const appendIntake=(next,caseRow,auditRow)=>{
+                  if(!active)throw Error('Storage transaction is closed.');
+                  if(saved||kind!=='workbench'||!row||!previous||!basic(next)||!basic(caseRow)||!basic(auditRow))return false;
+                  const before=previous.rightsCases??[],after=next.rightsCases;
+                  if(!Array.isArray(before)||!Array.isArray(after)||after.length!==before.length+1||
+                    after.at(-1)!==caseRow||before.some((value,index)=>after[index]!==value)||
+                    !Array.isArray(next.audit)||next.audit.length!==previous.audit.length+1||
+                    next.audit.at(-1)!==auditRow||previous.audit.some((value,index)=>next.audit[index]!==value))return false;
+                  const otherKeys=value=>Object.keys(value).filter(key=>key!=='rightsCases'&&key!=='audit');
+                  const keys=otherKeys(previous);
+                  if(otherKeys(next).length!==keys.length||keys.some(key=>!Object.hasOwn(next,key)||next[key]!==previous[key]))return false;
+                  if(typeof caseRow.id!=='string'||caseRow.revision!==1||caseRow.status!=='received'||
+                    auditRow.action!=='rights.case.opened'||auditRow.entityId!==caseRow.id||
+                    !Number.isSafeInteger(auditRow.sequence)||auditRow.sequence!==(previous.audit.at(-1)?.sequence??0)+1)return false;
+                  validatePayload(kind,next);
+                  saved=db.appendIntake(scope,row.generation,JSON.stringify(caseRow),JSON.stringify(auditRow));
+                  return saved;
+                };
+                return callback(previous,save,row?.generation??0,appendIntake);
               } finally { active = false; }
             });
           },

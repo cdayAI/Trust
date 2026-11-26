@@ -41,3 +41,15 @@ The Wasm bridge allocates a smaller buffer for bounded indexed rows.
 Set TRUST_SNAPSHOT_CACHE=off to compare the original read path. CI measures
 both variants on the same runner; this does not change the schema or claim
 normalized row-level persistence. Full-row writes still remain to be migrated.
+
+## Incremental intake experiment
+
+`TRUST_INCREMENTAL_INTAKE=on` enables one narrow, generation-checked SQL
+append of a new staff rights case and its audit event within the existing
+transaction. Both drivers execute fixed SQL; only the appended JSON crosses
+the native boundary. The snapshot schema and backup representation are
+unchanged. Unrelated field changes, missing rows, or non-append shapes use
+the existing full save. The feature defaults off pending benchmark evidence.
+SQLite still updates a JSON snapshot blob on disk, so this is not a normalized
+row-level storage migration. CI compares cached native with incremental native
+and tests rollback, generation checks, exact payload and workspace isolation.

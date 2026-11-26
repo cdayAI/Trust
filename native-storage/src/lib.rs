@@ -58,7 +58,7 @@ pub struct ReadRow { pub generation: f64, pub payload: Option<String> }
 #[napi(object)]
 pub struct DocumentRow { pub scope:String, pub kind:String, pub generation:f64, pub payload:String }
 #[napi(js_name="storageAbi")]
-pub fn storage_abi()->u32 {2}
+pub fn storage_abi()->u32 {3}
 #[napi(js_name="sqliteVersion")]
 pub fn sqlite_version()->String {rusqlite::version().to_owned()}
 
@@ -147,6 +147,31 @@ impl NativeStorage {
         let n=self.writer()?.prepare_cached("INSERT INTO snapshots (scope,kind,generation,payload) VALUES (?,?,1,?) ON CONFLICT (scope,kind) DO UPDATE SET generation=generation+1,payload=excluded.payload WHERE generation<9007199254740991")
           .map_err(sqlite_err)?.execute(params![scope,kind,payload]).map_err(sqlite_err)?;
         if n!=1{return Err(err("SQLite snapshot generation exceeds the supported safe integer range."));}Ok(())
+    }
+    // Fixed, transaction-bound append of one intake row and its audit event.
+    // This avoids crossing Node-API with the whole replacement JSON document.
+    #[napi(js_name="appendIntake")]
+    pub fn append_intake(&self,scope:String,value:f64,case_json:String,event_json:String)->Result<bool>{
+        key(&scope,"workbench")?;
+        let value=input_generation(value,false)?;
+        let n=self.writer()?.prepare_cached(r#"UPDATE snapshots
+SET generation = generation + 1,
+    payload = json_insert(
+      CASE WHEN json_type(payload, '$.rightsCases') = 'array' THEN payload
+           ELSE json_set(payload, '$.rightsCases', json('[]')) END,
+      '$.rightsCases[#]', json(?1),
+      '$.audit[#]', json(?2))
+WHERE scope = ?3 AND kind = 'workbench' AND generation = ?4
+  AND generation < 9007199254740991
+  AND json_type(payload, '$.audit') = 'array'
+  AND COALESCE(json_type(payload, '$.rightsCases'), 'null') IN ('array', 'null')
+  AND json_type(?1) = 'object' AND json_type(?2) = 'object'
+  AND json_type(?1, '$.id') = 'text'
+  AND json_extract(?1, '$.id') = json_extract(?2, '$.entityId')
+  AND json_extract(?2, '$.action') = 'rights.case.opened'
+  AND json_extract(?2, '$.sequence') = COALESCE(json_extract(payload, '$.audit[#-1].sequence'), 0) + 1"#)
+          .map_err(sqlite_err)?.execute(params![case_json,event_json,scope,value]).map_err(sqlite_err)?;
+        Ok(n==1)
     }
     #[napi]
     pub fn integrity(&self)->Result<bool>{

@@ -15,7 +15,7 @@ function artifactRow(row:unknown):row is ArtifactRow{
     row.size>=64&&row.size<=maxBytes&&typeof row.sha256==='string'&&/^[a-f0-9]{64}$/.test(row.sha256);
 }
 const format='mvw-trust-native-rust-release';
-const abi=2;
+const abi=3;
 const built='native-storage/target/release-artifact/trust_storage.node';
 const packaged='native-storage/runtime/trust_storage.node';
 const maxBytes=16*1024*1024;

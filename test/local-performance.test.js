@@ -187,3 +187,49 @@ test('cached report rows agree with uncached records and activity, including cha
   };
   verify();generation++;stored.rightsCases.push({status:'fulfilled',receivedAt:'2026-01-03'});verify();
 });
+
+
+test('incremental staff intake appends exact case and audit rows, preserves scope and rolls back atomically',async t=>{
+  const dir=await mkdtemp(join(tmpdir(),'trust-intake-append-'));
+  t.after(()=>rm(dir,{recursive:true,force:true}));
+  const file=join(dir,'state.sqlite'),db=openSqlite(file);
+  try{
+    db.requireMode('isolated');
+    const alpha=db.scope('workspace:alpha'),beta=db.scope('workspace:beta');
+    const initial={version:1,actors:[],projects:[],vendors:[],assessments:[],handoff:[],audit:[]};
+    alpha.write('workbench',(_,save)=>save(initial));
+    beta.write('workbench',(_,save)=>save(initial));
+    const create=(snapshot,id)=> {
+      const row={id,revision:1,status:'received',summary:'Synthetic Unicode 😀 and "quotes" \n line'};
+      const audit={id:'event-'+id,action:'rights.case.opened',entityId:id,sequence:(snapshot.audit.at(-1)?.sequence??0)+1};
+      return {row,audit,next:{...snapshot,rightsCases:[...(snapshot.rightsCases??[]),row],audit:[...snapshot.audit,audit]}};
+    };
+    let closed;
+    assert.throws(()=>alpha.write('workbench',(snapshot,_save,_generation,append)=>{
+      closed=append;
+      const {row,audit,next}=create(snapshot,'rolled-back');
+      assert.equal(append(next,row,audit),true);
+      throw Error('rollback canary');
+    }),/rollback canary/);
+    assert.throws(()=>closed({}, {}, {}),/transaction is closed/);
+    assert.deepEqual(alpha.read('workbench'),initial);
+    let expected;
+    alpha.write('workbench',(snapshot,_save,generation,append)=>{
+      assert.equal(generation,1);
+      const {row,audit,next}=create(snapshot,'one');expected=next;
+      assert.equal(append({...next,projects:[{id:'unrelated'}]},row,audit),false);
+      assert.equal(append(next,row,{...audit,entityId:'wrong'}),false);
+      assert.equal(append(next,row,audit),true);
+      assert.equal(append(next,row,audit),false);
+    });
+    assert.deepEqual(alpha.readSince('workbench',1),{generation:2,payload:expected});
+    assert.deepEqual(beta.read('workbench'),initial);
+    alpha.write('workbench',(snapshot,_save,generation,append)=>{
+      assert.equal(generation,2);
+      const {row,audit,next}=create(snapshot,'two');expected=next;
+      assert.equal(append(next,row,audit),true);
+    });
+    assert.deepEqual(alpha.readSince('workbench',2),{generation:3,payload:expected});
+    assert.equal(db.snapshot().documents.length,2);
+  }finally{db.close();}
+});

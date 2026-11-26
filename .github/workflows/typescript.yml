@@ -17,7 +17,8 @@ jobs:
         with:
           node-version: 24.22.3
       - run: npm --prefix scripts/type-tools ci --ignore-scripts --no-audit --no-fund
-      - run: npm run typecheck
+      - name: Compile incremental intake and record generated code
+        run: node scripts/typescript-build.js report
       - run: npm run verify:typescript
       - run: npm run verify:startup -- --sqlite
       - run: node --test test/api.test.js test/access-policy.test.js test/attachment-binary-batch.test.js test/assessment-config.test.js test/workspace-home.test.js test/employee-attestations.test.js test/trust-center.test.js test/runtime-distribution.test.js test/local-performance.test.js test/reporting.test.js test/native-storage.test.js

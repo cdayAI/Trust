@@ -182,7 +182,7 @@ function seed() {
   return state;
 }
 function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachmentReview=false,scopeRights=false,largePdf=false,reportWorkerEnabled=false}={}) {
-  let saveSnapshot,localSnapshotGeneration=0;
+  let saveSnapshot,saveIntakeAppend,localSnapshotGeneration=0;
   const intakeViewInstance=randomUUID();
   function persist(next) {
     if(storage){
@@ -204,6 +204,8 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const fresh=()=>empty?{version:1,actors,projects:[],vendors:[],assessments:[],handoff:[],audit:[]}:seed();
   const workbench='workbench';
   const snapshotCache=process.env.TRUST_SNAPSHOT_CACHE??'on';
+  const incrementalIntake=process.env.TRUST_INCREMENTAL_INTAKE??'off';
+  if(!['on','off'].includes(incrementalIntake))throw Error('TRUST_INCREMENTAL_INTAKE must be on or off.');
   if(!['on','off'].includes(snapshotCache))throw Error('TRUST_SNAPSHOT_CACHE must be on or off.');
   const readCache=storage&&snapshotCache==='on'?createSnapshotReader(storage,fresh):null;
   function initialize(stored){
@@ -564,7 +566,10 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
         outcome={minimal:true,version:useDelta?intakeVersion(generation+1,after):null,
           model:{case:only.cases[0],delegation:only.delegation?.cases[0]??null,baseVersion:useDelta?baseVersion:null}};
       }else outcome=readVersionedRights(next,ctx,generation+1);
-      persist(next);state=next;
+      // Only a known append-only intake can take the narrow persistence path.
+      // All other writes and missing snapshots retain the exact old behavior.
+      if(!saveIntakeAppend?.(next,row,next.audit.at(-1)))persist(next);
+      state=next;
       return outcome;
     },
     delegateRightsCase(id,ctx,body){
@@ -718,16 +723,17 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       return fn(...args);
     }
     let refusal;
-    const result=storage.write(workbench,(snapshot,save,generation)=>{
+    const result=storage.write(workbench,(snapshot,save,generation,appendIntake)=>{
       state=snapshot??fresh();
       saveSnapshot=save;
+      saveIntakeAppend=name==='createRightsIntake'&&incrementalIntake==='on'?appendIntake:undefined;
       try{return name==='createRightsIntake'?fn(...args,generation):fn(...args);}
       catch(error){
         // Domain refusals whose audit entries were explicitly saved still
         // commit. Other exceptions roll back the whole storage transaction.
         if(!error.persistRefusal)throw error;
         refusal=error;
-      }finally{saveSnapshot=undefined;}
+      }finally{saveSnapshot=undefined;saveIntakeAppend=undefined;}
     });
     if(refusal)throw refusal;
     return result;
