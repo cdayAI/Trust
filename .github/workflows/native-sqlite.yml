@@ -1,0 +1,36 @@
+name: Native Rust SQLite
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  native-sqlite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238
+        with:
+          node-version: 24.22.3
+      - name: Install pinned Rust toolchains
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown
+      - name: Bootstrap draft lockfile for review
+        run: |
+          if [ ! -f native-storage/Cargo.lock ]; then
+            cargo +1.95.0 generate-lockfile --manifest-path native-storage/Cargo.toml
+            sed 's/^/TRUST_LOCK|/' native-storage/Cargo.lock
+          fi
+      - run: npm run build:rust
+      - run: npm run build:rust-sqlite
+      - run: npm run test:rust-sqlite
+      - name: Verify required native startup
+        env:
+          TRUST_SQLITE_DRIVER: rust
+          TRUST_RUST_CORE: required
+        run: |
+          npm run verify:startup -- --sqlite
+          npm run start:release -- --check
