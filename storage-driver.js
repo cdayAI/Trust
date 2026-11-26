@@ -54,6 +54,7 @@ const schema = `
           PRAGMA user_version = ${schemaVersion};
         `;
 const maxGeneration = Number.MAX_SAFE_INTEGER;
+// Fixed append-only operation; no caller-supplied SQL or JSON path.
 const appendIntakeSql = `UPDATE snapshots
 SET generation = generation + 1,
     payload = json_insert(
