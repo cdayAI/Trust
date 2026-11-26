@@ -184,6 +184,28 @@ test('HTTP refuses altered text and does not publish inconsistent attachment byt
     assert.equal(final.governanceDocuments.documents[0].revisions[1].status,'draft');
     assert.ok(final.audit.some(event=>event.action==='governance-documents.refused'&&event.details.code==='ATTACHMENT_UNAVAILABLE'));
   }finally{db.close();}
+
+  // Restore the unrelated typed link and attachment first. Independently
+  // exercise the text digest guard at both state-changing boundaries.
+  const route=path+'/records/'+doc.id+'/revisions/'+draft.id;
+  changed(file,stored=>{
+    stored.documents[0].revisions[1].links[0].type='rights-case';
+    stored.documents[0].revisions[1].content='X'+draft.content.slice(1);
+  });
+  const submit=await post(route+'/submit',409,{expectedRevision:book.revision},analyst);
+  assert.equal(submit.data.code,'EDITION_UNAVAILABLE');
+  changed(file,stored=>{stored.documents[0].revisions[1].content=draft.content;});
+  await post(route+'/submit',200,{expectedRevision:book.revision},analyst);
+  changed(file,stored=>{stored.documents[0].revisions[1].contentLength+=1;});
+  const publish=await post(route+'/publish',409,{expectedRevision:book.revision+1,note:'Fictional independent review.'},reviewer);
+  assert.equal(publish.data.code,'EDITION_UNAVAILABLE');
+  const after=openSqlite(file,{readOnly:true});
+  try{
+    const final=after.scope('workspace:sample').read('workbench');
+    assert.equal(final.governanceDocuments.revision,book.revision+1);
+    assert.equal(final.governanceDocuments.documents[0].revisions[1].status,'review');
+    assert.ok(final.audit.filter(event=>event.action==='governance-documents.refused'&&event.details.code==='EDITION_UNAVAILABLE').length>=2);
+  }finally{after.close();}
 });
 
 test('an extended-size attachment without its persisted review cannot become an ordinary legacy file',()=>{

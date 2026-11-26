@@ -1,0 +1,39 @@
+name: Current Trust 100-pass Rust audit
+on:
+  push:
+    branches: ['debug/rust-100-pass-audit-*']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: trust-rust-audit-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  audit:
+    name: Audit passes (shard ${{ matrix.shard }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238
+        with:
+          node-version: 24.22.3
+      - name: Install pinned toolchains
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown
+      - run: npm run build:rust
+      - run: npm run build:rust-sqlite
+      - run: npm run build:rust-http
+      - run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund
+      - name: Execute 25 independent test processes
+        env:
+          TRUST_QA_SHARD: ${{ matrix.shard }}
+        run: npm run test:browser
