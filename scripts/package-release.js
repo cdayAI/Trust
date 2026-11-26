@@ -14,7 +14,7 @@ const maxSourceBytes = 32 * 1024 * 1024;
 const root = resolve(__dirname, '..');
 const checksum = buffer => createHash('sha256').update(buffer).digest('hex');
 
-function inspectSource(directory, relative) {
+function inspectSource(directory, relative, limit=maxFileBytes) {
   if (typeof relative !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(relative) ||
       relative.split('/').some(segment => !segment || segment.startsWith('.'))) {
     throw new Error('Unsafe release path: ' + relative);
@@ -27,7 +27,7 @@ function inspectSource(directory, relative) {
     const info = lstatSync(full);
     if (i < parts.length - 1) {
       if (!info.isDirectory()) throw new Error('Unsafe release directory: ' + relative);
-    } else if (!info.isFile() || info.nlink !== 1 || info.size > maxFileBytes) {
+    } else if (!info.isFile() || info.nlink !== 1 || info.size > limit) {
       throw new Error('Release input is not a single-link regular source file: ' + relative);
     } else {
       size = info.size;
@@ -36,14 +36,15 @@ function inspectSource(directory, relative) {
   return { full, size };
 }
 
-function readSource(directory, relative) {
-  const { full } = inspectSource(directory, relative);
+function readSource(directory, relative, limit=maxFileBytes) {
+  const { full } = inspectSource(directory, relative,limit);
   const bytes = readFileSync(full);
-  if (bytes.length > maxFileBytes) throw new Error('Release source grew beyond its per-file limit: ' + relative);
+  if (bytes.length > limit) throw new Error('Release source grew beyond its per-file limit: ' + relative);
   return bytes;
 }
 
-function sourceManifest(directory, { rust = false, packaged = false } = {}) {
+function sourceManifest(directory, { rust = false, native = false, packaged = false } = {}) {
+  if(native)rust=true;
   const declared = JSON.parse(readSource(directory, 'scripts/release-files.json'));
   if (!Array.isArray(declared) || !declared.includes('package.json') ||
       new Set(declared).size !== declared.length || declared.length > maxSourceFiles) {
@@ -84,13 +85,26 @@ function sourceManifest(directory, { rust = false, packaged = false } = {}) {
     files.push({ path: contract.packaged, bytes });
     files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
   }
+  let nativeContract;
+  if(native){
+    nativeContract=require('../native-storage-abi');
+    nativeContract.requireTarget();
+    if(files.length>=maxSourceFiles)throw Error('Native release exceeds the file inventory limit.');
+    const bytes=readSource(directory,packaged?nativeContract.packaged:nativeContract.built,nativeContract.maxBytes);
+    nativeContract.verifyBinary(bytes);
+    loaded+=bytes.length;
+    if(loaded>maxSourceBytes)throw Error('Native release exceeds the 32 MiB total input limit.');
+    files.push({path:nativeContract.packaged,bytes});
+    files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+  }
   const manifest = {
-    format: rust ? contract.format : 'mvw-trust-source-release',
+    format: native ? nativeContract.format : rust ? contract.format : 'mvw-trust-source-release',
     version: 1,
     package: pkg.name,
     packageVersion: pkg.version,
     node: pkg.engines.node,
     ...(rust ? { wasmAbi: contract.abi } : {}),
+    ...(native ? {nativeAbi:nativeContract.abi,target:nativeContract.target}:{}),
     files: files.map(({ path, bytes }) => ({ path, size: bytes.length, sha256: checksum(bytes) })),
   };
   return { files, manifest };
@@ -113,11 +127,11 @@ function publishNew(target, bytes) {
   }
 }
 
-function packageRelease({ directory = root, target, npm = process.env.npm_execpath, rust = false }) {
+function packageRelease({ directory = root, target, npm = process.env.npm_execpath, rust = false, native = false }) {
   checkRuntime();
   if (typeof target !== 'string' || !target.endsWith('.tgz')) throw new Error('Provide a new .tgz output pathname.');
   if (typeof npm !== 'string' || !isAbsolute(npm)) throw new Error('Run packaging through npm run release:local.');
-  const { files, manifest } = sourceManifest(directory, { rust });
+  const { files, manifest } = sourceManifest(directory, { rust,native });
   const temp = mkdtempSync(join(tmpdir(), 'mvw-trust-source-release-'));
   try {
     const staged = join(temp, 'workbench');
@@ -180,7 +194,8 @@ function verifyExactTree(directory, manifest) {
 
 function verifyExtracted(directory = root) {
   const actual = JSON.parse(readSource(directory, 'RELEASE-MANIFEST.json'));
-  const { manifest } = sourceManifest(directory, { rust: actual.format === 'mvw-trust-rust-release', packaged: true });
+  const { manifest } = sourceManifest(directory, { rust: actual.format === 'mvw-trust-rust-release',
+    native:actual.format===require('../native-storage-abi').format, packaged: true });
   if (JSON.stringify(actual) !== JSON.stringify(manifest)) {
     throw new Error('Extracted package does not match its release manifest.');
   }
@@ -191,9 +206,9 @@ function verifyExtracted(directory = root) {
 if (require.main === module) {
   try {
     const args = process.argv.slice(2);
-    const rust = args[0] === '--rust';
-    if (args.length !== (rust ? 2 : 1)) throw new Error('Usage: npm run release:local -- <new-file.tgz> | npm run release:rust -- <new-file.tgz> | npm run release:verify');
-    console.log(JSON.stringify(args[0] === '--verify-extracted' ? verifyExtracted() : packageRelease({ target: args[rust ? 1 : 0], rust })));
+    const rust = args[0] === '--rust',native=args[0]==='--native-rust',compiled=rust||native;
+    if (args.length !== (compiled ? 2 : 1)) throw new Error('Usage: npm run release:local -- <new-file.tgz> | npm run release:rust -- <new-file.tgz> | npm run release:native-rust -- <new-file.tgz> | npm run release:verify');
+    console.log(JSON.stringify(args[0] === '--verify-extracted' ? verifyExtracted() : packageRelease({ target: args[compiled ? 1 : 0], rust,native })));
   } catch (error) {
     console.error('Packaging failed: ' + error.message);
     process.exitCode = 1;

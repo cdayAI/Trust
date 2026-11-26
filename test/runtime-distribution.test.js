@@ -83,3 +83,32 @@ test('compiled Rust release inventory binds only the fixed artifact and preserve
   assert.equal(row.sha256,contract.sha256(bytes));
   assert.equal(contract.instantiate(bytes).trust_abi(),contract.abi);
 });
+
+
+test('native release is a distinct platform-bound inventory with exactly two compiled artifacts',()=>{
+  const {existsSync}=require('node:fs');
+  const native=require('../native-storage-abi'),core=require('../rust-core-abi');
+  const directory=resolve(__dirname,'..');
+  if(process.platform!==native.target.platform||process.arch!==native.target.architecture){
+    assert.throws(()=>native.requireTarget(),/Unsupported native Rust release target/);
+    return;
+  }
+  if(!existsSync(join(directory,native.built))||!existsSync(join(directory,core.built)))return;
+  const source=sourceManifest(directory).manifest;
+  const portable=sourceManifest(directory,{rust:true}).manifest;
+  const {manifest,files}=sourceManifest(directory,{native:true});
+  assert.equal(manifest.format,native.format);
+  assert.equal(manifest.nativeAbi,native.abi);
+  assert.equal(manifest.wasmAbi,core.abi);
+  assert.deepEqual(manifest.target,native.target);
+  assert.equal(manifest.files.length,source.files.length+2);
+  assert.equal(manifest.files.length,portable.files.length+1);
+  assert.equal(source.files.some(row=>row.path.endsWith('.node')),false);
+  assert.equal(portable.files.some(row=>row.path.endsWith('.node')),false);
+  const row=manifest.files.find(row=>row.path===native.packaged);
+  const bytes=files.find(row=>row.path===native.packaged).bytes;
+  assert.equal(row.size,bytes.length);
+  assert.equal(row.sha256,require('node:crypto').createHash('sha256').update(bytes).digest('hex'));
+  native.verifyBinary(bytes);
+  assert.throws(()=>native.verifyBinary(Buffer.alloc(64)),/binary format/);
+});
