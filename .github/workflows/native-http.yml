@@ -20,12 +20,8 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown
-      - name: Bootstrap draft transport lockfile for review
-        run: |
-          if [ ! -f native-http/Cargo.lock ]; then
-            cargo +1.95.0 generate-lockfile --manifest-path native-http/Cargo.toml
-            sed 's/^/TRUST_HTTP_LOCK|/' native-http/Cargo.lock
-          fi
+      - name: Enforce committed transport dependencies
+        run: cargo +1.95.0 metadata --manifest-path native-http/Cargo.toml --locked --format-version 1 > /dev/null
       - run: npm run build:rust
       - run: npm run build:rust-sqlite
       - run: npm run build:rust-http
