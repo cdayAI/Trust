@@ -116,8 +116,24 @@ The native build requires a C compiler for bundled SQLite and the committed Carg
 lockfile. CI enforces the committed lockfile rather than resolving unreviewed
 versions at build time. Explicit
 native selection fails closed if the driver is missing or incompatible; there
-is no automatic fallback. Native release packaging and platform qualification
-are separate follow-up work.
+is no automatic fallback.
+
+### Linux x64 native Rust release
+
+After building both Rust artifacts, create a target-bound package:
+
+```sh
+npm run release:native-rust -- /private/path/mvw-trust-native-linux-x64.tgz
+```
+
+Extract into a clean private directory, run `npm run release:verify`, then
+`npm run start:release -- --check`. The manifest binds both compiled artifacts,
+the native storage ABI, the architecture and Node-API minimum. This package
+requires both the Rust core and native SQLite driver; explicitly disabling
+either is rejected. The source-only and portable Wasm variants remain separate.
+Only Linux x64 is currently included in native release verification. The digest
+checks detect corruption and are not publisher signatures; verify the archive
+digest via a trusted channel before executing the native addon.
 
 ## Next migration stages
 

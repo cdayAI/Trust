@@ -2,8 +2,14 @@
 
 const applicationId=0x4d565754;
 const schemaVersion=1;
-const selected=process.env.TRUST_SQLITE_DRIVER??'node';
-if(!['node','rust'].includes(selected))throw Error('Unsupported TRUST_SQLITE_DRIVER; expected node or rust.');
+const nativeContract=require('./native-storage-abi');
+const descriptor=nativeContract.descriptor(__dirname);
+const requested=process.env.TRUST_SQLITE_DRIVER;
+if(requested!==undefined&&!['node','rust'].includes(requested))throw Error('Unsupported TRUST_SQLITE_DRIVER; expected node or rust.');
+if(descriptor&&requested==='node')throw Error('A native Rust release cannot disable its Rust SQLite driver.');
+const selected=descriptor?'rust':requested??'node';
+// Verify a packaged artifact even when the caller has not opened a database.
+if(descriptor)nativeContract.verifyArtifact(__dirname,descriptor);
 const schema=`
           CREATE TABLE storage_mode (
             singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -65,7 +71,7 @@ let binding;
 function rustDriver(filename,readOnly){
   const fs=require('node:fs'),path=require('node:path');
   if(!binding){
-    const artifact=path.join(__dirname,'native-storage','target','release-artifact','trust_storage.node');
+    const artifact=descriptor?nativeContract.verifyArtifact(__dirname,descriptor):path.join(__dirname,nativeContract.built);
     let stat;
     try{stat=fs.lstatSync(artifact);}catch(error){
       if(error.code==='ENOENT')throw Error('Rust SQLite driver is required but not built; run npm run build:rust-sqlite.');

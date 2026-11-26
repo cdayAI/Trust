@@ -91,6 +91,7 @@
   "maturity-planning.js",
   "modules.js",
   "my-work.js",
+  "native-storage-abi.js",
   "native-storage/Cargo.lock",
   "native-storage/Cargo.toml",
   "native-storage/build.rs",

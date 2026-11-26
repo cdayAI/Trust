@@ -11,7 +11,7 @@ function releaseDescriptor(){
   try{info=fs.lstatSync(location);}catch(error){if(error.code==='ENOENT')return null;throw error;}
   if(!info.isFile()||info.nlink!==1||info.size>1024*1024)throw Error('Invalid release manifest.');
   const manifest=JSON.parse(fs.readFileSync(location,'utf8'));
-  if(manifest.format!==contract.format)return null;
+  if(![contract.format,require('./native-storage-abi').format].includes(manifest.format))return null;
   if(manifest.version!==1||manifest.wasmAbi!==contract.abi||!Array.isArray(manifest.files))throw Error('Invalid Rust release manifest.');
   const rows=manifest.files.filter(entry=>entry.path===contract.packaged);
   if(rows.length!==1||!Number.isSafeInteger(rows[0].size)||rows[0].size<1||rows[0].size>contract.maxBytes||
