@@ -25,6 +25,31 @@ jobs:
       - run: npm run build:rust
       - run: npm run build:rust-sqlite
       - run: npm run build:rust-http
+      - name: Verify packaged native listener, storage and core
+        run: |
+          set -euo pipefail
+          scratch="$(mktemp -d)"
+          trap 'rm -rf "$scratch"' EXIT
+          npm run release:native-http -- "$scratch/first.tgz"
+          npm run release:native-http -- "$scratch/second.tgz"
+          cmp "$scratch/first.tgz" "$scratch/second.tgz"
+          tar -xzf "$scratch/first.tgz" -C "$scratch"
+          cd "$scratch/package"
+          npm run release:verify
+          npm run start:release -- --check
+          if TRUST_HTTP_TRANSPORT=node node -e "require('./native-http-transport')"; then exit 1; fi
+          if TRUST_SQLITE_DRIVER=node node -e "require('./storage-driver')"; then exit 1; fi
+          if TRUST_RUST_CORE=off node -e "require('./rust-core')"; then exit 1; fi
+          artifact="native-http/runtime/trust-http"
+          cp "$artifact" "$scratch/original"
+          node -e "const fs=require('node:fs'),p=process.argv[1],b=fs.readFileSync(p);b[b.length-1]^=1;fs.writeFileSync(p,b)" "$artifact"
+          if npm run release:verify; then exit 1; fi
+          if node -e "require('./native-http-transport')"; then exit 1; fi
+          rm "$artifact"
+          if npm run release:verify; then exit 1; fi
+          if node -e "require('./native-http-transport')"; then exit 1; fi
+          cp "$scratch/original" "$artifact"
+          npm run release:verify
       - run: npm run test:rust-http
       - name: Install browser tools
         run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund

@@ -46,7 +46,7 @@ function descriptor(root){
   }
   if(!info.isFile()||info.nlink!==1||info.size>1024*1024)throw Error('Invalid release manifest.');
   const manifest=JSON.parse(fs.readFileSync(location,'utf8'));
-  if(manifest.format!==format){
+  if(![format,'mvw-trust-native-http-release'].includes(manifest.format)){
     if(fs.existsSync(path.join(root,packaged)))throw Error('Unexpected packaged native Rust SQLite artifact.');
     return null;
   }

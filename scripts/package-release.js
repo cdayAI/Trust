@@ -43,7 +43,8 @@ function readSource(directory, relative, limit=maxFileBytes) {
   return bytes;
 }
 
-function sourceManifest(directory, { rust = false, native = false, packaged = false } = {}) {
+function sourceManifest(directory, { rust = false, native = false, nativeHttp = false, packaged = false } = {}) {
+  if(nativeHttp)native=true;
   if(native)rust=true;
   const declared = JSON.parse(readSource(directory, 'scripts/release-files.json'));
   if (!Array.isArray(declared) || !declared.includes('package.json') ||
@@ -97,14 +98,25 @@ function sourceManifest(directory, { rust = false, native = false, packaged = fa
     files.push({path:nativeContract.packaged,bytes});
     files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
   }
+  let httpContract;
+  if(nativeHttp){
+    httpContract=require('../native-http-abi');httpContract.requireTarget();
+    if(files.length>=maxSourceFiles)throw Error('Native HTTP release exceeds the file inventory limit.');
+    const bytes=readSource(directory,packaged?httpContract.packaged:httpContract.built,httpContract.maxBytes);
+    httpContract.verifyBinary(bytes);loaded+=bytes.length;
+    if(loaded>maxSourceBytes)throw Error('Native HTTP release exceeds the 32 MiB total input limit.');
+    files.push({path:httpContract.packaged,bytes});
+    files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+  }
   const manifest = {
-    format: native ? nativeContract.format : rust ? contract.format : 'mvw-trust-source-release',
+    format: nativeHttp ? httpContract.format : native ? nativeContract.format : rust ? contract.format : 'mvw-trust-source-release',
     version: 1,
     package: pkg.name,
     packageVersion: pkg.version,
     node: pkg.engines.node,
     ...(rust ? { wasmAbi: contract.abi } : {}),
     ...(native ? {nativeAbi:nativeContract.abi,target:nativeContract.target}:{}),
+    ...(nativeHttp ? {httpAbi:httpContract.abi}:{}),
     files: files.map(({ path, bytes }) => ({ path, size: bytes.length, sha256: checksum(bytes) })),
   };
   return { files, manifest };
@@ -127,11 +139,11 @@ function publishNew(target, bytes) {
   }
 }
 
-function packageRelease({ directory = root, target, npm = process.env.npm_execpath, rust = false, native = false }) {
+function packageRelease({ directory = root, target, npm = process.env.npm_execpath, rust = false, native = false, nativeHttp = false }) {
   checkRuntime();
   if (typeof target !== 'string' || !target.endsWith('.tgz')) throw new Error('Provide a new .tgz output pathname.');
   if (typeof npm !== 'string' || !isAbsolute(npm)) throw new Error('Run packaging through npm run release:local.');
-  const { files, manifest } = sourceManifest(directory, { rust,native });
+  const { files, manifest } = sourceManifest(directory, { rust,native,nativeHttp });
   const temp = mkdtempSync(join(tmpdir(), 'mvw-trust-source-release-'));
   try {
     const staged = join(temp, 'workbench');
@@ -195,7 +207,7 @@ function verifyExactTree(directory, manifest) {
 function verifyExtracted(directory = root) {
   const actual = JSON.parse(readSource(directory, 'RELEASE-MANIFEST.json'));
   const { manifest } = sourceManifest(directory, { rust: actual.format === 'mvw-trust-rust-release',
-    native:actual.format==='mvw-trust-native-rust-release', packaged: true });
+    native:actual.format==='mvw-trust-native-rust-release',nativeHttp:actual.format==='mvw-trust-native-http-release', packaged: true });
   if (JSON.stringify(actual) !== JSON.stringify(manifest)) {
     throw new Error('Extracted package does not match its release manifest.');
   }
@@ -206,9 +218,9 @@ function verifyExtracted(directory = root) {
 if (require.main === module) {
   try {
     const args = process.argv.slice(2);
-    const rust = args[0] === '--rust',native=args[0]==='--native-rust',compiled=rust||native;
-    if (args.length !== (compiled ? 2 : 1)) throw new Error('Usage: npm run release:local -- <new-file.tgz> | npm run release:rust -- <new-file.tgz> | npm run release:native-rust -- <new-file.tgz> | npm run release:verify');
-    console.log(JSON.stringify(args[0] === '--verify-extracted' ? verifyExtracted() : packageRelease({ target: args[compiled ? 1 : 0], rust,native })));
+    const rust = args[0] === '--rust',native=args[0]==='--native-rust',nativeHttp=args[0]==='--native-http',compiled=rust||native||nativeHttp;
+    if (args.length !== (compiled ? 2 : 1)) throw new Error('Usage: npm run release:local -- <new-file.tgz> | npm run release:rust -- <new-file.tgz> | npm run release:native-rust -- <new-file.tgz> | npm run release:native-http -- <new-file.tgz> | npm run release:verify');
+    console.log(JSON.stringify(args[0] === '--verify-extracted' ? verifyExtracted() : packageRelease({ target: args[compiled ? 1 : 0], rust,native,nativeHttp })));
   } catch (error) {
     console.error('Packaging failed: ' + error.message);
     process.exitCode = 1;

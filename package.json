@@ -33,6 +33,7 @@
     "build:rust-http": "node scripts/rust-native-http.js build",
     "test:rust-http": "node scripts/rust-native-http.js test",
     "verify:native-release": "node scripts/verify-native-release.js",
-    "benchmark:rust": "node scripts/benchmark-rust.js"
+    "benchmark:rust": "node scripts/benchmark-rust.js",
+    "release:native-http": "node scripts/package-release.js --native-http"
   }
 }

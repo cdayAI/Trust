@@ -164,10 +164,22 @@ npm run test:rust-http
 TRUST_HTTP_TRANSPORT=rust TRUST_RUST_CORE=required TRUST_SQLITE_DRIVER=rust npm run start:release
 ```
 
-Linux developer builds only. This listener is not yet included in release
-archives. Corporate TLS/OIDC continues to use the Node listener, and arbitrary
-application mutations still execute in Node. Native HTTP is an explicit
-transport selection, not a claim of a complete standalone Rust backend.
+For an install-free Linux x64 release requiring all three compiled layers:
+
+```sh
+npm run build:rust
+npm run build:rust-sqlite
+npm run build:rust-http
+npm run release:native-http -- /private/path/mvw-trust-native-http.tgz
+```
+
+Extract, run `npm run release:verify`, then `npm run start:release -- --check`.
+The manifest binds the listener binary alongside Wasm and native SQLite.
+The launcher stages the verified executable in the private leased run folder
+and removes it on exit. This separate format cannot disable any Rust layer or
+run the direct Node listener. Corporate TLS/OIDC continues to use the separate
+Node listener; arbitrary application mutations still execute in Node. The
+native HTTP package remains Linux x64 only pending additional qualification.
 
 ## Next migration stages
 

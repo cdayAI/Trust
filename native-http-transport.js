@@ -1,5 +1,5 @@
 'use strict';
-// Developer-only native transport, with a private, nonce-authenticated Unix
+// Native transport, with a private, nonce-authenticated Unix
 // socket to the existing application handler. Never binds a public interface.
 const {spawn}=require('node:child_process');
 const {lstatSync}=require('node:fs');
@@ -7,21 +7,40 @@ const fs=require('node:fs/promises');
 const {join}=require('node:path');
 const {once}=require('node:events');
 const {randomBytes}=require('node:crypto');
-const selected=process.env.TRUST_HTTP_TRANSPORT??'node';
-if(!['node','rust'].includes(selected))throw Error('Unsupported TRUST_HTTP_TRANSPORT; expected node or rust.');
+const contract=require('./native-http-abi'),descriptor=contract.descriptor(__dirname);
+const choice=process.env.TRUST_HTTP_TRANSPORT;
+if(choice!==undefined&&!['node','rust'].includes(choice))throw Error('Unsupported TRUST_HTTP_TRANSPORT; expected node or rust.');
+if(descriptor&&choice==='node')throw Error('A native HTTP release cannot disable its Rust listener.');
+const selected=descriptor?'rust':choice??'node';
+if(descriptor)contract.bytesFor(__dirname,descriptor);
 function requested(){return selected==='rust';}
 function provision(room){
   if(!requested())return null;
   if(process.platform!=='linux')throw Error('Native HTTP transport is currently qualified only on Linux.');
-  const executable=join(__dirname,'native-http','target','release-artifact','trust-http');
-  const stat=lstatSync(executable);
-  if(!stat.isFile()||stat.nlink!==1||stat.size<1||stat.size>32*1024*1024||(stat.mode&0o022))
-    throw Error('Invalid native HTTP executable.');
+  const executable=descriptor?join(room,'http-listener'):join(__dirname,contract.built);
+  if(!descriptor){
+    const stat=lstatSync(executable);
+    if(!stat.isFile()||stat.nlink!==1||stat.size<1||stat.size>32*1024*1024||(stat.mode&0o022))
+      throw Error('Invalid native HTTP executable.');
+  }
   const socket=join(room,'http.sock');
   if(Buffer.byteLength(socket)>100)throw Error('Private HTTP socket path is too long.');
   const token=randomBytes(32).toString('hex');
-  let endpoint,child,exited,stopping=false,stopped;
+  let endpoint,child,exited,stopping=false,stopped,staged=false;
   async function listen(server,port){
+    if(descriptor){
+      let old;
+      try{old=await fs.lstat(executable);}catch(error){if(error.code!=='ENOENT')throw error;}
+      if(old){
+        if(!old.isFile()||old.nlink!==1||old.uid!==process.getuid()||(old.mode&0o077))
+          throw Error('Unsafe stale native HTTP executable.');
+        await fs.unlink(executable);
+      }
+      const bytes=contract.bytesFor(__dirname,descriptor);
+      const file=await fs.open(executable,'wx',0o700);
+      staged=true;
+      try{await file.writeFile(bytes);await file.sync();}finally{await file.close();}
+    }
     let previous;
     try{previous=await fs.lstat(socket);}catch(error){if(error.code!=='ENOENT')throw error;}
     if(previous){
@@ -63,13 +82,14 @@ function provision(room){
     if(stopped)return stopped;
     stopping=true;
     stopped=(async()=>{
-      if(!child)return;
-      child.stdin.end();
       let timer;
       try{
-        await Promise.race([exited,new Promise(resolve=>{timer=setTimeout(()=>{child.kill('SIGKILL');resolve();},2000);})]);
-        await exited;
-      }finally{clearTimeout(timer);}
+        if(child){
+          child.stdin.end();
+          await Promise.race([exited,new Promise(resolve=>{timer=setTimeout(()=>{child.kill('SIGKILL');resolve();},2000);})]);
+          await exited;
+        }
+      }finally{clearTimeout(timer);if(staged)await fs.rm(executable,{force:true});}
     })();
     return stopped;
   }
