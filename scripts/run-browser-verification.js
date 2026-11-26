@@ -14,7 +14,13 @@ async function runAudit(shard,env,test){
   const suites=(await readdir(join(__dirname,'..','test'))).filter(x=>/^[a-z0-9-]+\.test\.js$/.test(x)).sort();
   const focus=['governance-document-attachments.test.js','attachment-binary-batch.test.js','api.test.js','access-policy.test.js','workspace-access.test.js','document-review-seats.test.js','rights-case-scope.test.js','rights-deadline-policy.test.js','workflow-engine.test.js','workflow-http.test.js','assessment-config.test.js','processing-register.test.js','reporting.test.js','reporting-runs.test.js','report-schedules.test.js','durable-storage.test.js','storage-encryption.test.js','native-storage.test.js','evidence-recovery.test.js','fixture-migration.test.js','incident-policy.test.js','browser-concurrent-review.test.js','browser-release-processing-rework.test.js','browser-release-report-schedule-race.test.js'];
   if(!suites.length||suites.length>99||focus.some(x=>!suites.includes(x)))throw Error('The current test inventory does not fit the audit.');
-  const plan=suites.map(suite=>({suite,mode:suite==='native-storage.test.js'?'native':suite==='rust-core.test.js'?'wasm':'auto'}));
+  const plan=suites.map(suite=>{
+    if(suite==='release-upgrade.test.js'&&!env.MVW_TRUST_STAGE20_ARCHIVE){
+      console.log('Optional stage20 upgrade rehearsal not executable: pinned external archive was not supplied. Its slot runs the current native release-launcher suite instead.');
+      return {suite:'release-launcher.test.js',mode:'native'};
+    }
+    return {suite,mode:suite==='native-storage.test.js'?'native':suite==='rust-core.test.js'?'wasm':'auto'};
+  });
   for(let i=0;plan.length<99;i++)plan.push({suite:focus[i%focus.length],mode:'native'});
   plan.push({suite:null,mode:'auto'});
   let passed=0;
