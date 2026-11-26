@@ -24,6 +24,8 @@
     "release:verify": "node scripts/package-release.js --verify-extracted",
     "benchmark:local": "node scripts/benchmark-local.js",
     "build:rust": "node scripts/rust-core.js build",
-    "test:rust": "node scripts/rust-core.js test"
+    "test:rust": "node scripts/rust-core.js test",
+    "release:rust": "node scripts/package-release.js --rust",
+    "start:rust": "node scripts/rust-core.js start"
   }
 }

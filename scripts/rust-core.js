@@ -12,11 +12,13 @@ try{
     run('cargo',['+1.85.1','build','--manifest-path','rust-core/Cargo.toml','--target-dir','rust-core/target',
       '--locked','--offline','--release','--target','wasm32-unknown-unknown']);
     run(process.execPath,['-e',"if(!require('./rust-core').enabled)throw Error('Rust core is inactive')"],{...process.env,TRUST_RUST_CORE:'required'});
+  }else if(process.argv[2]==='start'){
+    run(process.execPath,['start-release.js',...process.argv.slice(3)],{...process.env,TRUST_RUST_CORE:'required'});
   }else if(process.argv[2]==='test'){
     run(process.execPath,['--test','--test-concurrency=2','--test-timeout=90000',
       'test/rust-core.test.js','test/governance-document-attachments.test.js','test/api.test.js',
       'test/rights-deadline-policy.test.js','test/fixture-migration.test.js','test/data-dictionary.test.js',
       'test/discovery-import.test.js','test/processing-register.test.js','test/evidence-disposition.test.js','test/attachment-binary-batch.test.js','test/workflow-engine.test.js','test/workflow-http.test.js','test/access-policy.test.js','test/workspace-access.test.js','test/document-review-seats.test.js','test/vendor-engagements.test.js','test/reporting.test.js','test/reporting-runs.test.js','test/report-schedules.test.js'],
       {...process.env,TRUST_RUST_CORE:'required'});
-  }else throw Error('Usage: npm run build:rust | npm run test:rust');
+  }else throw Error('Usage: npm run build:rust | npm run test:rust | npm run start:rust');
 }catch(error){console.error(error.message);process.exitCode=1;}

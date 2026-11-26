@@ -43,11 +43,14 @@ function readSource(directory, relative) {
   return bytes;
 }
 
-function sourceManifest(directory) {
+function sourceManifest(directory, { rust = false, packaged = false } = {}) {
   const declared = JSON.parse(readSource(directory, 'scripts/release-files.json'));
   if (!Array.isArray(declared) || !declared.includes('package.json') ||
       new Set(declared).size !== declared.length || declared.length > maxSourceFiles) {
     throw new Error('Invalid release inventory.');
+  }
+  if (declared.some(path => typeof path !== 'string' || /\.wasm$/i.test(path) || path.startsWith('rust-core/target/'))) {
+    throw new Error('Only explicit Rust source files may appear in the source inventory.');
   }
   const paths = declared.sort();
   let total = 0;
@@ -70,12 +73,24 @@ function sourceManifest(directory) {
   if (!pkg.private || Object.keys(pkg.dependencies ?? {}).length || Object.keys(pkg.optionalDependencies ?? {}).length) {
     throw new Error('This release command requires a private, install-free runtime package.');
   }
+  let contract;
+  if (rust) {
+    contract = require('../rust-core-abi');
+    if (files.length >= maxSourceFiles) throw new Error('Rust release exceeds the file inventory limit.');
+    const bytes = readSource(directory, packaged ? contract.packaged : contract.built);
+    contract.instantiate(bytes);
+    loaded += bytes.length;
+    if (loaded > maxSourceBytes) throw new Error('Rust release exceeds the 32 MiB total input limit.');
+    files.push({ path: contract.packaged, bytes });
+    files.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+  }
   const manifest = {
-    format: 'mvw-trust-source-release',
+    format: rust ? contract.format : 'mvw-trust-source-release',
     version: 1,
     package: pkg.name,
     packageVersion: pkg.version,
     node: pkg.engines.node,
+    ...(rust ? { wasmAbi: contract.abi } : {}),
     files: files.map(({ path, bytes }) => ({ path, size: bytes.length, sha256: checksum(bytes) })),
   };
   return { files, manifest };
@@ -98,11 +113,11 @@ function publishNew(target, bytes) {
   }
 }
 
-function packageRelease({ directory = root, target, npm = process.env.npm_execpath }) {
+function packageRelease({ directory = root, target, npm = process.env.npm_execpath, rust = false }) {
   checkRuntime();
   if (typeof target !== 'string' || !target.endsWith('.tgz')) throw new Error('Provide a new .tgz output pathname.');
   if (typeof npm !== 'string' || !isAbsolute(npm)) throw new Error('Run packaging through npm run release:local.');
-  const { files, manifest } = sourceManifest(directory);
+  const { files, manifest } = sourceManifest(directory, { rust });
   const temp = mkdtempSync(join(tmpdir(), 'mvw-trust-source-release-'));
   try {
     const staged = join(temp, 'workbench');
@@ -165,7 +180,7 @@ function verifyExactTree(directory, manifest) {
 
 function verifyExtracted(directory = root) {
   const actual = JSON.parse(readSource(directory, 'RELEASE-MANIFEST.json'));
-  const { manifest } = sourceManifest(directory);
+  const { manifest } = sourceManifest(directory, { rust: actual.format === 'mvw-trust-rust-release', packaged: true });
   if (JSON.stringify(actual) !== JSON.stringify(manifest)) {
     throw new Error('Extracted package does not match its release manifest.');
   }
@@ -176,8 +191,9 @@ function verifyExtracted(directory = root) {
 if (require.main === module) {
   try {
     const args = process.argv.slice(2);
-    if (args.length !== 1) throw new Error('Usage: npm run release:local -- <new-file.tgz> | npm run release:verify');
-    console.log(JSON.stringify(args[0] === '--verify-extracted' ? verifyExtracted() : packageRelease({ target: args[0] })));
+    const rust = args[0] === '--rust';
+    if (args.length !== (rust ? 2 : 1)) throw new Error('Usage: npm run release:local -- <new-file.tgz> | npm run release:rust -- <new-file.tgz> | npm run release:verify');
+    console.log(JSON.stringify(args[0] === '--verify-extracted' ? verifyExtracted() : packageRelease({ target: args[rust ? 1 : 0], rust })));
   } catch (error) {
     console.error('Packaging failed: ' + error.message);
     process.exitCode = 1;

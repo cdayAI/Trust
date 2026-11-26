@@ -161,6 +161,7 @@
   "rights-retrieval.js",
   "rights-workflow.js",
   "risk-controls.js",
+  "rust-core-abi.js",
   "rust-core.js",
   "rust-core/Cargo.lock",
   "rust-core/Cargo.toml",

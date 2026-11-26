@@ -2,21 +2,45 @@
 // Local, synchronous ABI. No callbacks/imports, no network, and no native addon.
 const fs=require('node:fs');
 const path=require('node:path');
-const mode=process.env.TRUST_RUST_CORE??'auto';
-if(!['auto','off','required'].includes(mode))throw Error('TRUST_RUST_CORE must be auto, off or required.');
-const artifact=path.join(__dirname,'rust-core','target','wasm32-unknown-unknown','release','trust_core.wasm');
+const contract=require('./rust-core-abi');
+const requested=process.env.TRUST_RUST_CORE??'auto';
+if(!['auto','off','required'].includes(requested))throw Error('TRUST_RUST_CORE must be auto, off or required.');
+function releaseDescriptor(){
+  const location=path.join(__dirname,'RELEASE-MANIFEST.json');
+  let info;
+  try{info=fs.lstatSync(location);}catch(error){if(error.code==='ENOENT')return null;throw error;}
+  if(!info.isFile()||info.nlink!==1||info.size>1024*1024)throw Error('Invalid release manifest.');
+  const manifest=JSON.parse(fs.readFileSync(location,'utf8'));
+  if(manifest.format!==contract.format)return null;
+  if(manifest.version!==1||manifest.wasmAbi!==contract.abi||!Array.isArray(manifest.files))throw Error('Invalid Rust release manifest.');
+  const rows=manifest.files.filter(entry=>entry.path===contract.packaged);
+  if(rows.length!==1||!Number.isSafeInteger(rows[0].size)||rows[0].size<1||rows[0].size>contract.maxBytes||
+    typeof rows[0].sha256!=='string'||!/^[a-f0-9]{64}$/.test(rows[0].sha256))throw Error('Invalid Rust release artifact descriptor.');
+  return rows[0];
+}
+const descriptor=releaseDescriptor();
+if(descriptor&&requested==='off')throw Error('A compiled Rust release cannot disable its Rust core. Use the separate source release for rollback.');
+const mode=descriptor?'required':requested;
+const artifact=path.join(__dirname,...(descriptor?contract.packaged:contract.built).split('/'));
 let core;
 if(mode!=='off'){
   let bytes;
-  try{bytes=fs.readFileSync(artifact);}
-  catch(error){if(error.code!=='ENOENT'||mode==='required')throw Error('Rust core artifact unavailable. Run npm run build:rust.',{cause:error});}
+  try{
+    if(descriptor){
+      for(const directory of ['rust-core','rust-core/runtime']){
+        const info=fs.lstatSync(path.join(__dirname,...directory.split('/')));
+        if(!info.isDirectory())throw Error('Unsafe Rust release artifact directory.');
+      }
+      const info=fs.lstatSync(artifact);
+      if(!info.isFile()||info.nlink!==1||info.size!==descriptor.size)throw Error('Rust release artifact size mismatch.');
+    }
+    bytes=fs.readFileSync(artifact);
+  }catch(error){
+    if(error.code!=='ENOENT'||mode==='required')throw Error('Rust core artifact unavailable or invalid.',{cause:error});
+  }
   if(bytes){
-    const module=new WebAssembly.Module(bytes);
-    if(WebAssembly.Module.imports(module).length)throw Error('The Rust core must not import host capabilities.');
-    core=new WebAssembly.Instance(module,{}).exports;
-    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==5||
-      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout','trust_workflow_permission','trust_risk_score','trust_link_status','trust_reductions','trust_account_live','trust_cookie','trust_report','trust_routes_init','trust_authorize'].some(key=>typeof core[key]!=='function'))
-      throw Error('Incompatible Rust core ABI. Rebuild the Rust core.');
+    if(descriptor&&(bytes.length!==descriptor.size||contract.sha256(bytes)!==descriptor.sha256))throw Error('Rust release artifact digest mismatch.');
+    core=contract.instantiate(bytes);
   }
 }
 const maxBuffer=8*1024*1024;
