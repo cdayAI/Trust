@@ -2,8 +2,8 @@
 const rust=require('./rust-core');
 const {loopbackAddresses}=require('./operational-health');
 // Reference mode and the compiled core preserve the same status precedence.
-function connection(req,oidc){
-  const {host}=req.headers,remote=req.socket.remoteAddress;
+function connection(req,oidc,remote=req.socket.remoteAddress){
+  const {host}=req.headers;
   if(rust.enabled)return rust.httpConnection(remote,host,req.url,oidc?.host,!!req.socket.encrypted,!!oidc?.secure);
   if(!loopbackAddresses.has(remote))return 1;
   if(oidc){

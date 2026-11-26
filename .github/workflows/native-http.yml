@@ -1,0 +1,40 @@
+name: Native Rust HTTP transport
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  native-http:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238
+        with:
+          node-version: 24.22.3
+      - name: Install pinned compilers
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup toolchain install 1.85.1 --profile minimal --target wasm32-unknown-unknown
+      - name: Bootstrap draft transport lockfile for review
+        run: |
+          if [ ! -f native-http/Cargo.lock ]; then
+            cargo +1.95.0 generate-lockfile --manifest-path native-http/Cargo.toml
+            sed 's/^/TRUST_HTTP_LOCK|/' native-http/Cargo.lock
+          fi
+      - run: npm run build:rust
+      - run: npm run build:rust-sqlite
+      - run: npm run build:rust-http
+      - run: npm run test:rust-http
+      - name: Install browser tools
+        run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund
+      - name: Verify Chromium journeys through native listener
+        env:
+          TRUST_HTTP_TRANSPORT: rust
+          TRUST_RUST_CORE: required
+          TRUST_SQLITE_DRIVER: rust
+        run: npm run test:browser -- test/browser-isolated-release-nav.test.js test/browser-release-processing-rework.test.js test/browser-release-report-schedule-race.test.js

@@ -21,3 +21,4 @@ RELEASE-MANIFEST.json
 /rust-core/target/
 
 /native-storage/target/
+/native-http/target/

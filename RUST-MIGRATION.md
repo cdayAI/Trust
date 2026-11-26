@@ -138,6 +138,28 @@ Only Linux x64 is currently included in native release verification. The digest
 checks detect corruption and are not publisher signatures; verify the archive
 digest via a trusted channel before executing the native addon.
 
+## Native HTTP transport (developer opt-in)
+
+The native Hyper listener binds IPv4 loopback only. A private Unix-domain
+socket in the owner-only, leased release directory connects to the existing
+Node application handler. A random per-launch marker travels through an
+inherited pipe and is required on every internal request. Direct private
+requests, forwarded identity and browser-supplied markers are refused or
+discarded. Connections and request lifetimes are bounded; Hyper owns HTTP
+framing, while the application retains body limits, authentication, audit
+writes and domain logic.
+
+```sh
+npm run build:rust-http
+npm run test:rust-http
+TRUST_HTTP_TRANSPORT=rust TRUST_RUST_CORE=required TRUST_SQLITE_DRIVER=rust npm run start:release
+```
+
+Linux developer builds only. This listener is not yet included in release
+archives. Corporate TLS/OIDC continues to use the Node listener, and arbitrary
+application mutations still execute in Node. Native HTTP is an explicit
+transport selection, not a claim of a complete standalone Rust backend.
+
 ## Next migration stages
 
 1. Extend archive malformed-input fuzzing and performance comparisons before

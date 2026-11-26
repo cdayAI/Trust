@@ -227,11 +227,11 @@ async function launch({port,check,resume}){
   const parent=resume?null:await fs.realpath(tmpdir());
   if(parent&&within(source,parent))throw new Error('The OS temporary directory must be outside the release source.');
   const room=resume?await savedRoom(resume,source):await fs.mkdtemp(join(parent,'mvw-trust-release-'));
-  let server,announced=false,stopping=false,stopped,signal,closing,release,leaseTimer,wroteAccess=false,cleaned=false;
+  let server,transport,announced=false,stopping=false,stopped,signal,closing,release,leaseTimer,wroteAccess=false,cleaned=false;
   const accessFile=join(room,'synthetic-access.json');
   const sqliteFile=join(room,'workspace.sqlite');
   const cleanup=async()=>{if(!cleaned){await fs.rm(room,{recursive:true,force:true,maxRetries:2});cleaned=true;}};
-  const drain=()=>closing??=close(server);
+  const drain=()=>closing??=(async()=>{try{await transport?.stop();}finally{await close(server);}})();
   try{
     if(!resume&&process.platform!=='win32')await fs.chmod(room,0o700);
     release=await releaseLease(room,!resume);
@@ -239,7 +239,9 @@ async function launch({port,check,resume}){
     if(resume)await checkSavedState(room,sqliteFile,seed);
     const validUntil=Date.now()+leaseTime,{credentials,isolated}=localFixture(room,seed,validUntil);
     const {createServer}=require('./server');
-    server=createServer({dataFile:join(room,'unused-demo.json'),sqliteFile,isolated});
+    transport=require('./native-http-transport').provision(room);
+    server=createServer({dataFile:join(room,'unused-demo.json'),sqliteFile,isolated,
+      ...(transport?{internalTransport:transport}:{})});
     stopped=new Promise(resolve=>{
       signal=()=>{stopping=true;void drain().then(resolve);};
       process.on('SIGINT',signal);
@@ -247,8 +249,11 @@ async function launch({port,check,resume}){
       leaseTimer=setTimeout(signal,Math.max(0,validUntil-Date.now()));
       leaseTimer.unref();
     });
-    await once(server.listen(port,host),'listening');
-    const url=await verified(server,credentials,resume);
+    if(transport){
+      await transport.listen(server,port);
+      transport.unexpectedExit(()=>{process.exitCode=1;signal();});
+    }else await once(server.listen(port,host),'listening');
+    const url=await verified(transport??server,credentials,resume);
     if(stopping)return;
     if(!resume)bindFreshState(sqliteFile,seed);
     if(check){

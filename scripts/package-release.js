@@ -50,7 +50,7 @@ function sourceManifest(directory, { rust = false, native = false, packaged = fa
       new Set(declared).size !== declared.length || declared.length > maxSourceFiles) {
     throw new Error('Invalid release inventory.');
   }
-  if (declared.some(path => typeof path !== 'string' || /\.wasm$/i.test(path) || path.startsWith('rust-core/target/') || path.startsWith('native-storage/target/') || /\.node$/i.test(path))) {
+  if (declared.some(path => typeof path !== 'string' || /\.wasm$/i.test(path) || path.startsWith('rust-core/target/') || path.startsWith('native-storage/target/') || path.startsWith('native-http/target/') || /\.node$/i.test(path))) {
     throw new Error('Only explicit Rust source files may appear in the source inventory.');
   }
   const paths = declared.sort();

@@ -1,5 +1,6 @@
 'use strict';
 const requestBoundary=require('./http-boundary');
+const {timingSafeEqual}=require('node:crypto');
 const http = require('node:http');
 const https = require('node:https');
 const {createOperations,launchLocalServer,loopbackAddresses}=require('./operational-health');
@@ -109,7 +110,10 @@ async function readBody(req,limit=32768) {
   try { return bytes.length?parseJsonBytes(bytes):{}; }
   catch { throw Object.assign(new Error('Invalid JSON.'),{status:400}); }
 }
-function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false,reportWorkerWorkspace}={}) {
+function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'data','state.json'),sqliteFile,isolated,corporate,tls,operationalEvents=false,reportWorkerWorkspace,internalTransport}={}) {
+  if(internalTransport&&(!isolated||sqliteFile===undefined||corporate!==undefined||tls||reportWorkerWorkspace||
+    typeof internalTransport.token!=='string'||!/^[a-f0-9]{64}$/.test(internalTransport.token)||typeof internalTransport.address!=='function'))
+    throw Error('Private native HTTP transport requires an isolated synthetic SQLite application.');
   const workerSpace=reportScheduler.provision(reportWorkerWorkspace,{isolated,corporate,sqliteFile});
   const pageWorkQueue=queuePager();
   const reviewerSeats=documentReviewSeats.provision(isolated,corporate===undefined);
@@ -181,7 +185,16 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
   const handler=async (req,res)=>{
     let countedBatch=false;
     try {
-      const connectionDecision=requestBoundary.connection(req,oidc);
+      let peer=req.socket.remoteAddress;
+      if(internalTransport){
+        const token=req.headers['x-mvw-trust-internal'];
+        if(peer!==undefined||typeof token!=='string'||!/^[a-f0-9]{64}$/.test(token)||
+          !timingSafeEqual(Buffer.from(token),Buffer.from(internalTransport.token)))
+          return send(res,403,{error:'Private application transport required.'});
+        delete req.headers['x-mvw-trust-internal'];
+        peer='127.0.0.1';
+      }
+      const connectionDecision=requestBoundary.connection(req,oidc,peer);
       if(connectionDecision===1)return send(res,403,{error:'Only loopback access is allowed.'});
       if(connectionDecision===2)return send(res,403,{error:'Invalid application origin.'});
       const {pathname,searchParams,search}=new URL(req.url,'http://localhost');
@@ -215,7 +228,7 @@ function createServer({dataFile=process.env.DATA_FILE || path.join(__dirname,'da
         if(searchParams.size)return send(res,404,{error:'Not found.'});
         if(req.method!=='GET')return send(res,405,{error:'Method not allowed.'},undefined,{Allow:'GET'});
         if(pathname==='/health/live')return send(res,200,{status:'live'});
-        const result=await operations.ready(server.address());
+        const result=await operations.ready(internalTransport?internalTransport.address():server.address());
         return send(res,result.status==='ready'?200:503,result);
       }
       const visit=pathname.match(/^\/api\/trust-center-visitor\/(sample-[a-z0-9-]{1,32})$/);
