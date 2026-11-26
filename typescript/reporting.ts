@@ -47,7 +47,7 @@ const activityWorkflows=new Map([
 const stageAliases=new Map([['in_review','in-review'],['review','in-review']]);
 const canReport=(role:string)=>role==='analyst'||role==='reviewer';
 const own=(object:object,key:PropertyKey)=>Object.hasOwn(object,key);
-const bad=(message:string):never=>{throw Object.assign(Error(message),{status:422,code:'INVALID_REPORT_FILTER'});};
+function bad(message:string):never{throw Object.assign(Error(message),{status:422,code:'INVALID_REPORT_FILTER'});}
 
 function dayValue(value:unknown):string|null {
   if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||value<'0001-01-01')return null;
