@@ -143,3 +143,47 @@ test('benchmark uses bounded fixtures, returns a complete result, and rejects ex
     assert.match(denied.stderr,/^Usage:/);
   }
 });
+
+
+test('committed snapshot cache never trusts a stale generation and keeps retained projections immutable',()=>{
+  const {createSnapshotReader,isCachedSnapshot}=require('../snapshot-reader');
+  let generation=1,reads=0,stored={audit:[{action:'one'}],rightsCases:[{id:'a'}]};
+  const storage={readSince(kind,known){
+    assert.equal(kind,'workbench');reads++;
+    return known===generation?{generation}:{generation,payload:structuredClone(stored)};
+  }};
+  const reader=createSnapshotReader(storage,()=>({audit:[],rightsCases:[]}));
+  const first=reader.read().payload;
+  assert.equal(isCachedSnapshot(first),true);
+  assert.equal(reader.read().payload,first);assert.equal(reads,2);
+  assert.throws(()=>first.audit.push({action:'injected'}),TypeError);
+  assert.throws(()=>{first.rightsCases[0].id='changed'},TypeError);
+  generation++;stored={...stored,rightsCases:[{id:'b'}]};
+  const second=reader.read().payload;assert.notEqual(second,first);assert.equal(second.rightsCases[0].id,'b');
+  assert.equal(first.rightsCases[0].id,'a');
+  generation=0;const missing=reader.read().payload;assert.equal(isCachedSnapshot(missing),false);
+  assert.notEqual(reader.read().payload,missing);
+  generation=3;stored={audit:[],rightsCases:[{id:'c'}]};
+  assert.equal(reader.read().payload.rightsCases[0].id,'c');
+});
+
+test('cached report rows agree with uncached records and activity, including changed generations and audit slices',()=>{
+  const {createSnapshotReader}=require('../snapshot-reader');
+  const reporting=require('../reporting');
+  let generation=1,stored={assessments:[{id:'a',status:'draft'}],rightsCases:[{status:'received',receivedAt:'2026-01-02'}],
+    audit:[{action:'assessment.created',entityId:'a',at:'2026-01-01'},{action:'rights.case.opened',at:'2026-01-02'}]};
+  const reader=createSnapshotReader({readSince(_kind,known){return known===generation?{generation}:{generation,payload:structuredClone(stored)};}},()=>({}));
+  const verify=()=>{
+    const state=reader.read().payload;
+    for(const dataset of ['records','activity'])for(const workflow of ['all','assessments','rights']){
+      const params=new URLSearchParams({dataset,workflow,group:'workflow'});
+      const options={generatedAt:'2026-01-01T00:00:00.000Z'};
+      const audit=Object.freeze(state.audit.slice());
+      const expected=reporting.report(structuredClone(state),structuredClone(audit),params,options);
+      assert.deepEqual(reporting.report(state,audit,params,options),expected);
+      assert.deepEqual(reporting.report(state,audit,params,options),expected);
+      assert.deepEqual(reporting.report(state,[],params,options),reporting.report(structuredClone(state),[],params,options));
+    }
+  };
+  verify();generation++;stored.rightsCases.push({status:'fulfilled',receivedAt:'2026-01-03'});verify();
+});

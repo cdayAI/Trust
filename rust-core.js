@@ -229,7 +229,8 @@ function aggregateReport(source,filters,vocabulary){
   const w=dimension(vocabulary.workflow,workflow),s=dimension(vocabulary.stage,stage),o=dimension(vocabulary.outcome,outcome);
   const g=groups.indexOf(group),first=day(from),last=day(to);
   if(g<0||vocabulary.workflow.length>31)throw Error('Invalid Rust reporting dimensions.');
-  const maxRows=16384,buffer=Buffer.alloc(maxRows*16);
+  const maxRows=16384,capacity=Array.isArray(source)?Math.max(1,Math.min(maxRows,source.length)):maxRows;
+  const buffer=Buffer.alloc(capacity*16);
   let count=0,total=0,undated=0,areas=0;
   const buckets=new Map();
   function flush(){
@@ -250,8 +251,12 @@ function aggregateReport(source,filters,vocabulary){
   for(const row of source){
     const w=dimension(vocabulary.workflow,row.workflow),s=dimension(vocabulary.stage,row.stage),o=dimension(vocabulary.outcome,row.outcome);
     if(!w)throw Error('Unknown Rust report workflow.');
-    for(const [i,value] of [w,s,o,day(row.day)].entries())buffer.writeUInt32LE(value,count*16+i*4);
-    if(++count===maxRows)flush();
+    const at=count*16;
+    buffer.writeUInt32LE(w,at);
+    buffer.writeUInt32LE(s,at+4);
+    buffer.writeUInt32LE(o,at+8);
+    buffer.writeUInt32LE(day(row.day),at+12);
+    if(++count===capacity)flush();
   }
   flush();
   const names=new Map();

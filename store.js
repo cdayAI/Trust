@@ -1,4 +1,5 @@
 'use strict';
+const {createSnapshotReader,isCachedSnapshot}=require('./snapshot-reader');
 const fs = require('node:fs');
 const path = require('node:path');
 const {createHash,randomUUID} = require('node:crypto');
@@ -202,6 +203,9 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   let state;
   const fresh=()=>empty?{version:1,actors,projects:[],vendors:[],assessments:[],handoff:[],audit:[]}:seed();
   const workbench='workbench';
+  const snapshotCache=process.env.TRUST_SNAPSHOT_CACHE??'on';
+  if(!['on','off'].includes(snapshotCache))throw Error('TRUST_SNAPSHOT_CACHE must be on or off.');
+  const readCache=storage&&snapshotCache==='on'?createSnapshotReader(storage,fresh):null;
   function initialize(stored){
     state=stored;
     if(state===undefined){
@@ -324,6 +328,12 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   const applyProgram = (snapshot, parts, actor, body, appendEvent, account) =>
     programs.get(parts[0]).change(snapshot, parts, actor, body, appendEvent, createVendorAssessments, account, documentCapabilities);
   let membershipGeneration=-1, membershipState={};
+  let reportAuditCache;
+  function reportAudit(){
+    if(!isCachedSnapshot(state))return state.audit.filter(e=>!excludedAudit(e));
+    if(reportAuditCache?.snapshot!==state)reportAuditCache={snapshot:state,audit:Object.freeze(state.audit.filter(e=>!excludedAudit(e)))};
+    return reportAuditCache.audit;
+  }
   const operations={
     groupGovernanceView:context=>groupGovernance.operatorView(state,context),
     scopedApplications:context=>groupGovernance.list(state,context),
@@ -349,7 +359,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
     },
     identityMembership(id){
       if(!storage)return identityAdmin.record(state,id);
-      const {generation,payload}=storage.readSince(workbench,membershipGeneration);
+      const {generation,payload}=readCache?readCache.read():storage.readSince(workbench,membershipGeneration);
       if(generation!==membershipGeneration){
         // Keep only the identity projection, not a second workbench snapshot.
         membershipState={identityAdministration:payload?.identityAdministration};
@@ -636,7 +646,7 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
       persist(next);state=next;
       return bytes;
     },
-    reportSnapshot:()=>({state,audit:state.audit.filter(e=>!excludedAudit(e))}),
+    reportSnapshot:()=>({state,audit:reportAudit()}),
     change(parts,actor,body,account,generation,rightsContext,docReview) {
       if(generation!==undefined)requireCurrentOperatorSession({account,generation});
       if(rightsContext?.role==='case-operator')rightsCaseScope.verifyTarget(state,rightsContext,parts[2]);
@@ -689,8 +699,16 @@ function openStore(file,{empty=false,storage,scopeDocuments=false,manualAttachme
   };
   if(!storage)return operations;
   const mutations=new Set(['assignDocumentReviewer','directoryChange','changeDiscoveryRun','openAssessmentIncident','changeRequesterRelease','changeRightsRetrieval','changeRequesterIntakeForm','pinReportRun','createRightsIntake','changeReportSchedule','runReportScheduleWorker','delegateRightsCase','readCaseDocument','documentAccessTransition','changeOperatorJob','groupGovernanceChange','identityAdminChange','employeeAssign','employeeConfirm','trainingAdmin','trainingProgress','portalIntake','changeEthics','change']);
+  // These operations are read-only and may share an immutable snapshot.
+  // Other operations retain the original fresh-read behavior.
+  const cachedReads=new Set(['getState','reportSnapshot','publicState','getRightsIntake','getRights','caseOperatorState','visibleAudit']);
   return Object.fromEntries(Object.entries(operations).map(([name,fn])=>[name,(...args)=>{
     if(!mutations.has(name)){
+      if(readCache&&cachedReads.has(name)){
+        const {generation,payload}=readCache.read();
+        state=payload;
+        return name==='getRightsIntake'?fn(...args,generation):fn(...args);
+      }
       if(name==='getRightsIntake'){
         const {generation,payload}=storage.readSince(workbench,-1);
         state=payload??fresh();

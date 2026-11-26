@@ -7,7 +7,10 @@
   "native-storage-abi.js",
   "public/employee.js",
   "public/trust-center-visitor.js",
+  "reporting.js",
   "rust-core-abi.js",
   "scripts/runtime-check.js",
+  "snapshot-reader.js",
+  "storage-driver.js",
   "workspace-home.js"
 ]

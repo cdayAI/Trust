@@ -20,6 +20,6 @@ jobs:
       - run: npm run typecheck
       - run: npm run verify:typescript
       - run: npm run verify:startup -- --sqlite
-      - run: node --test test/api.test.js test/access-policy.test.js test/attachment-binary-batch.test.js test/assessment-config.test.js test/workspace-home.test.js test/employee-attestations.test.js test/trust-center.test.js test/runtime-distribution.test.js
+      - run: node --test test/api.test.js test/access-policy.test.js test/attachment-binary-batch.test.js test/assessment-config.test.js test/workspace-home.test.js test/employee-attestations.test.js test/trust-center.test.js test/runtime-distribution.test.js test/local-performance.test.js test/reporting.test.js test/native-storage.test.js
       - run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund
       - run: npm run test:browser -- test/browser-portal-controls.test.js test/browser-acceptance.test.js test/employee-attestations.test.js test/trust-center.test.js

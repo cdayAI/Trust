@@ -28,3 +28,16 @@ TypeScript and compares committed output byte-for-byte, then runs existing
 API, Chromium, native release and recovery checks. No runtime dependency
 changes or production deployment. Remaining JavaScript modules are not
 claimed migrated, and the current SQLite snapshot schema is unchanged.
+
+## Storage and reporting optimization
+
+Strict storage-driver and report contracts validate the boundary to SQLite,
+including the native driver. The generation-aware read cache retains one
+immutable committed workbench snapshot per store, checks SQLite on every
+read, and never supplies cached data to a write transaction. Report rows
+are indexed by workflow only for the same immutable snapshot and filtered
+audit reference. Role, scope, current dates, and authorization remain live.
+The Wasm bridge allocates a smaller buffer for bounded indexed rows.
+Set TRUST_SNAPSHOT_CACHE=off to compare the original read path. CI measures
+both variants on the same runner; this does not change the schema or claim
+normalized row-level persistence. Full-row writes still remain to be migrated.
