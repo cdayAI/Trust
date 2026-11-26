@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {createHash,randomBytes,timingSafeEqual}=require('node:crypto');
 const {resolve,join}=require('node:path');
 const fs=require('node:fs');
@@ -64,8 +65,9 @@ function createAccess({root,workspaces,accounts,sessionSeconds=1800,enableIdenti
     users.set(id,{id,hash:oidc?null:Buffer.from(codeHash,'hex'),subject,initialWorkspace,grants,disabled,validUntil});
   }
   const invalidHash=randomBytes(32);
-  const live=(account,at)=>account&&!account.disabled&&(account.validUntil===null||at<account.validUntil);
+  const live=(account,at)=>rust.enabled?rust.accountLive(account,at):account&&!account.disabled&&(account.validUntil===null||at<account.validUntil);
   function tokenOf(req){
+    if(rust.enabled)return rust.sessionToken(cookieName,req.headers.cookie||'');
     const tokens=(req.headers.cookie||'').split(';').map(x=>x.trim()).filter(x=>x.startsWith(cookieName+'='));
     return tokens.length===1&&codePattern.test(tokens[0].slice(cookieName.length+1))?tokens[0].slice(cookieName.length+1):null;
   }

@@ -14,8 +14,8 @@ if(mode!=='off'){
     const module=new WebAssembly.Module(bytes);
     if(WebAssembly.Module.imports(module).length)throw Error('The Rust core must not import host capabilities.');
     core=new WebAssembly.Instance(module,{}).exports;
-    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==2||
-      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout'].some(key=>typeof core[key]!=='function'))
+    if(!(core.memory instanceof WebAssembly.Memory)||typeof core.trust_abi!=='function'||core.trust_abi()!==5||
+      ['trust_reserve','trust_raster','trust_trace','trust_acyclic','trust_due_day','trust_zip','trust_batch_header','trust_batch_layout','trust_workflow_permission','trust_risk_score','trust_link_status','trust_reductions','trust_account_live','trust_cookie','trust_report','trust_routes_init','trust_authorize'].some(key=>typeof core[key]!=='function'))
       throw Error('Incompatible Rust core ABI. Rebuild the Rust core.');
   }
 }
@@ -139,4 +139,165 @@ function batchLayout(frameLen,manifest,sizes){
     return offsets;
   });
 }
-module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays,zip,batchHeader,batchLayout});
+const workflowRoles=['publisher','initiator','reviewer'];
+function roleBit(roles,role){const i=roles.indexOf(role);return i<0?0:1<<i;}
+function workflowPermission(transition,actor,instance){
+  const ids=new Map();
+  const number=value=>{if(!ids.has(value))ids.set(value,ids.size+1);return ids.get(value);};
+  const input=Buffer.alloc(instance.contributors.length*4);
+  instance.contributors.forEach((id,i)=>input.writeUInt32LE(number(id),i*4));
+  const role=roleBit(workflowRoles,actor?.role);
+  const allowed=transition.roles.reduce((mask,r)=>mask|roleBit(workflowRoles,r),0);
+  const current=actor?number(actor.id):0,legacy=actor?.legacyId?number(actor.legacyId):0,creator=number(instance.createdBy);
+  const result=withBuffer(input,0,()=>core.trust_workflow_permission(role,allowed,transition.independent?1:0,current,legacy,creator));
+  if(![0,1,2].includes(result))throw Error('Invalid Rust workflow decision.');
+  return result;
+}
+const tiers=['low','moderate','high','critical'];
+function riskScore(profile,likelihood,impact,extras=0){
+  if(![profile,likelihood,impact,extras].every(Number.isInteger))throw Error('Invalid Rust risk score input.');
+  const result=core.trust_risk_score(profile,likelihood,impact,extras);
+  if(result<0||!tiers[result>>>8])throw Error('Invalid Rust risk score.');
+  return {value:result&255,tier:tiers[result>>>8]};
+}
+function linkReason(link,test){
+  const flags=(link.archivedAt?1:0)|(link.reviewedBy?2:0)|(test?4:0)|(test?.outcome==='fail'?8:0);
+  const code=core.trust_link_status(flags,test?.reviewStatus==='accepted'?1:test?.reviewStatus==='rejected'?2:0);
+  const reasons=['unlinked','link-awaiting-review','untested','latest-test-failed','verified-pass','review-rejected','awaiting-independent-review'];
+  if(!reasons[code])throw Error('Invalid Rust link status.');
+  return reasons[code];
+}
+function reductions(links){
+  const verified=links.filter(link=>link.applies);
+  const input=Buffer.alloc(verified.length*2);
+  for(const [i,link] of verified.entries()){
+    const {likelihood,impact}=link.reduction;
+    if(!Number.isInteger(likelihood)||likelihood<0||likelihood>2||!Number.isInteger(impact)||impact<0||impact>2)
+      throw Error('Invalid Rust risk reduction.');
+    input[i*2]=likelihood;input[i*2+1]=impact;
+  }
+  const result=withBuffer(input,0,()=>core.trust_reductions());
+  if(result<0)throw Error('Invalid Rust reduction result.');
+  return {likelihood:result&255,impact:result>>>8};
+}
+function accountLive(account,at){
+  return !!account&&core.trust_account_live(account.disabled?1:0,account.validUntil===null?0:1,at,account.validUntil??0)===1;
+}
+function sessionToken(name,header){
+  const prefix=Buffer.from(name,'utf8'),bytes=Buffer.from(header,'utf8');
+  return withBuffer(Buffer.concat([prefix,bytes]),43,ptr=>{
+    const result=core.trust_cookie(prefix.length,bytes.length);
+    if(result===0)return null;
+    if(result!==1)throw Error('Invalid Rust cookie result.');
+    return Buffer.from(new Uint8Array(core.memory.buffer,ptr+prefix.length+bytes.length,43)).toString('ascii');
+  });
+}
+function aggregateReport(source,filters,vocabulary){
+  const groups=['workflow','stage','outcome','day','month'];
+  const {workflow,stage,outcome,group,from,to}=filters;
+  const dimension=(list,value)=>{
+    if(value==='all'||value===undefined)return 0;
+    const n=list.indexOf(value)+1;
+    if(!n)throw Error('Unknown Rust reporting dimension.');
+    return n;
+  };
+  const day=value=>value?Number(value.replaceAll('-','')):0;
+  const w=dimension(vocabulary.workflow,workflow),s=dimension(vocabulary.stage,stage),o=dimension(vocabulary.outcome,outcome);
+  const g=groups.indexOf(group),first=day(from),last=day(to);
+  if(g<0||vocabulary.workflow.length>31)throw Error('Invalid Rust reporting dimensions.');
+  const maxRows=16384,buffer=Buffer.alloc(maxRows*16);
+  let count=0,total=0,undated=0,areas=0;
+  const buckets=new Map();
+  function flush(){
+    if(!count)return;
+    const length=count*16;
+    withBuffer(buffer.subarray(0,length),12+count*8,ptr=>{
+      const n=core.trust_report(length,w,s,o,g,first,last);
+      if(n<0||n>count)throw Error('Invalid Rust report result.');
+      const view=new DataView(core.memory.buffer,ptr+length,12+n*8);
+      total+=view.getUint32(0,true);undated+=view.getUint32(4,true);areas|=view.getUint32(8,true);
+      for(let i=0;i<n;i++){
+        const key=view.getUint32(12+i*8,true),amount=view.getUint32(16+i*8,true);
+        buckets.set(key,(buckets.get(key)??0)+amount);
+      }
+    });
+    count=0;
+  }
+  for(const row of source){
+    const w=dimension(vocabulary.workflow,row.workflow),s=dimension(vocabulary.stage,row.stage),o=dimension(vocabulary.outcome,row.outcome);
+    if(!w)throw Error('Unknown Rust report workflow.');
+    for(const [i,value] of [w,s,o,day(row.day)].entries())buffer.writeUInt32LE(value,count*16+i*4);
+    if(++count===maxRows)flush();
+  }
+  flush();
+  const names=new Map();
+  for(const [key,amount] of buckets){
+    let name;
+    if(g<3)name=vocabulary[group][key-1];
+    else if(!key)name='undated';
+    else{
+      const value=String(key).padStart(g===3?8:6,'0');
+      name=value.slice(0,4)+'-'+value.slice(4,6)+(g===3?'-'+value.slice(6,8):'');
+    }
+    if(name===undefined)throw Error('Invalid Rust report bucket.');
+    names.set(name,amount);
+  }
+  let workflowCount=0;
+  for(let i=0;i<vocabulary.workflow.length;i++)if(areas&(1<<i))workflowCount++;
+  return {buckets:names,total,undated,workflowCount};
+}
+const workspaceRoles=['analyst','reviewer','case-operator','publisher','identity-admin','ethics-investigator','ethics-reviewer'];
+const methodCode=method=>method==='GET'?1:method==='POST'?2:0;
+// Expand only the existing bounded route grammar. Unsupported syntax fails
+// startup instead of being treated as a permissive wildcard.
+function expandRoute(pattern){
+  const tokens=[
+    ['[a-zA-Z0-9][a-zA-Z0-9-]{0,127}','@key'],
+    ['[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}','@uuid'],
+    ['[1-9][0-9]*','@version'],['[a-f0-9]{64}','@task']
+  ];
+  for(const [source,token] of tokens)pattern=pattern.replaceAll(source,token);
+  let pos=0;
+  function expression(depth){
+    if(depth>16)throw Error('Rust route nesting limit exceeded.');
+    let alternatives=[],sequence=[''];
+    while(pos<pattern.length&&pattern[pos]!==')'){
+      if(pattern[pos]==='|'){alternatives.push(...sequence);sequence=[''];pos++;continue;}
+      let next;
+      if(pattern.startsWith('(?:',pos)){
+        pos+=3;next=expression(depth+1);
+        if(pattern[pos++]!==')')throw Error('Unclosed Rust route group.');
+        if(pattern[pos]==='?'){next.push('');pos++;}
+      }else{
+        const char=pattern[pos++];
+        if(!/[a-z0-9/@-]/.test(char))throw Error('Unsupported Rust route grammar: '+char);
+        next=[char];
+      }
+      if(sequence.length*next.length>2048)throw Error('Rust route expansion limit exceeded.');
+      sequence=sequence.flatMap(prefix=>next.map(suffix=>prefix+suffix));
+    }
+    alternatives.push(...sequence);
+    if(alternatives.length>2048)throw Error('Rust route alternatives limit exceeded.');
+    return alternatives;
+  }
+  const result=expression(0);
+  if(pos!==pattern.length)throw Error('Unexpected Rust route terminator.');
+  return result;
+}
+function installRoutes(routes){
+  const lines=[];
+  for(const {method,value,roles} of routes){
+    const code=methodCode(method),mask=roles.reduce((m,r)=>m|roleBit(workspaceRoles,r),0);
+    if(!code||!mask||roles.some(role=>!workspaceRoles.includes(role)))throw Error('Invalid Rust route declaration.');
+    for(const path of expandRoute(value))lines.push(code+'\t'+mask+'\t/api/'+path);
+  }
+  if(withBuffer(Buffer.from(lines.join('\n')),0,()=>core.trust_routes_init())!==1)
+    throw Error('Rust route initialization failed.');
+}
+function authorize(method,pathname,role,limited){
+  const result=withBuffer(Buffer.from(pathname,'utf8'),0,()=>core.trust_authorize(methodCode(method),roleBit(workspaceRoles,role),limited?1:0));
+  if(![0,1,2,3].includes(result))throw Error('Invalid Rust authorization result.');
+  return result;
+}
+module.exports=Object.freeze({enabled:!!core,mode,raster,trace,acyclic,addDays,zip,batchHeader,batchLayout,
+  workflowPermission,riskScore,linkReason,reductions,accountLive,sessionToken,aggregateReport,expandRoute,installRoutes,authorize});

@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const {randomUUID}=require('node:crypto');
 const outcomes=['pass','fail'];
 const axes=['likelihood','impact'];
@@ -16,6 +17,7 @@ function int(x,min,max,field){
 }
 function find(rows,id,label){return rows.find(row=>row.id===id)??error(404,'RECORD_NOT_FOUND',label+' not found.')}
 function score(likelihood,impact){
+  if(rust.enabled)return {likelihood,impact,...rust.riskScore(0,likelihood,impact)};
   const value=likelihood*impact;
   return {likelihood,impact,value,tier:value>=20?'critical':value>=12?'high':value>=6?'moderate':'low'};
 }
@@ -25,14 +27,14 @@ function view(state){
   const linksByRisk=new Map(board.risks.map(r=>[r.id,[]]));
   for(const link of board.links){
     const t=latest.get(link.controlId);
-    const reason=link.archivedAt?'unlinked':!link.reviewedBy?'link-awaiting-review':!t?'untested':t.outcome==='fail'?'latest-test-failed':
+    const reason=rust.enabled?rust.linkReason(link,t):link.archivedAt?'unlinked':!link.reviewedBy?'link-awaiting-review':!t?'untested':t.outcome==='fail'?'latest-test-failed':
       t.reviewStatus==='accepted'?'verified-pass':t.reviewStatus==='rejected'?'review-rejected':'awaiting-independent-review';
     linksByRisk.get(link.riskId).push({...link,reason,applies:reason==='verified-pass',testId:t?.id??null});
   }
   const risks=board.risks.map(r=>{
     const links=linksByRisk.get(r.id);
-    const reduction={likelihood:0,impact:0};
-    for(const l of links)if(l.applies)for(const axis of axes)reduction[axis]=Math.max(reduction[axis],l.reduction[axis]);
+    const reduction=rust.enabled?rust.reductions(links):{likelihood:0,impact:0};
+    if(!rust.enabled)for(const l of links)if(l.applies)for(const axis of axes)reduction[axis]=Math.max(reduction[axis],l.reduction[axis]);
     return {...r,inherent:score(r.likelihood,r.impact),
       residual:score(Math.max(1,r.likelihood-reduction.likelihood),Math.max(1,r.impact-reduction.impact)),reduction,links};
   });

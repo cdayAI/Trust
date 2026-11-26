@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 
 // HTTP-level authorization for signed-in local workspace accounts only.
 // Per-record ownership, approval independence, and state-machine rules still live in the feature modules.
@@ -13,7 +14,7 @@ const uuid='[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}';
 const moduleId='(?:inventory|processing|rights|incidents|third-party|risks|controls|retention|policies|administration|integrations)';
 const routes=[];
 function route(method,value,roles){
-  routes.push({method,path:new RegExp('^/api/'+value+'$'),roles});
+  routes.push({method,value,path:new RegExp('^/api/'+value+'$'),roles});
 }
 
 // Specific methods and resource paths, never an open-ended workspace prefix.
@@ -132,8 +133,16 @@ function capabilities(role,{groupGovernance=false,documentScope=false,operatorJo
   if(operatorJobs&&operators.includes(role))permitted.push('operator-jobs');
   return {views:permitted,workspaceAudit:role==='reviewer'};
 }
+if(rust.enabled)rust.installRoutes(routes);
 const limitedReviewWrite=new RegExp('^/api/governance-documents/records/'+uuid+'/revisions/'+uuid+'/(?:read|return|publish)$');
 function requirePermission(method,pathname,role,{documentReviewer=false}={}){
+  if(rust.enabled){
+    const result=rust.authorize(method,pathname,role,documentReviewer);
+    if(result===0)return;
+    if(result===3)throw Object.assign(new Error('This account is limited to assigned document reviews.'),{status:403,code:'DOCUMENT_REVIEW_SEAT_LIMITED'});
+    if(result===1)throw Object.assign(new Error('Not found.'),{status:404});
+    throw Object.assign(new Error('This workspace role is not authorized for that action.'),{status:403,code:'ACCESS_DENIED'});
+  }
   if(documentReviewer&&(role!=='reviewer'||!(method==='GET'&&['/api/state','/api/governance-documents'].includes(pathname)||
     method==='POST'&&limitedReviewWrite.test(pathname))))
     throw Object.assign(new Error('This account is limited to assigned document reviews.'),{status:403,code:'DOCUMENT_REVIEW_SEAT_LIMITED'});

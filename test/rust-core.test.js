@@ -140,3 +140,95 @@ test('Rust binary batch framing preserves offsets and rejection ordering',{skip:
   }
   assert.throws(()=>decode(Buffer.alloc(requestLimit+1)),{status:413,code:'ATTACHMENT_BATCH_TOO_LARGE'});
 });
+
+
+test('Rust domain decisions preserve scores, review independence and session parsing',{skip:!rust.enabled},()=>{
+  for(let l=1;l<=5;l++)for(let i=1;i<=5;i++){
+    const value=l*i;
+    assert.deepEqual(rust.riskScore(0,l,i),{value,tier:value>=20?'critical':value>=12?'high':value>=6?'moderate':'low'});
+    for(const extras of [0,2,4]){
+      const score=value+extras;
+      assert.deepEqual(rust.riskScore(1,l,i,extras),{value:score,tier:score>=22?'critical':score>=14?'high':score>=7?'moderate':'low'});
+    }
+  }
+  for(const archivedAt of [null,'at'])for(const reviewedBy of [null,'reviewer'])
+    for(const t of [null,...['pass','fail'].flatMap(outcome=>['pending','accepted','rejected'].map(reviewStatus=>({outcome,reviewStatus})))]){
+      const link={archivedAt,reviewedBy};
+      const expected=archivedAt?'unlinked':!reviewedBy?'link-awaiting-review':!t?'untested':t.outcome==='fail'?'latest-test-failed':
+        t.reviewStatus==='accepted'?'verified-pass':t.reviewStatus==='rejected'?'review-rejected':'awaiting-independent-review';
+      assert.equal(rust.linkReason(link,t),expected);
+    }
+  const instance={createdBy:'alice',contributors:['bob']};
+  for(const actor of [null,{id:'alice',role:'reviewer'},{id:'carol',legacyId:'bob',role:'reviewer'},{id:'carol',role:'reviewer'},{id:'dan',role:'initiator'}])
+    for(const independent of [false,true]){
+      const transition={roles:['reviewer'],independent};
+      const expected=!actor||actor.role!=='reviewer'?1:independent&&[actor.id,actor.legacyId].some(id=>id===instance.createdBy||instance.contributors.includes(id))?2:0;
+      assert.equal(rust.workflowPermission(transition,actor,instance),expected);
+    }
+  const token='a'.repeat(43),name='trust_local_session';
+  for(const header of ['',name+'='+token,' x=2; \uFEFF'+name+'='+token+' ; z=3',name+'='+token+'; '+name+'='+token,name+'=bad',name+'='+token+'x',name+' ='+token]){
+    const values=header.split(';').map(x=>x.trim()).filter(x=>x.startsWith(name+'='));
+    const expected=values.length===1&&/^[A-Za-z0-9_-]{43}$/.test(values[0].slice(name.length+1))?values[0].slice(name.length+1):null;
+    assert.equal(rust.sessionToken(name,header),expected);
+  }
+  for(const disabled of [false,true])for(const validUntil of [null,0,10,100])
+    assert.equal(rust.accountLive({disabled,validUntil},10),!disabled&&(validUntil===null||10<validUntil));
+});
+
+
+test('Rust reporting matches filtered aggregates across chunk and UTC year boundaries',{skip:!rust.enabled},()=>{
+  const vocabulary={workflow:['rights','incidents'],stage:['draft','approved'],outcome:['recorded','refused']};
+  const records=Array.from({length:17000},(_,i)=>({workflow:i%2?'rights':'incidents',
+    stage:i%3?'approved':'draft',day:i%7===0?null:i%5===0?'0001-01-02':'2026-11-25'}));
+  for(const group of ['workflow','stage','day','month'])for(const workflow of ['all','rights'])for(const from of [null,'2020-01-01']){
+    const filters={workflow,stage:'all',outcome:'all',group,from,to:null};
+    const items=records.filter(x=>(workflow==='all'||x.workflow===workflow)&&(!from||x.day&&x.day>=from));
+    const buckets=new Map();
+    for(const row of items){
+      const key=group==='day'?(row.day??'undated'):group==='month'?(row.day?.slice(0,7)??'undated'):row[group];
+      buckets.set(key,(buckets.get(key)??0)+1);
+    }
+    const result=rust.aggregateReport(records,filters,vocabulary);
+    assert.equal(result.total,items.length);assert.equal(result.undated,items.filter(x=>!x.day).length);
+    assert.equal(result.workflowCount,new Set(items.map(x=>x.workflow)).size);assert.deepEqual(result.buckets,buckets);
+  }
+});
+
+
+test('Rust route authorization matches the complete legacy policy',{skip:!rust.enabled},()=>{
+  const {readFileSync}=require('node:fs');
+  const {requirePermission}=require('../access-policy');
+  const source=readFileSync(join(root,'access-policy.js'),'utf8');
+  const symbols={uuid:'[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}',
+    key:'[a-zA-Z0-9][a-zA-Z0-9-]{0,127}',myWorkToken:'[a-f0-9]{64}',
+    moduleId:'(?:inventory|processing|rights|incidents|third-party|risks|controls|retention|policies|administration|integrations)'};
+  const paths=new Set(['/api/unknown','/api','/api/state/','/api/state\n']);
+  for(const line of source.split('\n').filter(s=>s.startsWith("route('"))){
+    const expression=line.match(/^route\('(?:GET|POST)',(.*),(?:operators|studio|rights|ethics|all|\[[^\]]*\])\);$/)?.[1];
+    assert.ok(expression,line);
+    const parts=expression.match(/'[^']*'|uuid|key|myWorkToken|moduleId|\+/g);
+    assert.equal(parts.join(''),expression);
+    const pattern=parts.filter(p=>p!=='+').map(p=>p.startsWith("'")?p.slice(1,-1):symbols[p]).join('');
+    for(const value of rust.expandRoute(pattern)){
+      const path='/api/'+value.replaceAll('@uuid','00000000-0000-4000-8000-000000000001').replaceAll('@key','A-test-01')
+        .replaceAll('@version','123').replaceAll('@task','a'.repeat(64));
+      paths.add(path);paths.add(path+'/');paths.add(path+'x');paths.add(path.replaceAll('/','//'));
+    }
+  }
+  assert.ok(paths.size>400);
+  const roles=['analyst','reviewer','case-operator','publisher','identity-admin','ethics-investigator','ethics-reviewer','unknown'];
+  const input=[];
+  for(const path of paths)for(const method of ['GET','POST','DELETE'])for(const role of roles)for(const limited of [false,true])
+    input.push([method,path,role,limited]);
+  const code="const fs=require('node:fs');const {requirePermission}=require('./access-policy');const cases=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(cases.map(([m,p,r,l])=>{try{requirePermission(m,p,r,{documentReviewer:l});return [200,null];}catch(e){return [e.status,e.code??null];}})));";
+  const reference=spawnSync(process.execPath,['-e',code],{cwd:root,input:JSON.stringify(input),encoding:'utf8',
+    env:{...process.env,TRUST_RUST_CORE:'off'},maxBuffer:16*1024*1024});
+  assert.equal(reference.status,0,reference.stderr);
+  const expected=JSON.parse(reference.stdout);
+  for(const [i,[method,path,role,limited]] of input.entries()){
+    let result;
+    try{requirePermission(method,path,role,{documentReviewer:limited});result=[200,null];}
+    catch(error){result=[error.status,error.code??null];}
+    assert.deepEqual(result,expected[i],JSON.stringify(input[i]));
+  }
+});
