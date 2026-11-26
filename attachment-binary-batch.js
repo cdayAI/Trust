@@ -1,4 +1,5 @@
 'use strict';
+const rust=require('./rust-core');
 const contentType='application/vnd.mvw-trust.attachment-batch';
 const maxManifestBytes=4096;
 const maxFiles=4;
@@ -10,15 +11,33 @@ const exact=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&
 function fail(status,code,message){throw Object.assign(Error(message),{status,code});}
 function invalid(){fail(422,'ATTACHMENT_BATCH_FRAME','The binary batch manifest or file lengths are invalid. Nothing was uploaded.');}
 function decode(bytes){
-  if(!Buffer.isBuffer(bytes)||bytes.length<5)invalid();
-  if(bytes.length>requestLimit)fail(413,'ATTACHMENT_BATCH_TOO_LARGE','The batch cannot exceed 4 MiB total plus framing.');
-  const size=bytes.readUInt32BE(0);
-  if(!size||size>maxManifestBytes||4+size>bytes.length)invalid();
+  if(!Buffer.isBuffer(bytes))invalid();
+  let size;
+  if(rust.enabled){
+    size=rust.batchHeader(bytes);
+    if(size===-2)fail(413,'ATTACHMENT_BATCH_TOO_LARGE','The batch cannot exceed 4 MiB total plus framing.');
+    if(size<1)invalid();
+  }else{
+    if(bytes.length<5)invalid();
+    if(bytes.length>requestLimit)fail(413,'ATTACHMENT_BATCH_TOO_LARGE','The batch cannot exceed 4 MiB total plus framing.');
+    size=bytes.readUInt32BE(0);
+    if(!size||size>maxManifestBytes||4+size>bytes.length)invalid();
+  }
   let manifest;
   try{manifest=JSON.parse(decoder.decode(bytes.subarray(4,4+size)));}catch{invalid();}
   if(!exact(manifest,['version','expectedRevision','files'])||manifest.version!==1||
     !Number.isSafeInteger(manifest.expectedRevision)||manifest.expectedRevision<0||
     !Array.isArray(manifest.files)||manifest.files.length<1||manifest.files.length>maxFiles)invalid();
+  if(rust.enabled){
+    const sizes=manifest.files.map(file=>exact(file,['filename','mediaType','size'])&&typeof file.filename==='string'&&
+      typeof file.mediaType==='string'&&Number.isSafeInteger(file.size)&&file.size>=0&&file.size<=maxBytes?file.size:0xffffffff);
+    const offsets=rust.batchLayout(bytes.length,size,sizes);
+    if(offsets===-2)fail(413,'ATTACHMENT_BATCH_TOO_LARGE','The batch cannot exceed 4 MiB total.');
+    if(offsets===-1)invalid();
+    return {expectedRevision:manifest.expectedRevision,files:manifest.files.map((file,i)=>({
+      filename:file.filename,mediaType:file.mediaType,data:bytes.subarray(offsets[i],offsets[i]+file.size)
+    }))};
+  }
   let offset=4+size,total=0;
   const files=[];
   for(const file of manifest.files){

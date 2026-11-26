@@ -88,3 +88,55 @@ test('Rust business calendars agree with the UTC reference across year and leap 
     assert.equal(rust.addDays(start,count,basis,closed),d.toISOString().slice(0,10));
   }
 });
+
+
+test('Rust archive layout accepts the same Office/OpenDocument fixtures and refuses corrupt layouts',{skip:!rust.enabled},()=>{
+  const vectors=[];
+  for(const [name,encoded] of Object.entries(samples)){
+    const ext=name.split('.').at(-1);
+    if(!['docx','xlsx','pptx','odt','ods','odp'].includes(ext))continue;
+    const data=Buffer.from(encoded,'base64');
+    const push=(bytes,valid=false)=>vectors.push({extension:'.'+ext,bytes:bytes.toString('base64'),valid});
+    push(data,true);
+    for(const len of [1,29,data.length-1])push(data.subarray(0,len));
+    const central=data.readUInt32LE(data.length-6);
+    for(const index of [...Array.from({length:24},(_,i)=>i),...Array.from({length:46},(_,i)=>central+i),
+      ...Array.from({length:22},(_,i)=>data.length-22+i)]){
+      if(index>=0&&index<data.length){
+        const copy=Buffer.from(data);copy[index]^=0xff;push(copy);
+      }
+    }
+  }
+  assert.ok(vectors.length>300);
+  const run="const fs=require('node:fs');const {formats}=require('./document-attachment-formats');const rows=JSON.parse(fs.readFileSync(0,'utf8'));process.stdout.write(JSON.stringify(rows.map(v=>{try{formats.get(v.extension).check(Buffer.from(v.bytes,'base64'));return true;}catch{return false;}})));";
+  const reference=spawnSync(process.execPath,['-e',run],{cwd:root,input:JSON.stringify(vectors),encoding:'utf8',
+    env:{...process.env,TRUST_RUST_CORE:'off'},maxBuffer:4*1024*1024});
+  assert.equal(reference.status,0,reference.stderr);
+  const expected=JSON.parse(reference.stdout);
+  for(const [i,v] of vectors.entries()){
+    let accepted=true;
+    try{formats.get(v.extension).check(Buffer.from(v.bytes,'base64'));}
+    catch(error){accepted=false;assert.equal(error.status,415,v.extension+' vector '+i);}
+    if(v.valid)assert.equal(accepted,true,v.extension+' fixture');
+    assert.equal(accepted,expected[i],v.extension+' vector '+i);
+  }
+});
+
+test('Rust binary batch framing preserves offsets and rejection ordering',{skip:!rust.enabled},()=>{
+  const {decode,maxBytes,requestLimit}=require('../attachment-binary-batch');
+  const frame=(files,payload)=>{
+    const manifest=Buffer.from(JSON.stringify({version:1,expectedRevision:7,files}));
+    const header=Buffer.alloc(4);header.writeUInt32BE(manifest.length);
+    return Buffer.concat([header,manifest,payload]);
+  };
+  const row=(filename,size)=>({filename,mediaType:'text/plain',size});
+  const good=frame([row('a.txt',1),row('b.txt',3)],Buffer.from('abcd'));
+  const parsed=decode(good);
+  assert.equal(parsed.expectedRevision,7);
+  assert.deepEqual(parsed.files.map(x=>[x.filename,x.data.toString()]),[['a.txt','a'],['b.txt','bcd']]);
+  for(const bad of [good.subarray(0,good.length-1),Buffer.concat([good,Buffer.from('x')]),
+    frame([row('a.txt',-1)],Buffer.alloc(0)),frame([row('a.txt',maxBytes+1)],Buffer.alloc(0)),Buffer.alloc(4)]){
+    assert.throws(()=>decode(bad),{status:422,code:'ATTACHMENT_BATCH_FRAME'});
+  }
+  assert.throws(()=>decode(Buffer.alloc(requestLimit+1)),{status:413,code:'ATTACHMENT_BATCH_TOO_LARGE'});
+});
