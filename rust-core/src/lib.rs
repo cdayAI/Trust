@@ -11,6 +11,7 @@ mod policy;
 mod workflow;
 mod storage;
 mod lifecycle;
+mod http_boundary;
 
 const MAX_BUFFER: usize = 8 * 1024 * 1024;
 const INVALID: i32 = i32::MIN;
@@ -20,7 +21,7 @@ thread_local! {
 }
 
 #[no_mangle]
-pub extern "C" fn trust_abi() -> u32 { 7 }
+pub extern "C" fn trust_abi() -> u32 { 8 }
 
 // The host borrows this byte range only until the next reserve call. Each
 // invocation is synchronous, and Rust only accesses the owned Vec via slices.
@@ -261,6 +262,14 @@ pub extern "C" fn trust_incident_ready(flags:u32,evidence_count:u32)->u32{
 #[no_mangle]
 pub extern "C" fn trust_retention_reason(flags:u32)->u32{
     lifecycle::retention_reason(flags)
+}
+#[no_mangle]
+pub extern "C" fn trust_http_connection(flags:u32)->u32{
+    BUFFER.with(|cell|http_boundary::connection(&cell.borrow(),flags))
+}
+#[no_mangle]
+pub extern "C" fn trust_http_post(flags:u32)->u32{
+    BUFFER.with(|cell|http_boundary::post(&cell.borrow(),flags))
 }
 #[cfg(test)]
 mod tests {
