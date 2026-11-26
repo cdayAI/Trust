@@ -1,0 +1,13 @@
+[
+  "access-policy.js",
+  "assessment-questionnaire.js",
+  "attachment-binary-batch.js",
+  "http-boundary.js",
+  "native-http-abi.js",
+  "native-storage-abi.js",
+  "public/employee.js",
+  "public/trust-center-visitor.js",
+  "rust-core-abi.js",
+  "scripts/runtime-check.js",
+  "workspace-home.js"
+]

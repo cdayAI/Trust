@@ -1,0 +1,32 @@
+name: Strict TypeScript and runtime parity
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  typescript:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@6044e13b5dc448c55e2357c09f80417699197238
+        with:
+          node-version: 24.22.3
+      - name: Bootstrap isolated compiler lock for review
+        run: |
+          if [ ! -f scripts/type-tools/package-lock.json ]; then
+            npm --prefix scripts/type-tools install --package-lock-only --ignore-scripts --no-audit --no-fund
+          fi
+          sed 's/^/TRUST_TS_LOCK|/' scripts/type-tools/package-lock.json
+      - run: npm --prefix scripts/type-tools ci --ignore-scripts --no-audit --no-fund
+      - name: Compile strict TypeScript and record generated JavaScript
+        run: node scripts/typescript-build.js report
+      - run: npm run verify:typescript
+      - run: npm run verify:startup -- --sqlite
+      - run: node --test test/api.test.js test/access-policy.test.js test/attachment-binary-batch.test.js test/assessment-config.test.js test/workspace-home.test.js test/employee-attestations.test.js test/trust-center.test.js test/runtime-distribution.test.js
+      - run: npm --prefix scripts/browser-tools ci --ignore-scripts --no-audit --no-fund
+      - run: npm run test:browser -- test/browser-portal-controls.test.js test/browser-acceptance.test.js test/employee-attestations.test.js test/trust-center.test.js
