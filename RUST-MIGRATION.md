@@ -2,7 +2,7 @@
 
 This is the compatibility-preserving backend migration. The browser and
 Node HTTP/session, authorization, audit and persistence layers remain unchanged.
-Rust runs as a dependency-free WebAssembly module within Node, with no imports,
+The portable Rust core runs as a dependency-free WebAssembly module within Node, with no imports,
 filesystem access, separate process, native addon or network. The ABI exchanges
 bounded byte arrays and integer results. Rust uses checked indexing and owned
 memory; no unsafe blocks, third-party Rust crates or custom cryptography.
@@ -94,6 +94,30 @@ and missing/tampered binary refusal. No live deployment is authorized.
 In a developer checkout, `npm run start:rust -- --check` explicitly requires
 the locally built Rust core. Do not compile inside a previously verified exact
 tree because build output changes the tree.
+
+## Native SQLite driver (opt-in, developer checkout)
+
+The native Node-API Rust driver implements the existing fixed SQLite operations,
+including scoped snapshots, transactions, generation checks and integrity checks.
+The application ID and schema version stay unchanged; the Node reference driver
+remains the default. File safety, authorization, authenticated encryption, and
+backup publication remain in the host. The native binary is not part of the
+portable WebAssembly release and must be built for the target platform.
+
+```sh
+rustup toolchain install 1.95.0 --profile minimal
+npm run build:rust
+npm run build:rust-sqlite
+npm run test:rust-sqlite
+TRUST_SQLITE_DRIVER=rust TRUST_RUST_CORE=required npm run start:release -- --check
+```
+
+The native build requires a C compiler for bundled SQLite and the committed Cargo
+lockfile. CI enforces the committed lockfile rather than resolving unreviewed
+versions at build time. Explicit
+native selection fails closed if the driver is missing or incompatible; there
+is no automatic fallback. Native release packaging and platform qualification
+are separate follow-up work.
 
 ## Next migration stages
 

@@ -1,15 +1,12 @@
 'use strict';
 const rust=require('./rust-core');
+const {createStorageDriver}=require('./storage-driver');
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { createHash, randomUUID } = require('node:crypto');
 const { verifyEvidenceSnapshot } = require('./governance-documents');
 
-// Application ID for the workbench; user_version is the SQLite schema version.
-// Domain documents retain their independent application/engine versions.
-const applicationId = 0x4d565754;
-const schemaVersion = 1;
 const backupVersion = 1;
 const maxFileBytes = 128 * 1024 * 1024;
 const kinds = new Set(['workbench', 'workflow']);
@@ -84,7 +81,7 @@ function sqliteFileInfo(file) {
 
 function rollbackBusy(error) {
   // SQLite's primary BUSY/LOCKED result codes can be carried in an extended code.
-  if (error.code === 'ERR_SQLITE_ERROR' && [5, 6].includes(error.errcode & 0xff)) {
+  if (error.message === 'TRUST_SQLITE_BUSY' || (error.code === 'ERR_SQLITE_ERROR' && [5, 6].includes(error.errcode & 0xff))) {
     return Object.assign(new Error('Storage is busy. Retry shortly.'), { status: 503 });
   }
   return error;
@@ -92,7 +89,6 @@ function rollbackBusy(error) {
 
 function openSqlite(file, { readOnly = false } = {}) {
   const filename = preparePath(file);
-  const { DatabaseSync } = require('node:sqlite');
   let original = sqliteFileInfo(filename);
   if (!original) {
     if (readOnly) throw new Error('SQLite storage does not exist.');
@@ -105,17 +101,17 @@ function openSqlite(file, { readOnly = false } = {}) {
     original = sqliteFileInfo(filename);
     if (!original) throw new Error('SQLite storage path disappeared during initialization.');
   }
-  const db = new DatabaseSync(filename, { readOnly });
+  const db = createStorageDriver(filename, readOnly);
   const inTransaction = (start, callback) => {
     try {
-      db.exec(start);
+      db.begin(start === 'BEGIN IMMEDIATE');
       try {
         const result = callback();
         if (result && typeof result.then === 'function') throw new TypeError('Storage transactions must be synchronous.');
-        db.exec('COMMIT');
+        db.commit();
         return result;
       } catch (error) {
-        try { db.exec('ROLLBACK'); } catch {}
+        try { db.rollback(); } catch {}
         throw error;
       }
     } catch (error) {
@@ -124,50 +120,24 @@ function openSqlite(file, { readOnly = false } = {}) {
   };
 
   try {
-    db.exec('PRAGMA busy_timeout = 5000; PRAGMA trusted_schema = OFF;');
-    if (!readOnly) db.exec('PRAGMA synchronous = FULL;');
+    db.configure();
     if (!readOnly && original.size === 0n) {
       // Another opener may finish initialization while this handle waits.
       // An interrupted first launch can also leave the empty owner-only file.
       inTransaction('BEGIN IMMEDIATE', () => {
         if (fs.statSync(filename).size !== 0) return;
-        db.exec(`
-          CREATE TABLE storage_mode (
-            singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
-            mode TEXT NOT NULL CHECK (mode IN ('demo', 'isolated'))
-          ) STRICT;
-          CREATE TABLE snapshots (
-            scope TEXT NOT NULL,
-            kind TEXT NOT NULL CHECK (kind IN ('workbench', 'workflow')),
-            generation INTEGER NOT NULL CHECK (generation > 0),
-            payload TEXT NOT NULL CHECK (json_valid(payload)),
-            PRIMARY KEY (scope, kind)
-          ) STRICT, WITHOUT ROWID;
-          PRAGMA application_id = ${applicationId};
-          PRAGMA user_version = ${schemaVersion};
-        `);
+        db.initialize();
       });
     }
-    if (db.prepare('PRAGMA application_id').get().application_id !== applicationId ||
-        db.prepare('PRAGMA user_version').get().user_version !== schemaVersion) {
+    if (!db.supportsSchema()) {
       throw new Error('Unrecognized or unsupported MVW Trust SQLite store.');
     }
-    const readMode = db.prepare('SELECT mode FROM storage_mode WHERE singleton = 1');
     const verifyMode = mode => {
-      if (!modes.has(mode) || readMode.get()?.mode !== mode) {
+      if (!modes.has(mode) || db.readMode() !== mode) {
         throw new Error('SQLite store is not configured for this workbench mode.');
       }
     };
-    const read = db.prepare('SELECT payload, generation FROM snapshots WHERE scope = ? AND kind = ?');
-    const readChanged = db.prepare(`
-      SELECT generation, CASE WHEN generation <> ? THEN payload ELSE NULL END AS payload
-      FROM snapshots WHERE scope = ? AND kind = ?
-    `);
     const decode = (kind, row) => row ? validatePayload(kind, JSON.parse(row.payload)) : undefined;
-    const save = !readOnly && db.prepare(`
-      INSERT INTO snapshots (scope, kind, generation, payload) VALUES (?, ?, 1, ?)
-      ON CONFLICT (scope, kind) DO UPDATE SET generation = generation + 1, payload = excluded.payload
-    `);
     return {
       checkMode(mode) {
         // A live handle can still read an unlinked or renamed database.
@@ -180,8 +150,8 @@ function openSqlite(file, { readOnly = false } = {}) {
       requireMode(mode) {
         if (!modes.has(mode) || readOnly) throw new Error('Invalid writable workbench mode.');
         return inTransaction('BEGIN IMMEDIATE', () => {
-          const current = readMode.get()?.mode;
-          if (current === undefined) db.prepare('INSERT INTO storage_mode (singleton, mode) VALUES (1, ?)').run(mode);
+          const current = db.readMode();
+          if (current === undefined) db.setMode(mode);
           else verifyMode(mode);
         });
       },
@@ -191,7 +161,7 @@ function openSqlite(file, { readOnly = false } = {}) {
         return {
           read(kind) {
             if (!kinds.has(kind)) throw new Error('Invalid storage document kind.');
-            try { return decode(kind, read.get(scope, kind)); }
+            try { return decode(kind, db.read(scope, kind)); }
             catch (error) { throw rollbackBusy(error); }
           },
           // Read generation and changed payload in a single statement. A reader
@@ -202,7 +172,7 @@ function openSqlite(file, { readOnly = false } = {}) {
               throw new Error('Invalid storage document generation.');
             }
             try {
-              const row = readChanged.get(knownGeneration, scope, kind);
+              const row = db.readSince(scope, kind, knownGeneration);
               if (!row) return { generation: 0 };
               return row.generation === knownGeneration ? { generation: row.generation } :
                 { generation: row.generation, payload: decode(kind, row) };
@@ -213,10 +183,10 @@ function openSqlite(file, { readOnly = false } = {}) {
             return inTransaction('BEGIN IMMEDIATE', () => {
               let active = true;
               try {
-                const row=read.get(scope,kind);
+                const row=db.read(scope,kind);
                 return callback(decode(kind,row), payload => {
                   if (!active) throw new Error('Storage transaction is closed.');
-                  save.run(scope, kind, JSON.stringify(validatePayload(kind, payload)));
+                  db.save(scope, kind, JSON.stringify(validatePayload(kind, payload)));
                 }, row?.generation??0);
               } finally { active = false; }
             });
@@ -225,12 +195,11 @@ function openSqlite(file, { readOnly = false } = {}) {
       },
       snapshot() {
         return inTransaction('BEGIN', () => {
-          const errors = db.prepare('PRAGMA integrity_check').all();
-          if (errors.length !== 1 || errors[0].integrity_check !== 'ok') {
+          if (!db.integrity()) {
             throw new Error('SQLite integrity check failed.');
           }
-          const mode = readMode.get()?.mode;
-          const documents = db.prepare('SELECT scope, kind, generation, payload FROM snapshots ORDER BY scope, kind').all()
+          const mode = db.readMode();
+          const documents = db.documents()
             .map(row => ({ scope: validateScope(row.scope), kind: row.kind, generation: row.generation, payload: decode(row.kind, row) }));
           validateDocuments(mode, documents);
           verifyEvidenceDocuments(documents);
@@ -243,9 +212,8 @@ function openSqlite(file, { readOnly = false } = {}) {
         validateDocuments(mode, documents);
         verifyEvidenceDocuments(documents);
         return inTransaction('BEGIN IMMEDIATE', () => {
-          if (db.prepare('SELECT 1 FROM snapshots LIMIT 1').get()) throw new Error('Restore target is not empty.');
-          const insert = db.prepare('INSERT INTO snapshots (scope, kind, generation, payload) VALUES (?, ?, ?, ?)');
-          for (const d of documents) insert.run(d.scope, d.kind, d.generation, JSON.stringify(d.payload));
+          if (db.hasSnapshots()) throw new Error('Restore target is not empty.');
+          for (const d of documents) db.insert(d.scope, d.kind, d.generation, JSON.stringify(d.payload));
         });
       },
       close() { db.close(); },

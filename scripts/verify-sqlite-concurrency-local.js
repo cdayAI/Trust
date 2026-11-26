@@ -64,7 +64,7 @@ async function trial(root,concurrency){
   let phase='launch';
   const statuses={}, observations=[];
   async function launch(){
-    const env=Object.fromEntries(['PATH','HOME','TMPDIR','LANG'].flatMap(name=>process.env[name]===undefined?[]:[[name,process.env[name]]]));
+    const env=Object.fromEntries(['PATH','HOME','TMPDIR','LANG','TRUST_SQLITE_DRIVER','TRUST_RUST_CORE'].flatMap(name=>process.env[name]===undefined?[]:[[name,process.env[name]]]));
     const child=fork(__filename,['--worker'],{env,execArgv:[],stdio:['ignore','ignore','ignore','ipc']});
     peers.add(child);
     child.once('exit',()=>peers.delete(child));
