@@ -13,7 +13,9 @@ async function verify() {
   const env = { ...process.env, RUN_BROWSER_SMOKE: '1', NODE_PATH: browserModules };
   // Several suites spawn Chromium. Bound parallel workers so low-CPU CI
   // runners measure the application instead of starving browser processes.
-  const test = ['--test', '--test-concurrency=2', '--test-timeout=90000'];
+  const selected=process.argv.slice(2);
+  if(selected.some(name=>!/^test\/[a-z0-9-]+\.test\.js$/.test(name)))throw Error('Only explicit test file paths may be selected.');
+  const test = ['--test', '--test-concurrency=2', '--test-timeout=90000',...selected];
   // Keep a caller's explicitly opted-in browser binary. The locked bundled
   // Chromium in CI is a Linux x64/ARM64 build, not a desktop installer.
   if (env.CHROMIUM_PATH) {
@@ -34,7 +36,7 @@ async function verify() {
       const { default: chromium } = await import(pathToFileURL(modulePath).href);
       env.CHROMIUM_PATH = await chromium.executablePath();
     }
-    console.log('Running the full suite with browser verification enabled.');
+    console.log(selected.length?'Running selected suites with browser verification enabled.':'Running the full suite with browser verification enabled.');
     const code = await new Promise((resolveCode, reject) => {
       const child = spawn(process.execPath, test, { cwd: resolve(__dirname, '..'), env, stdio: 'inherit' });
       child.once('error', reject);

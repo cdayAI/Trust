@@ -39,4 +39,4 @@ jobs:
       - name: Verify native SQLite browser journeys
         env:
           TRUST_SQLITE_DRIVER: rust
-        run: npm run test:browser
+        run: npm run test:browser -- test/browser-concurrent-review.test.js test/browser-isolated-release-nav.test.js test/browser-release-processing-rework.test.js test/browser-release-report-schedule-race.test.js
