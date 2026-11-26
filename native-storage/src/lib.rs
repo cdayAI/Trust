@@ -58,7 +58,7 @@ pub struct ReadRow { pub generation: f64, pub payload: Option<String> }
 #[napi(object)]
 pub struct DocumentRow { pub scope:String, pub kind:String, pub generation:f64, pub payload:String }
 #[napi(js_name="storageAbi")]
-pub fn storage_abi()->u32 {1}
+pub fn storage_abi()->u32 {2}
 #[napi(js_name="sqliteVersion")]
 pub fn sqlite_version()->String {rusqlite::version().to_owned()}
 
@@ -182,5 +182,40 @@ impl NativeStorage {
         let conn=self.conn.take().ok_or_else(||err("SQLite storage is closed."))?;
         conn.flush_prepared_statement_cache();
         match conn.close(){Ok(())=>{self.writing=false;Ok(())},Err((c,e))=>{self.conn=Some(c);Err(sqlite_err(e))}}
+    }
+}
+
+
+// Probe the same SQLite implementation used by the actual native store.
+#[napi(js_name="runtimeProbe")]
+pub fn runtime_probe()->Result<String>{
+    let db=Connection::open_in_memory().map_err(sqlite_err)?;
+    db.execute_batch("PRAGMA trusted_schema=OFF; BEGIN IMMEDIATE; CREATE TABLE runtime_check(n INTEGER, payload TEXT CHECK(json_valid(payload))) STRICT; INSERT INTO runtime_check VALUES (1,'{}'); COMMIT;")
+        .map_err(sqlite_err)?;
+    let n:i64=db.query_row("SELECT n FROM runtime_check",[],|r|r.get(0)).map_err(sqlite_err)?;
+    if n!=1{return Err(err("SQLite test transaction failed."));}
+    Ok(rusqlite::version().to_owned())
+}
+
+// The exclusive release lease uses a separate existing private database,
+// retaining OS-mediated lock cleanup after a crash and zero wait on conflicts.
+#[napi]
+pub struct NativeLease { conn:Option<Connection> }
+#[napi]
+impl NativeLease {
+    #[napi(constructor)]
+    pub fn new(filename:String)->Result<Self>{
+        if !Path::new(&filename).is_absolute(){return Err(err("Provide an absolute lease pathname."));}
+        let db=Connection::open_with_flags(filename,OpenFlags::SQLITE_OPEN_READ_WRITE|OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(sqlite_err)?;
+        db.busy_timeout(Duration::ZERO).map_err(sqlite_err)?;
+        db.execute_batch("PRAGMA trusted_schema=OFF; BEGIN EXCLUSIVE;").map_err(sqlite_err)?;
+        Ok(Self{conn:Some(db)})
+    }
+    #[napi]
+    pub fn close(&mut self)->Result<()>{
+        let Some(conn)=self.conn.take()else{return Ok(());};
+        conn.execute_batch("ROLLBACK").map_err(sqlite_err)?;
+        conn.close().map_err(|(_,error)|sqlite_err(error))
     }
 }

@@ -68,7 +68,7 @@ function nodeDriver(filename,readOnly){
 }
 
 let binding;
-function rustDriver(filename,readOnly){
+function loadNative(){
   const fs=require('node:fs'),path=require('node:path');
   if(!binding){
     const artifact=descriptor?nativeContract.verifyArtifact(__dirname,descriptor):path.join(__dirname,nativeContract.built);
@@ -79,10 +79,13 @@ function rustDriver(filename,readOnly){
     }
     if(!stat.isFile()||stat.nlink!==1||stat.size<1||stat.size>64*1024*1024)throw Error('Invalid Rust SQLite driver artifact.');
     const native=require(artifact);
-    if(native.storageAbi?.()!==1||typeof native.NativeStorage!=='function'||!/^3\.[0-9]+\.[0-9]+$/.test(native.sqliteVersion?.()??''))throw Error('Incompatible Rust SQLite driver ABI.');
+    if(native.storageAbi?.()!==nativeContract.abi||typeof native.NativeStorage!=='function'||typeof native.NativeLease!=='function'||typeof native.runtimeProbe!=='function'||!/^3\.[0-9]+\.[0-9]+$/.test(native.sqliteVersion?.()??''))throw Error('Incompatible Rust SQLite driver ABI.');
     binding=native;
   }
-  const driver=new binding.NativeStorage(filename,readOnly);
+  return binding;
+}
+function rustDriver(filename,readOnly){
+  const driver=new (loadNative().NativeStorage)(filename,readOnly);
   return {
     configure:()=>driver.configure(),
     begin:write=>driver.begin(write),
@@ -104,4 +107,24 @@ function rustDriver(filename,readOnly){
 }
 function createStorageDriver(filename,readOnly){return selected==='rust'?rustDriver(filename,readOnly):nodeDriver(filename,readOnly);}
 function selectedStorageDriver(){return selected;}
-module.exports={createStorageDriver,selectedStorageDriver};
+function probeStorageDriver(){
+  if(selected==='rust')return loadNative().runtimeProbe();
+  const {DatabaseSync}=require('node:sqlite');
+  const db=new DatabaseSync(':memory:');
+  try{
+    db.exec('BEGIN IMMEDIATE; CREATE TABLE runtime_check (n INTEGER); INSERT INTO runtime_check VALUES (1); COMMIT;');
+    if(db.prepare('SELECT n FROM runtime_check').get().n!==1)throw Error('SQLite test transaction failed.');
+    return db.prepare('SELECT sqlite_version() AS version').get().version;
+  }finally{db.close();}
+}
+function acquireReleaseLease(filename){
+  if(selected==='rust'){
+    const lease=new (loadNative().NativeLease)(filename);
+    return ()=>lease.close();
+  }
+  const {DatabaseSync}=require('node:sqlite'),db=new DatabaseSync(filename);
+  try{db.exec('PRAGMA busy_timeout = 0; BEGIN EXCLUSIVE;');}
+  catch(error){db.close();throw error;}
+  return ()=>{try{db.exec('ROLLBACK');}finally{db.close();}};
+}
+module.exports={createStorageDriver,selectedStorageDriver,probeStorageDriver,acquireReleaseLease};

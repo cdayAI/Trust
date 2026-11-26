@@ -102,6 +102,7 @@ tree because build output changes the tree.
 
 The native Node-API Rust driver implements the existing fixed SQLite operations,
 including scoped snapshots, transactions, generation checks and integrity checks.
+The exclusive release lease and actual SQLite runtime probe also use the selected driver.
 The application ID and schema version stay unchanged; the Node reference driver
 remains the default. File safety, authorization, authenticated encryption, and
 backup publication remain in the host. The native binary is not part of the
@@ -121,7 +122,7 @@ versions at build time. Explicit
 native selection fails closed if the driver is missing or incompatible; there
 is no automatic fallback.
 
-### Linux x64 native Rust release
+### Platform-bound native Rust release
 
 After building both Rust artifacts, create a target-bound package:
 
@@ -134,9 +135,17 @@ Extract into a clean private directory, run `npm run release:verify`, then
 the native storage ABI, the architecture and Node-API minimum. This package
 requires both the Rust core and native SQLite driver; explicitly disabling
 either is rejected. The source-only and portable Wasm variants remain separate.
-Only Linux x64 is currently included in native release verification. The digest
+CI qualifies Linux x64/ARM64, macOS x64/ARM64, and Windows x64 independently.
+Only targets with a green build and extracted startup should be distributed. The digest
 checks detect corruption and are not publisher signatures; verify the archive
 digest via a trusted channel before executing the native addon.
+
+## Measured performance
+
+`npm run benchmark:rust` compares the JS/Node reference, Wasm/Node, and
+Wasm/native SQLite on the same synthetic workload in alternating order,
+reporting p50/p95 latency and throughput without a forced speedup claim.
+CI reports the median of three trials per mode.
 
 ## Native HTTP transport (developer opt-in)
 

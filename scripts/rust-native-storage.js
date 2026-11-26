@@ -20,7 +20,7 @@ function build(){
   try{fs.writeFileSync(temporary,fs.readFileSync(source),{flag:'wx',mode:0o644,flush:true});fs.renameSync(temporary,artifact);}
   finally{fs.rmSync(temporary,{force:true});}
   const binding=require(artifact);
-  if(binding.storageAbi()!==1||typeof binding.NativeStorage!=='function')throw Error('Native ABI mismatch');
+  if(binding.storageAbi()!==require('../native-storage-abi').abi||typeof binding.NativeStorage!=='function'||typeof binding.NativeLease!=='function'||typeof binding.runtimeProbe!=='function')throw Error('Native ABI mismatch');
   console.log(JSON.stringify({driver:'rust',sqlite:binding.sqliteVersion(),platform:process.platform,arch:process.arch}));
 }
 function test(){
