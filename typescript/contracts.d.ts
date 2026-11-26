@@ -56,6 +56,8 @@ export interface RustCore {
   revision(expected:unknown,actual:number,min:number):0|1|2;
   workflowPermission(transition:WorkflowTransition,actor:WorkflowActor|null,instance:WorkflowInstance):0|1|2;
   workflowPlan(transition:WorkflowTransition|undefined,actor:WorkflowActor,instance:WorkflowInstance,body:unknown):WorkflowPlan;
+  accountLive(account:AccountLifetime|null|undefined,at:number):boolean;
+  sessionToken(name:string,header:string):string|null;
 }
 export interface QueueTask {timing:string;owner:string;workflow:string;destination:{view:string;recordId:string;projectId?:string}}
 export interface QueueModel {tasks:QueueTask[];workflowLabels:Record<string,string>}
@@ -110,3 +112,9 @@ export interface WorkQueueState {
     links?:readonly {id:string;riskId:string;reviewedBy?:unknown;archivedAt?:unknown}[];
   };
 }
+
+export interface WorkspaceDirectoryEntry {id:string;label:string;file:string;workflowFile:string}
+export interface MembershipRecord {revision:number;disabled:boolean}
+export interface IdentitySeat {id:string;role:string;configuredDisabled:boolean;validUntil:number|null;provisioning:string}
+export interface AccountLifetime {disabled:boolean;validUntil:number|null}
+export interface WorkspaceFeatureFlags {groupGovernance?:boolean;documentScope?:boolean;operatorJobs?:boolean;directoryLifecycle?:boolean}

@@ -76,3 +76,12 @@ and action models, typed form inputs and narrowed error handling. The remaining
 JavaScript shell is represented by a small classic-script ambient contract;
 there is no runtime module loader or extra browser dependency. These static
 response projections do not replace server-side authorization or input checks.
+
+## Access, identity and readiness
+
+Workspace sessions and provisioning, membership revisions, requester grants,
+saved-email attachment profile validation and operational readiness use
+explicit TypeScript contracts. Authorization and untrusted-input checks remain
+runtime decisions. A store-level regression verifies the opt-in staff intake
+append is selected and commits the new case and exact audit event without a
+full JavaScript snapshot save.
