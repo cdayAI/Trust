@@ -1,0 +1,22 @@
+[package]
+name = "trust-storage"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.95"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "=3.16.2", features = ["napi6"] }
+napi-derive = "=3.6.3"
+rusqlite = { version = "=0.43.0", features = ["bundled"] }
+
+[build-dependencies]
+napi-build = "=2.7.0"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
